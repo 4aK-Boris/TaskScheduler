@@ -10,7 +10,7 @@ import cs.trade.scheduler.core.backend.context.ContextSnapshot
 import cs.trade.scheduler.core.backend.cron.CronExpr
 import cs.trade.scheduler.core.backend.events.EventBus
 import cs.trade.scheduler.core.backend.functionref.FunctionRefEnqueuer
-import cs.trade.scheduler.core.backend.functionref.FunctionRefPayload
+import cs.trade.scheduler.shared.functionref.FunctionRefPayload
 import cs.trade.scheduler.core.backend.handler.Job
 import kotlin.reflect.KFunction
 import cs.trade.scheduler.shared.CancelResult

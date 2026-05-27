@@ -5,7 +5,7 @@ package cs.trade.scheduler.engine.worker.infrastructure
 import cs.trade.scheduler.core.backend.SchedulerCoreConfig
 import cs.trade.scheduler.core.backend.context.ContextRestore
 import cs.trade.scheduler.core.backend.context.OtelContextElement
-import cs.trade.scheduler.core.backend.functionref.FunctionRefPayload
+import cs.trade.scheduler.shared.functionref.FunctionRefPayload
 import cs.trade.scheduler.core.backend.handler.Job
 import cs.trade.scheduler.core.backend.handler.JobCancellationException
 import cs.trade.scheduler.core.backend.handler.JobHandler

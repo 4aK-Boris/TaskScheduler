@@ -1,5 +1,6 @@
 package cs.trade.scheduler.core.backend.functionref
 
+import cs.trade.scheduler.shared.functionref.FunctionRefPayload
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement

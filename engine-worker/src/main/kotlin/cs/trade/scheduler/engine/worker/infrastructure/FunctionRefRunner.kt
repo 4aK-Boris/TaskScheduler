@@ -3,7 +3,7 @@
 package cs.trade.scheduler.engine.worker.infrastructure
 
 import cs.trade.scheduler.core.backend.functionref.FunctionRefEnqueuer
-import cs.trade.scheduler.core.backend.functionref.FunctionRefPayload
+import cs.trade.scheduler.shared.functionref.FunctionRefPayload
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement

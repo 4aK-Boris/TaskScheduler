@@ -43,6 +43,8 @@ import cs.trade.scheduler.shared.JobState
 import cs.trade.scheduler.shared.dto.JobDetail
 import cs.trade.scheduler.shared.dto.JobEventDto
 import cs.trade.scheduler.shared.dto.JobView
+import cs.trade.scheduler.shared.functionref.FunctionRefPayload
+import cs.trade.scheduler.shared.functionref.FunctionRefPayloadFormatter
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -168,15 +170,27 @@ private fun JobDetailBody(
         HorizontalDivider()
 
         Text("Payload", style = MaterialTheme.typography.titleMedium)
-        Surface(
-            color = MaterialTheme.colorScheme.surfaceVariant,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Text(
-                text = payloadJson,
-                style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
-                modifier = Modifier.padding(12.dp),
-            )
+        // Function-ref jobs carry a structured payload — show it as `Mailer.send(123,
+        // "welcome")` instead of dumping raw JSON. Falls back to raw JSON if the payload
+        // doesn't parse (operator pasted a borked row, schema drift, etc.).
+        val formatted = if (job.payloadType == FunctionRefPayload.FUNCTION_REF_PAYLOAD_TYPE) {
+            FunctionRefPayloadFormatter.tryFormat(payloadJson)
+        } else {
+            null
+        }
+        if (formatted != null) {
+            FunctionRefPayloadBlock(formatted = formatted, rawJson = payloadJson)
+        } else {
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(
+                    text = payloadJson,
+                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                    modifier = Modifier.padding(12.dp),
+                )
+            }
         }
 
         if (detail.parents.isNotEmpty() || detail.children.isNotEmpty()) {
@@ -337,6 +351,76 @@ private fun ProgressBlock(progress: Float, msg: String?) {
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+        }
+    }
+}
+
+@Composable
+private fun FunctionRefPayloadBlock(
+    formatted: FunctionRefPayloadFormatter.Formatted,
+    rawJson: String,
+) {
+    var showRaw by remember { mutableStateOf(false) }
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+        // Headline: the Kotlin-call rendering. Monospace so `Mailer.send(123, "welcome")`
+        // reads like code, not paragraph text.
+        Surface(
+            color = MaterialTheme.colorScheme.surfaceVariant,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text(
+                text = formatted.oneLine,
+                style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
+                modifier = Modifier.padding(12.dp),
+            )
+        }
+        // Detailed breakdown — typed args with their declared parameter type. Hidden when
+        // there are no args (zero-arg call already reads fully from the oneLine).
+        if (formatted.args.isNotEmpty()) {
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                formatted.args.forEachIndexed { idx, arg ->
+                    Text(
+                        text = "  arg[$idx] (${arg.type}) = ${arg.valueRendered}",
+                        style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+        // Qualifier hint when present — tells the operator which Koin binding will be used.
+        if (formatted.targetQualifier != null) {
+            Text(
+                text = "Koin qualifier: \"${formatted.targetQualifier}\"",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        // Full receiver FQN — useful for ops debugging when the simple name is ambiguous.
+        Text(
+            text = "Receiver: ${formatted.receiverFqn}",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        // Expandable raw JSON — for the rare case where the formatter dropped some detail
+        // (composite arg JSON shortened, escape handling) and the operator wants the
+        // ground truth. One click, one fewer click than copying out of a DB query.
+        Text(
+            text = if (showRaw) "Hide raw JSON" else "Show raw JSON",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.clickable { showRaw = !showRaw },
+        )
+        if (showRaw) {
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(
+                    text = rawJson,
+                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                    modifier = Modifier.padding(12.dp),
+                )
+            }
         }
     }
 }
