@@ -39,7 +39,7 @@ services:
       RABBITMQ_HOST: rabbitmq
       RABBITMQ_USER: scheduler
       RABBITMQ_PASSWORD: scheduler
-      DASHBOARD_AUTH_PASSWORD: admin
+      DASHBOARD_AUTH_PASSWORD: admin12345
     ports: ["8080:8080"]
     depends_on:
       postgres: { condition: service_healthy }

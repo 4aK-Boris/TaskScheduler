@@ -485,6 +485,13 @@ public class WorkerPool(
                 JobOutcome.FAILED, JobOutcome.RETRIED -> circuitBreakers.record(locked.queue, success = false)
                 JobOutcome.CANCELLED -> { /* operator-driven, not a health signal */ }
             }
+            // Retry-rate metric (DESIGN.md 22.5). Fired only when the policy actually
+            // scheduled a retry — not on terminal failures (those land in the
+            // jobs.execution timer's outcome=FAILED tag). Lets Grafana show
+            // `rate(scheduler_retry_total[5m])` to spot downstream flakiness.
+            if (outcome == JobOutcome.RETRIED) {
+                metrics.recordRetry(locked.queue, locked.payloadType)
+            }
         }
     }
 

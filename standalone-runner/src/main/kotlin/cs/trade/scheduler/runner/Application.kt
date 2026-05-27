@@ -114,7 +114,16 @@ public fun main() {
                     log.warn("DASHBOARD_AUTH_PASSWORD not set — running dashboard without auth (local dev only)")
                 }
             },
-            module { single<EventBus> { postgresEventBus } },
+            module {
+                single<EventBus> { postgresEventBus }
+                // Observability — Prometheus receives idempotency dedup counts via this
+                // MeterRegistry-backed sink. JobMetrics + WorkerMetricsBinder are
+                // user-app concerns (workers run there, not in the infra container).
+                // See DESIGN.md 22.5 / docs/grafana-dashboard.json for the full panel set.
+                single<cs.trade.scheduler.core.backend.idempotency.IdempotencyMetrics> {
+                    MicrometerIdempotencyMetrics(metricsRegistry)
+                }
+            },
         )
     }
 

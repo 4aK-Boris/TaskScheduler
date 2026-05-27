@@ -29,6 +29,17 @@ public interface JobMetrics {
         duration: Duration,
     )
 
+    /**
+     * Records a retry being scheduled (DESIGN.md 22.5). Called by
+     * [cs.trade.scheduler.engine.worker.infrastructure.WorkerPool] when a handler fails
+     * AND the retry policy allows another attempt — NOT when the job terminally FAILs.
+     *
+     * The `scheduler_retry_total` counter this drives is the load-bearing signal for
+     * "is some downstream getting flaky?" — Grafana panels typically render `rate(...)`
+     * over a window.
+     */
+    public fun recordRetry(queue: String, payloadType: String) { /* default no-op for binary compat with custom impls */ }
+
     public object Noop : JobMetrics {
         override fun recordExecution(
             queue: String,

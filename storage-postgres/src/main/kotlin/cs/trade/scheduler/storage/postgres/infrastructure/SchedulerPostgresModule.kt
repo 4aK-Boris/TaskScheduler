@@ -111,7 +111,12 @@ public fun schedulerPostgresModule(configure: SchedulerPostgresConfig.() -> Unit
         single<JobTypePauseRepository> { JobTypePauseRepositoryImpl(get()) }
         // Handler-facing dedup primitive. User-apps that want to opt out can override
         // with `single<IdempotencyStore> { IdempotencyStore.Noop }` (Koin last-wins).
-        single<IdempotencyStore> { PostgresIdempotencyStore(get<IdempotencyLogRepository>()) }
+        single<IdempotencyStore> {
+            PostgresIdempotencyStore(
+                repository = get<IdempotencyLogRepository>(),
+                metrics = get<cs.trade.scheduler.core.backend.idempotency.IdempotencyMetrics>(),
+            )
+        }
         single<StorageProvider> {
             PostgresStorageProvider(
                 jobs = get(),

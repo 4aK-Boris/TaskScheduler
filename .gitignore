@@ -4,6 +4,10 @@ build/
 !**/src/main/**/build/
 !**/src/test/**/build/
 
+# Shadow / fat jars that some Gradle tasks write to the repo root rather than build/libs.
+# Real published artifacts live in build/libs/ and are excluded by the build/ rule above.
+*-all.jar
+
 ### IntelliJ IDEA ###
 .idea/modules.xml
 .idea/jarRepositories.xml

@@ -1,5 +1,6 @@
 package cs.trade.scheduler.engine.worker.infrastructure.metrics
 
+import io.micrometer.core.instrument.Counter
 import io.micrometer.core.instrument.MeterRegistry
 import io.micrometer.core.instrument.Timer
 import java.util.concurrent.ConcurrentHashMap
@@ -22,6 +23,7 @@ public class MicrometerJobMetrics(
 ) : JobMetrics {
 
     private val timers = ConcurrentHashMap<TimerKey, Timer>()
+    private val retryCounters = ConcurrentHashMap<CounterKey, Counter>()
 
     override fun recordExecution(
         queue: String,
@@ -42,13 +44,31 @@ public class MicrometerJobMetrics(
         timer.record(duration.toJavaDuration())
     }
 
+    override fun recordRetry(queue: String, payloadType: String) {
+        val key = CounterKey(queue, payloadType)
+        val counter = retryCounters.computeIfAbsent(key) { k ->
+            Counter.builder(RETRY_METRIC_NAME)
+                .description("Retries scheduled by the retry policy — fed from WorkerPool.handleFailure")
+                .tag("queue", k.queue)
+                .tag("payload_type", k.payloadType)
+                .register(registry)
+        }
+        counter.increment()
+    }
+
     private data class TimerKey(
         val queue: String,
         val payloadType: String,
         val outcome: JobOutcome,
     )
 
+    private data class CounterKey(
+        val queue: String,
+        val payloadType: String,
+    )
+
     public companion object {
         public const val METRIC_NAME: String = "scheduler.job.execution"
+        public const val RETRY_METRIC_NAME: String = "scheduler.retry.total"
     }
 }

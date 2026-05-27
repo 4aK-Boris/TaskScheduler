@@ -6,6 +6,7 @@ import cs.trade.scheduler.core.backend.context.ContextRestore
 import cs.trade.scheduler.core.backend.events.EventBus
 import cs.trade.scheduler.core.backend.events.InMemoryEventBus
 import cs.trade.scheduler.core.backend.handler.retry.RetryPolicy
+import cs.trade.scheduler.core.backend.idempotency.IdempotencyMetrics
 import io.opentelemetry.api.OpenTelemetry
 import io.opentelemetry.api.trace.Tracer
 import kotlinx.serialization.json.Json
@@ -90,6 +91,10 @@ public fun schedulerCoreModule(configure: SchedulerCoreConfig.() -> Unit = {}): 
         // (Koin last-wins). Retention loop calls the sink before DELETE; failures
         // make the loop skip the DELETE and try again next tick.
         single<ArchivalSink> { ArchivalSink.Noop }
+        // Idempotency metrics default = no-op. Apps with a MeterRegistry override with
+        // `single<IdempotencyMetrics> { MicrometerIdempotencyMetrics(get()) }` to feed
+        // `scheduler_idempotency_dedup_total{action}` per DESIGN.md 22.5.
+        single<IdempotencyMetrics> { IdempotencyMetrics.Noop }
         // Scheduler impl is registered by an infrastructure-layer module
         // (e.g. schedulerPostgresModule) — :core:backend stays free of storage deps.
     }

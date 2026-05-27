@@ -2292,11 +2292,41 @@ schedulerWorkerModule {
 }
 ```
 
-### 20.9. Phase 3+ остатки
+### 20.9. Prometheus `/metrics` endpoint — shipped (Phase 3)
+
+Implemented surface (mounted via `MicrometerMetrics` plugin in `Application.kt`,
+scraped by Prometheus at `/metrics`):
+
+| Metric | Type | Tags | Source |
+|---|---|---|---|
+| `scheduler_job_execution_seconds` | Histogram | `queue, payload_type, outcome` | `MicrometerJobMetrics` |
+| `scheduler_retry_total` | Counter | `queue, payload_type` | `MicrometerJobMetrics.recordRetry` (engine-worker) |
+| `scheduler_jobs_by_state` | Gauge | `state` | `SchedulerMetricsBinder` (15s poll) |
+| `scheduler_outbox_unpublished` | Gauge | — | `SchedulerMetricsBinder` |
+| `scheduler_outbox_lag_seconds` | Gauge | — | `SchedulerMetricsBinder` |
+| `scheduler_workers_alive` | Gauge | — | `SchedulerMetricsBinder` |
+| `scheduler_workers_total` | Gauge | — | `SchedulerMetricsBinder` |
+| `scheduler_worker_in_flight` | Gauge | `queue, node` | `WorkerMetricsBinder` |
+| `scheduler_circuit_breaker_state` | Gauge | `queue, node` | `WorkerMetricsBinder` — emits only for queues with CB config |
+| `scheduler_idempotency_dedup_total` | Counter | `action` | `MicrometerIdempotencyMetrics` (standalone-runner) |
+
+Ready-made Grafana dashboard in `docs/grafana-dashboard.json` — import via Grafana UI → Dashboards → Import → Paste JSON. Provides panels for throughput by outcome, success rate, p50/p95/p99 latency, queue depth, retry rate, idempotency dedup rate, CB state heatmap, outbox lag, in-flight per node/queue.
+
+User-app wiring (worker-side metrics): override the default Noop bindings with Micrometer-backed impls in your Koin module:
+
+```kotlin
+module {
+    single<MeterRegistry> { PrometheusMeterRegistry(PrometheusConfig.DEFAULT) }
+    single<JobMetrics> { MicrometerJobMetrics(get()) }
+    single { WorkerMetricsBinder(get(), get(), get(), get()).also { it.bind() } }
+}
+koin.get<WorkerMetricsBinder>()  // force eager binding so gauges register at startup
+```
+
+### 20.10. Phase 3+ остатки
 
 | Фича | Зачем |
 |---|---|
-| Prometheus `/metrics` endpoint в infra | Grafana + AlertManager + HPA |
 | Backpressure visual indicator в Compose dashboard | "queue under load" badge |
 
 ---
