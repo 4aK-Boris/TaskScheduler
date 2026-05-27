@@ -345,6 +345,21 @@ public class DefaultScheduler(
                 false
             } else {
                 if (storage.jobs.markCancelled(jobId, current.version, errorMsg = null, actor = by)) {
+                    // DESIGN.md 8.4 — descendants in AWAITING_DEPS have nothing left
+                    // to wait for and would otherwise sit forever. Propagate the cancel
+                    // along PROPAGATE_FAILURE / CANCEL_CHILD edges (IGNORE edges opt out).
+                    // Best-effort: a failure here is logged but doesn't downgrade the
+                    // primary CancelResult — the user-facing cancel already succeeded.
+                    runCatching {
+                        storage.jobs.cancelDescendantsAwaitingDeps(jobId, by)
+                    }.onFailure { t ->
+                        // No logger framework wired in this class — System.err is fine for
+                        // the rare admin-cancel cascade failure. Cluster monitoring picks
+                        // up the orphaned AWAITING_DEPS rows via the dashboard.
+                        System.err.println(
+                            "cancelDescendantsAwaitingDeps failed for parent=$jobId by=$by: ${t.message}",
+                        )
+                    }
                     return CancelResult.CANCELLED
                 }
                 false

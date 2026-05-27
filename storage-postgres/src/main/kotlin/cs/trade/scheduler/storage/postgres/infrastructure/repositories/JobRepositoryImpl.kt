@@ -5,6 +5,7 @@ package cs.trade.scheduler.storage.postgres.infrastructure.repositories
 import cs.trade.scheduler.core.backend.events.EventBus
 import cs.trade.scheduler.shared.JobPriority
 import cs.trade.scheduler.shared.JobState
+import cs.trade.scheduler.shared.OnFailure
 import cs.trade.scheduler.shared.events.WebSocketEvent
 import cs.trade.scheduler.storage.postgres.domain.models.Job
 import cs.trade.scheduler.storage.postgres.domain.models.JobListFilter
@@ -12,6 +13,7 @@ import cs.trade.scheduler.storage.postgres.domain.models.NewJobEvent
 import cs.trade.scheduler.storage.postgres.domain.models.PagedResult
 import cs.trade.scheduler.storage.postgres.domain.repositories.JobEventRepository
 import cs.trade.scheduler.storage.postgres.domain.repositories.JobRepository
+import cs.trade.scheduler.storage.postgres.infrastructure.tables.JobDependencyTable
 import cs.trade.scheduler.storage.postgres.infrastructure.tables.JobTable
 import cs.trade.scheduler.storage.postgres.infrastructure.toKotlinTime
 import cs.trade.scheduler.storage.postgres.infrastructure.toOffsetDateTimeUtc
@@ -484,6 +486,99 @@ public class JobRepositoryImpl(
                     emitStateChange(childId, JobState.AWAITING_DEPS, terminal, queue)
                 }
                 updated
+            }
+        }
+
+    override suspend fun cancelDescendantsAwaitingDeps(parentId: Uuid, by: String?): Int =
+        withContext(Dispatchers.IO) {
+            suspendTransaction(db = database) {
+                // BFS over the DAG, one query per level. We can't reuse the existing
+                // `cascadeTerminalIfAwaiting` because it doesn't stamp `cancel_requested_*`
+                // (it's used for FAILED cascades where attribution is meaningless). Same
+                // state-CAS pattern though: WHERE state = AWAITING_DEPS protects against
+                // concurrent decrement-and-promote.
+                //
+                // Visited set defends against cycles even though the public API can't
+                // build them — `enqueueAfter` always builds children pointing at already-
+                // inserted parents, but a future bulk-import path might. Cheap to keep.
+                val visited = HashSet<Uuid>()
+                visited.add(parentId)               // never re-walk into the root parent
+                val queue = ArrayDeque<Uuid>()
+                queue.add(parentId)
+
+                val nowOdt = Clock.System.now().toOffsetDateTimeUtc()
+                var cancelled = 0
+
+                while (queue.isNotEmpty()) {
+                    val current = queue.removeFirst()
+                    // All outbound edges from the current parent.
+                    val edges = JobDependencyTable.selectAll()
+                        .where { JobDependencyTable.parentId eq current }
+                        .map {
+                            it[JobDependencyTable.childId] to
+                                OnFailure.valueOf(it[JobDependencyTable.onFailure])
+                        }
+
+                    for ((childId, onFailure) in edges) {
+                        if (childId in visited) continue
+                        visited.add(childId)
+
+                        // IGNORE means the child explicitly opted out of parent-loss
+                        // propagation — leave it alone (it'll just see one fewer dep
+                        // resolved if/when FinalizeJobUseCase reaches it).
+                        if (onFailure == OnFailure.IGNORE) continue
+
+                        // Snapshot for the audit + WS event (we need the queue + prev
+                        // version). State-scoped UPDATE skips anything not AWAITING_DEPS.
+                        val snap = JobTable.selectAll()
+                            .where { JobTable.id eq childId }
+                            .firstOrNull()
+                            ?: continue
+                        val snapState = snap[JobTable.state]
+                        val snapVersion = snap[JobTable.version]
+                        val snapQueue = snap[JobTable.queue]
+                        if (snapState != JobState.AWAITING_DEPS.name) {
+                            // Already promoted / cancelled / terminal — leave it. But we
+                            // still recurse: a SUCCEEDED child of root could itself have
+                            // AWAITING_DEPS grandchildren that *we* should cancel. (Not
+                            // actually possible — SUCCEEDED resolves via FinalizeJobUseCase
+                            // — but the recursion costs nothing on dead branches.)
+                            queue.add(childId)
+                            continue
+                        }
+
+                        val rows = JobTable.update({
+                            (JobTable.id eq childId) and
+                                (JobTable.state eq JobState.AWAITING_DEPS.name) and
+                                (JobTable.version eq snapVersion)
+                        }) {
+                            it[state] = JobState.CANCELLED.name
+                            it[version] = snapVersion + 1
+                            it[cancelRequestedAt] = nowOdt
+                            it[cancelRequestedBy] = by
+                            it[updatedAt] = nowOdt
+                        }
+                        if (rows == 1) {
+                            cancelled += 1
+                            // Audit + dashboard event. Distinct eventType so the timeline
+                            // shows "cancelled because parent X was cancelled" — separate
+                            // from a direct MANUAL_CANCELLED on this row.
+                            recordEvent(
+                                jobId = childId,
+                                eventType = "CASCADE_CANCELLED",
+                                prev = JobState.AWAITING_DEPS,
+                                new = JobState.CANCELLED,
+                                actor = by,
+                            )
+                            emitStateChange(childId, JobState.AWAITING_DEPS, JobState.CANCELLED, snapQueue)
+                            // Recurse: descendants of THIS child may also be AWAITING_DEPS.
+                            queue.add(childId)
+                        }
+                        // CAS lost (rows == 0) — race with concurrent finalize / cancel.
+                        // Don't recurse; whoever won the CAS owns the descendant cascade.
+                    }
+                }
+                cancelled
             }
         }
 

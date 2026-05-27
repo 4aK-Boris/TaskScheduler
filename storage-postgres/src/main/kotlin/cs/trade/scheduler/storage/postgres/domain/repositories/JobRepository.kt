@@ -142,6 +142,31 @@ public interface JobRepository {
     public suspend fun cascadeTerminalIfAwaiting(childId: Uuid, terminal: JobState): Boolean
 
     /**
+     * Bulk-cancel all descendants in AWAITING_DEPS that transitively depend on [parentId],
+     * following only edges whose `on_failure` is one of `PROPAGATE_FAILURE` /
+     * `CANCEL_CHILD` (the `IGNORE` case means the child explicitly tolerates parent loss
+     * and must stay put).
+     *
+     * Called from `Scheduler.cancel` after the parent's own CANCELLED transition lands.
+     * BFS in-app, one suspend transaction wrapping the entire cascade so partial failure
+     * rolls back. Visited-set defends against cycles even though the public API can't
+     * create them (DESIGN.md 22.10).
+     *
+     * Each affected row gets:
+     *  - `state = CANCELLED`,
+     *  - `cancel_requested_by = by` (audit attribution),
+     *  - `cancel_requested_at = now`,
+     *  - bumped version,
+     *  - a `CASCADE_CANCELLED` audit event + a `JobStateChanged` WS event.
+     *
+     * Children NOT in AWAITING_DEPS (already PROCESSING / SCHEDULED / ENQUEUED / terminal)
+     * are left untouched — operator-visible states the user can cancel individually.
+     *
+     * Returns the count of rows actually cancelled (0 for leaves with no descendants).
+     */
+    public suspend fun cancelDescendantsAwaitingDeps(parentId: Uuid, by: String?): Int
+
+    /**
      * Atomic state transition guarded by `WHERE id = :id AND version = :v`.
      * Returns true on UPDATE, false on conflict (optimistic-lock failure).
      */
