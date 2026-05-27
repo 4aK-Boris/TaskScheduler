@@ -20,6 +20,7 @@ import org.junit.jupiter.api.AfterAll
 import org.junit.jupiter.api.Assertions.assertArrayEquals
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeAll
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestInstance
@@ -43,9 +44,12 @@ import org.testcontainers.utility.DockerImageName
  *   4. A message arrives on `q.default` with body = the job's 16 UUID bytes.
  *
  * **PG provisioning.** Honours `EXTERNAL_PG_URL` for the shared scheduler-test-pg
- * setup; falls back to Testcontainers when absent. Rabbit always uses Testcontainers
- * since there's no analogous bypass. Manual lifecycle so the env override can
- * short-circuit Docker for PG.
+ * setup; falls back to Testcontainers when absent.
+ *
+ * **Rabbit provisioning.** Honours `EXTERNAL_RABBIT_HOST` (+ optional `_PORT`, `_USER`,
+ * `_PASSWORD`) so CI can point at a shared `scheduler-test-rabbit` with the
+ * delayed-message-exchange plugin baked in. Falls back to a Testcontainers Rabbit when
+ * absent. Manual lifecycle so the env override can short-circuit Docker.
  */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class OutboxPublisherIntegrationTest {
@@ -61,12 +65,13 @@ class OutboxPublisherIntegrationTest {
                 .asCompatibleSubstituteFor("rabbitmq")
 
         private val externalUrl: String? = System.getenv("EXTERNAL_PG_URL")?.takeIf { it.isNotBlank() }
+        private val externalRabbitHost: String? = System.getenv("EXTERNAL_RABBIT_HOST")?.takeIf { it.isNotBlank() }
     }
 
     private lateinit var dataSource: HikariDataSource
     private lateinit var connectionFactory: ConnectionFactory
     private var postgres: PostgreSQLContainer<*>? = null
-    private lateinit var rabbit: RabbitMQContainer
+    private var rabbit: RabbitMQContainer? = null
 
     @BeforeAll
     fun setUp() {
@@ -87,8 +92,22 @@ class OutboxPublisherIntegrationTest {
             pgUser = tc.username
             pgPass = tc.password
         }
-        rabbit = RabbitMQContainer(rabbitImage)
-        rabbit.start()
+
+        val rabbitHost: String; val rabbitPort: Int; val rabbitUser: String; val rabbitPass: String
+        if (externalRabbitHost != null) {
+            rabbitHost = externalRabbitHost
+            rabbitPort = System.getenv("EXTERNAL_RABBIT_PORT")?.toIntOrNull() ?: 5673
+            rabbitUser = System.getenv("EXTERNAL_RABBIT_USER") ?: "scheduler"
+            rabbitPass = System.getenv("EXTERNAL_RABBIT_PASSWORD") ?: "scheduler"
+        } else {
+            val tc = RabbitMQContainer(rabbitImage)
+            tc.start()
+            rabbit = tc
+            rabbitHost = tc.host
+            rabbitPort = tc.amqpPort
+            rabbitUser = tc.adminUsername
+            rabbitPass = tc.adminPassword
+        }
 
         dataSource = HikariDataSource(HikariConfig().apply {
             this.jdbcUrl = jdbcUrl
@@ -99,10 +118,10 @@ class OutboxPublisherIntegrationTest {
         })
 
         connectionFactory = ConnectionFactory().apply {
-            host = rabbit.host
-            port = rabbit.amqpPort
-            username = rabbit.adminUsername
-            password = rabbit.adminPassword
+            host = rabbitHost
+            port = rabbitPort
+            username = rabbitUser
+            password = rabbitPass
         }
 
         startKoin {
@@ -127,7 +146,7 @@ class OutboxPublisherIntegrationTest {
         runCatching { runBlocking { GlobalContext.get().get<JobTransport>().close() } }
         runCatching { stopKoin() }
         runCatching { dataSource.close() }
-        runCatching { rabbit.stop() }
+        runCatching { rabbit?.stop() }
         runCatching { postgres?.stop() }
     }
 
@@ -140,31 +159,41 @@ class OutboxPublisherIntegrationTest {
 
         val jobId = scheduler.enqueue(TestSendEmail(userId = 42L, template = "welcome"))
 
-        // Before tick: 1 unpublished row.
-        assertEquals(1, outbox.findUnpublished(limit = 10).size)
+        // Before tick: our row is in the unpublished set. Scope by jobId rather than
+        // asserting the global count — under the shared scheduler-test-pg other suites
+        // (Retention, etc.) can leave behind unpublished outbox rows that aren't ours.
+        val unpublishedBefore = outbox.findUnpublished(limit = 1000)
+        assertEquals(1, unpublishedBefore.count { it.jobId == jobId }, "Our jobId must have exactly one unpublished outbox row before the tick")
 
         val published = publishBatch().getOrThrow()
-        assertEquals(1, published, "PublishOutboxBatchUseCase should publish exactly 1 row")
+        // Publisher may drain rows left by other suites too — assert at least one (ours).
+        assertTrue(published >= 1, "PublishOutboxBatchUseCase should publish >= 1 row, got $published")
 
-        // After tick: 0 unpublished.
-        assertEquals(0, outbox.findUnpublished(limit = 10).size)
+        // After tick: OUR row is published; we don't care about other suites' rows.
+        val unpublishedAfter = outbox.findUnpublished(limit = 1000)
+        assertEquals(0, unpublishedAfter.count { it.jobId == jobId }, "Our row must be drained after the tick")
 
         // Pull the message out of q.default and verify the body equals the job UUID bytes.
         // A short retry loop covers delayed-message plugin's "publish through delayed
-        // exchange even with x-delay absent" latency (typically <100ms).
-        val received = pollQueueForBody(qName = "q.default", attempts = 50, sleepMs = 100)
-        assertNotNull(received, "Expected a message on q.default within 5s")
-        assertEquals(16, received!!.size)
-        assertArrayEquals(jobId.toByteArray(), received)
+        // exchange even with x-delay absent" latency (typically <100ms). The queue may
+        // contain leftovers from other test runs — keep polling until we see OUR jobId.
+        val expectedBody = jobId.toByteArray()
+        val received = pollQueueForOurJobId(qName = "q.default", expected = expectedBody, attempts = 50, sleepMs = 100)
+        assertNotNull(received, "Expected a message matching our jobId on q.default within 5s")
+        assertArrayEquals(expectedBody, received)
     }
 
-    private fun pollQueueForBody(qName: String, attempts: Int, sleepMs: Long): ByteArray? {
+    private fun pollQueueForOurJobId(qName: String, expected: ByteArray, attempts: Int, sleepMs: Long): ByteArray? {
+        // Shared `scheduler-test-rabbit` keeps queue declarations alive between test
+        // classes, so q.default may carry stale messages from previous suites. Drain
+        // through them until we see ours (or hit the attempts cap). autoAck = true
+        // because we're the one consuming for the assertion — broker shouldn't redeliver.
         connectionFactory.newConnection("test-consumer").use { conn ->
             conn.createChannel().use { ch ->
                 repeat(attempts) {
                     val resp = ch.basicGet(qName, /* autoAck = */ true)
-                    if (resp != null) return resp.body
-                    Thread.sleep(sleepMs)
+                    if (resp != null && resp.body.contentEquals(expected)) return resp.body
+                    if (resp == null) Thread.sleep(sleepMs)
                 }
             }
         }

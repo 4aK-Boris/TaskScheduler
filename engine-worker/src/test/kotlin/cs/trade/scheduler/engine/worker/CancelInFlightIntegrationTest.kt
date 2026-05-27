@@ -48,6 +48,28 @@ import org.testcontainers.utility.DockerImageName
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 
+@Serializable
+private data class LongRunningJob(val maxIterations: Int = 200) : Job
+
+@JobType(LongRunningJob::class)
+private class CooperativeHandler(
+    val handlerStarted: CompletableDeferred<Unit>,
+    val cancelledNormally: CompletableDeferred<Unit>,
+) : JobHandler<LongRunningJob> {
+
+    override suspend fun execute(ctx: JobContext, job: LongRunningJob) {
+        handlerStarted.complete(Unit)
+        repeat(job.maxIterations) {
+            if (ctx.isCancellationRequested()) {
+                cancelledNormally.complete(Unit)
+                throw JobCancellationException("user asked to stop on iteration $it")
+            }
+            delay(40)
+        }
+        error("Handler reached iteration limit without seeing cancel — bug or slow test")
+    }
+}
+
 /**
  * Full pipeline cancel-in-flight: while a long-running handler is polling
  * `isCancellationRequested`, an external `Scheduler.cancel` call should be observed by
@@ -55,33 +77,15 @@ import kotlin.time.Duration.Companion.seconds
  * worker marks the row CANCELLED (terminal, no retry).
  *
  * **PG provisioning.** Honours `EXTERNAL_PG_URL` for the shared scheduler-test-pg
- * setup; falls back to Testcontainers when absent. Rabbit always uses Testcontainers.
- * Manual lifecycle so the env override can short-circuit Docker for PG.
+ * setup; falls back to Testcontainers when absent.
+ *
+ * **Rabbit provisioning.** Honours `EXTERNAL_RABBIT_HOST` (+ optional `_PORT`, `_USER`,
+ * `_PASSWORD`) so CI can point at a shared `scheduler-test-rabbit` with the
+ * delayed-message-exchange plugin baked in. Falls back to a Testcontainers Rabbit when
+ * absent. Manual lifecycle so the env override can short-circuit Docker.
  */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class CancelInFlightIntegrationTest {
-
-    @Serializable
-    data class LongRunningJob(val maxIterations: Int = 200) : Job
-
-    @JobType(LongRunningJob::class)
-    class CooperativeHandler(
-        val handlerStarted: CompletableDeferred<Unit>,
-        val cancelledNormally: CompletableDeferred<Unit>,
-    ) : JobHandler<LongRunningJob> {
-
-        override suspend fun execute(ctx: JobContext, job: LongRunningJob) {
-            handlerStarted.complete(Unit)
-            repeat(job.maxIterations) {
-                if (ctx.isCancellationRequested()) {
-                    cancelledNormally.complete(Unit)
-                    throw JobCancellationException("user asked to stop on iteration $it")
-                }
-                delay(40)
-            }
-            error("Handler reached iteration limit without seeing cancel — bug or slow test")
-        }
-    }
 
     private companion object {
         private val rabbitImage: DockerImageName =
@@ -89,6 +93,7 @@ class CancelInFlightIntegrationTest {
                 .asCompatibleSubstituteFor("rabbitmq")
 
         private val externalUrl: String? = System.getenv("EXTERNAL_PG_URL")?.takeIf { it.isNotBlank() }
+        private val externalRabbitHost: String? = System.getenv("EXTERNAL_RABBIT_HOST")?.takeIf { it.isNotBlank() }
     }
 
     private lateinit var dataSource: HikariDataSource
@@ -97,7 +102,7 @@ class CancelInFlightIntegrationTest {
     private lateinit var handlerStarted: CompletableDeferred<Unit>
     private lateinit var cancelledNormally: CompletableDeferred<Unit>
     private var postgres: PostgreSQLContainer<*>? = null
-    private lateinit var rabbit: RabbitMQContainer
+    private var rabbit: RabbitMQContainer? = null
 
     @BeforeAll
     fun setUp() {
@@ -118,8 +123,21 @@ class CancelInFlightIntegrationTest {
             pgUser = tc.username
             pgPass = tc.password
         }
-        rabbit = RabbitMQContainer(rabbitImage)
-        rabbit.start()
+        val rabbitHost: String; val rabbitPort: Int; val rabbitUser: String; val rabbitPass: String
+        if (externalRabbitHost != null) {
+            rabbitHost = externalRabbitHost
+            rabbitPort = System.getenv("EXTERNAL_RABBIT_PORT")?.toIntOrNull() ?: 5673
+            rabbitUser = System.getenv("EXTERNAL_RABBIT_USER") ?: "scheduler"
+            rabbitPass = System.getenv("EXTERNAL_RABBIT_PASSWORD") ?: "scheduler"
+        } else {
+            val tc = RabbitMQContainer(rabbitImage)
+            tc.start()
+            rabbit = tc
+            rabbitHost = tc.host
+            rabbitPort = tc.amqpPort
+            rabbitUser = tc.adminUsername
+            rabbitPass = tc.adminPassword
+        }
 
         dataSource = HikariDataSource(HikariConfig().apply {
             this.jdbcUrl = jdbcUrl
@@ -130,10 +148,10 @@ class CancelInFlightIntegrationTest {
         })
 
         connectionFactory = ConnectionFactory().apply {
-            host = rabbit.host
-            port = rabbit.amqpPort
-            username = rabbit.adminUsername
-            password = rabbit.adminPassword
+            host = rabbitHost
+            port = rabbitPort
+            username = rabbitUser
+            password = rabbitPass
         }
 
         handlerStarted = CompletableDeferred()
@@ -177,7 +195,7 @@ class CancelInFlightIntegrationTest {
         }
         runCatching { stopKoin() }
         runCatching { dataSource.close() }
-        runCatching { rabbit.stop() }
+        runCatching { rabbit?.stop() }
         runCatching { postgres?.stop() }
     }
 

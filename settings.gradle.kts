@@ -60,3 +60,9 @@ include(":standalone-runner")
 
 // Demo user app
 include(":app")
+
+// K2 compiler plugin for Phase B function-ref lambda capture (DESIGN.md 21.9).
+// `scheduler-compiler-plugin` is the kotlinc plugin (depends on kotlin-compiler-embeddable);
+// `scheduler-compiler-plugin-gradle` is the Gradle subplugin user apps apply.
+include(":scheduler-compiler-plugin")
+include(":scheduler-compiler-plugin-gradle")

@@ -226,7 +226,26 @@ public class DefaultJobListComponent(
                     refreshPausedTypes()
                     refreshKnownTypes()
                 }
+                if (event is WebSocketEvent.JobProgress) {
+                    // In-place row mutation — a JobProgress arrives up to once a second
+                    // per running job, and a full REST refetch would (a) lose scroll
+                    // position and (b) hammer the API. If the row isn't on the current
+                    // page, the update is silently dropped.
+                    applyProgressEvent(event)
+                }
             }
+        }
+    }
+
+    private fun applyProgressEvent(event: WebSocketEvent.JobProgress) {
+        _model.update { state ->
+            val idx = state.items.indexOfFirst { it.id == event.id }
+            if (idx < 0) return@update state
+            val updated = state.items[idx].copy(
+                progress = event.progress,
+                progressMsg = event.msg,
+            )
+            state.copy(items = state.items.toMutableList().also { it[idx] = updated })
         }
     }
 

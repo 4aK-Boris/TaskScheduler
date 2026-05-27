@@ -5,6 +5,7 @@ package cs.trade.scheduler.engine.worker.infrastructure
 import cs.trade.scheduler.core.backend.SchedulerCoreConfig
 import cs.trade.scheduler.core.backend.context.ContextRestore
 import cs.trade.scheduler.core.backend.context.OtelContextElement
+import cs.trade.scheduler.core.backend.functionref.FunctionRefPayload
 import cs.trade.scheduler.core.backend.handler.Job
 import cs.trade.scheduler.core.backend.handler.JobCancellationException
 import cs.trade.scheduler.core.backend.handler.JobHandler
@@ -34,7 +35,9 @@ import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.job
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -96,6 +99,8 @@ public class WorkerPool(
     private val tracer: Tracer,
     private val workerConfig: SchedulerWorkerConfig,
     private val coreConfig: SchedulerCoreConfig,
+    private val prefetchTuner: PrefetchTuner,
+    private val functionRefRunner: FunctionRefRunner,
 ) {
 
     private val log = LoggerFactory.getLogger(javaClass)
@@ -121,7 +126,27 @@ public class WorkerPool(
                     processOne(jobId, q)
                 }
                 consumers += handle
+                // Adaptive prefetch: register the queue with the tuner and spin up a
+                // tuner loop that periodically calls handle.setPrefetch(...). The tuner
+                // sees execution-duration samples via `prefetchTuner.record(...)` in
+                // processLockedInner's finally block; nothing more to wire on this side.
+                val adaptive = q.adaptive
+                if (adaptive != null) {
+                    prefetchTuner.register(q.name, adaptive, initialPrefetch = q.prefetch)
+                    scope.launch { tunerLoop(q, handle, adaptive.tuneInterval) }
+                }
             }
+        }
+    }
+
+    private suspend fun tunerLoop(queue: QueueConfig, handle: ConsumerHandle, interval: Duration) {
+        // `delay` honours coroutine cancellation, so when stop() cancels internalScope
+        // this loop unwinds at the next suspension. No explicit isActive check needed.
+        while (true) {
+            delay(interval.inWholeMilliseconds)
+            val next = prefetchTuner.tune(queue.name) ?: continue
+            runCatching { handle.setPrefetch(next) }
+                .onFailure { log.warn("setPrefetch({}) on queue {} threw", next, queue.name, it) }
         }
     }
 
@@ -259,21 +284,34 @@ public class WorkerPool(
             return
         }
 
-        val handler = handlers.findCasted(locked.payloadType)
-        if (handler == null) {
-            val msg = "No handler registered for payload_type=${locked.payloadType} " +
-                "(known: ${handlers.knownPayloadTypes})"
-            log.error("Marking job {} FAILED: {}", jobId, msg)
-            finalize(jobId, locked.version, JobState.FAILED, errorMsg = msg)
-            return
-        }
-
-        val payload = decodePayload(jobId, locked.payloadType, locked.payloadJson)
-        if (payload == null) {
-            val msg = "Could not decode payload for job $jobId (type=${locked.payloadType})"
-            log.error(msg)
-            finalize(jobId, locked.version, JobState.FAILED, errorMsg = msg)
-            return
+        // Two dispatch shapes (DESIGN.md 21.1): sealed-class JobHandler vs function-ref
+        // (payload_type == "function_ref"). For function-ref jobs there's no handler in
+        // the registry and no @Serializable Job to decode — payload_json IS the
+        // FunctionRefPayload itself, and execution goes through FunctionRefRunner. The
+        // rest of the pipeline (pause, cancel, ctx restore, span, timeout, retry, finalize)
+        // is shared verbatim.
+        val isFunctionRef = locked.payloadType == FunctionRefPayload.FUNCTION_REF_PAYLOAD_TYPE
+        val handler: JobHandler<Job>?
+        val payload: Job?
+        if (isFunctionRef) {
+            handler = null
+            payload = null
+        } else {
+            handler = handlers.findCasted(locked.payloadType)
+            if (handler == null) {
+                val msg = "No handler registered for payload_type=${locked.payloadType} " +
+                    "(known: ${handlers.knownPayloadTypes})"
+                log.error("Marking job {} FAILED: {}", jobId, msg)
+                finalize(jobId, locked.version, JobState.FAILED, errorMsg = msg)
+                return
+            }
+            payload = decodePayload(jobId, locked.payloadType, locked.payloadJson)
+            if (payload == null) {
+                val msg = "Could not decode payload for job $jobId (type=${locked.payloadType})"
+                log.error(msg)
+                finalize(jobId, locked.version, JobState.FAILED, errorMsg = msg)
+                return
+            }
         }
 
         val ctx = JobContextImpl(
@@ -346,7 +384,14 @@ public class WorkerPool(
             try {
                 withContext(handlerCtx) {
                     withTimeout(timeoutDuration) {
-                        handler.execute(ctx, payload)
+                        if (isFunctionRef) {
+                            // Function-ref jobs don't take ctx in their user-facing method
+                            // signature — the runner resolves target + method + args from the
+                            // FunctionRefPayload and invokes via KFunction.callSuspend.
+                            functionRefRunner.run(locked.payloadJson)
+                        } else {
+                            handler!!.execute(ctx, payload!!)
+                        }
                     }
                 }
                 executeDuration = mark.elapsedNow()
@@ -386,17 +431,27 @@ public class WorkerPool(
         } finally {
             span.end()
             metrics.recordExecution(locked.queue, locked.payloadType, outcome, executeDuration)
+            // Feed the adaptive prefetch tuner. We record on every outcome (success,
+            // failure, timeout, cancelled) — what the tuner cares about is "how long is a
+            // handler tying up an in-flight slot", and a slow failure ties up a slot just
+            // as long as a slow success. The tuner is a no-op for queues without an
+            // AdaptivePrefetch config (see PrefetchTuner.record's early return).
+            prefetchTuner.record(locked.queue, executeDuration)
         }
     }
 
     private suspend fun handleFailure(
         locked: JobRow,
-        payload: Job,
-        handler: JobHandler<Job>,
+        payload: Job?,
+        handler: JobHandler<Job>?,
         ctx: JobContextImpl,
         error: Throwable,
     ): JobOutcome {
-        val policy = handler.retryPolicy ?: coreConfig.defaultRetryPolicy
+        // Function-ref jobs (handler == null) don't have a per-handler retry policy or an
+        // onFinalFailure hook — they fall through to the scheduler-level defaults. This
+        // is the only behavioural difference between the two dispatch shapes; everything
+        // else (retry, finalize, span recording) is shared.
+        val policy = handler?.retryPolicy ?: coreConfig.defaultRetryPolicy
         val retriesLeft = policy != null && locked.attempts < locked.maxAttempts
 
         val errorMsg = error.message?.take(MAX_ERROR_MSG_LEN) ?: error::class.simpleName
@@ -410,8 +465,10 @@ public class WorkerPool(
                 error,
             )
             finalize(locked.id, locked.version, JobState.FAILED, errorMsg = errorMsg, errorStack = errorStack)
-            runCatching { handler.onFinalFailure(ctx, payload, error) }
-                .onFailure { log.error("onFinalFailure hook for job {} threw", locked.id, it) }
+            if (handler != null && payload != null) {
+                runCatching { handler.onFinalFailure(ctx, payload, error) }
+                    .onFailure { log.error("onFinalFailure hook for job {} threw", locked.id, it) }
+            }
             return JobOutcome.FAILED
         }
 

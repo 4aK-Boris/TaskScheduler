@@ -29,6 +29,8 @@
             <option value="$PROJECT_DIR$/dashboard-web" />
             <option value="$PROJECT_DIR$/engine-infra" />
             <option value="$PROJECT_DIR$/engine-worker" />
+            <option value="$PROJECT_DIR$/scheduler-compiler-plugin" />
+            <option value="$PROJECT_DIR$/scheduler-compiler-plugin-gradle" />
             <option value="$PROJECT_DIR$/standalone-runner" />
             <option value="$PROJECT_DIR$/storage-postgres" />
             <option value="$PROJECT_DIR$/transport-rabbit" />

@@ -42,6 +42,22 @@ import org.testcontainers.containers.RabbitMQContainer
 import org.testcontainers.utility.DockerImageName
 import kotlin.time.Duration.Companion.seconds
 
+@Serializable
+private data class TestSendEmail(val userId: Long, val template: String) : Job
+
+/**
+ * Captures the handler invocation so the test can await execution + assert the
+ * deserialised payload survived the JSON round-trip intact.
+ */
+@JobType(TestSendEmail::class)
+private class TestSendEmailHandler(
+    private val captured: CompletableDeferred<Pair<JobContext, TestSendEmail>>,
+) : JobHandler<TestSendEmail> {
+    override suspend fun execute(ctx: JobContext, job: TestSendEmail) {
+        captured.complete(ctx to job)
+    }
+}
+
 /**
  * Full round-trip: `Scheduler.enqueue` → outbox → Rabbit publish → worker consume →
  * user [JobHandler] invoked → row marked SUCCEEDED.
@@ -50,27 +66,15 @@ import kotlin.time.Duration.Companion.seconds
  * loop spun up) so the test is deterministic.
  *
  * **PG provisioning.** Honours `EXTERNAL_PG_URL` for the shared scheduler-test-pg
- * setup; falls back to Testcontainers when absent. Rabbit always uses Testcontainers.
- * Manual lifecycle so the env override can short-circuit Docker for PG.
+ * setup; falls back to Testcontainers when absent.
+ *
+ * **Rabbit provisioning.** Honours `EXTERNAL_RABBIT_HOST` (+ optional `_PORT`, `_USER`,
+ * `_PASSWORD`) so CI can point at a shared `scheduler-test-rabbit` with the
+ * delayed-message-exchange plugin baked in. Falls back to a Testcontainers Rabbit when
+ * absent. Manual lifecycle so the env override can short-circuit Docker.
  */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class WorkerIntegrationTest {
-
-    @Serializable
-    data class TestSendEmail(val userId: Long, val template: String) : Job
-
-    /**
-     * Captures the handler invocation so the test can await execution + assert the
-     * deserialised payload survived the JSON round-trip intact.
-     */
-    @JobType(TestSendEmail::class)
-    class TestSendEmailHandler(
-        private val captured: CompletableDeferred<Pair<JobContext, TestSendEmail>>,
-    ) : JobHandler<TestSendEmail> {
-        override suspend fun execute(ctx: JobContext, job: TestSendEmail) {
-            captured.complete(ctx to job)
-        }
-    }
 
     private companion object {
         private val rabbitImage: DockerImageName =
@@ -78,13 +82,14 @@ class WorkerIntegrationTest {
                 .asCompatibleSubstituteFor("rabbitmq")
 
         private val externalUrl: String? = System.getenv("EXTERNAL_PG_URL")?.takeIf { it.isNotBlank() }
+        private val externalRabbitHost: String? = System.getenv("EXTERNAL_RABBIT_HOST")?.takeIf { it.isNotBlank() }
     }
 
     private lateinit var dataSource: HikariDataSource
     private lateinit var connectionFactory: ConnectionFactory
     private lateinit var handlerCalled: CompletableDeferred<Pair<JobContext, TestSendEmail>>
     private var postgres: PostgreSQLContainer<*>? = null
-    private lateinit var rabbit: RabbitMQContainer
+    private var rabbit: RabbitMQContainer? = null
 
     @BeforeAll
     fun setUp() {
@@ -105,8 +110,21 @@ class WorkerIntegrationTest {
             pgUser = tc.username
             pgPass = tc.password
         }
-        rabbit = RabbitMQContainer(rabbitImage)
-        rabbit.start()
+        val rabbitHost: String; val rabbitPort: Int; val rabbitUser: String; val rabbitPass: String
+        if (externalRabbitHost != null) {
+            rabbitHost = externalRabbitHost
+            rabbitPort = System.getenv("EXTERNAL_RABBIT_PORT")?.toIntOrNull() ?: 5673
+            rabbitUser = System.getenv("EXTERNAL_RABBIT_USER") ?: "scheduler"
+            rabbitPass = System.getenv("EXTERNAL_RABBIT_PASSWORD") ?: "scheduler"
+        } else {
+            val tc = RabbitMQContainer(rabbitImage)
+            tc.start()
+            rabbit = tc
+            rabbitHost = tc.host
+            rabbitPort = tc.amqpPort
+            rabbitUser = tc.adminUsername
+            rabbitPass = tc.adminPassword
+        }
 
         dataSource = HikariDataSource(HikariConfig().apply {
             this.jdbcUrl = jdbcUrl
@@ -117,10 +135,10 @@ class WorkerIntegrationTest {
         })
 
         connectionFactory = ConnectionFactory().apply {
-            host = rabbit.host
-            port = rabbit.amqpPort
-            username = rabbit.adminUsername
-            password = rabbit.adminPassword
+            host = rabbitHost
+            port = rabbitPort
+            username = rabbitUser
+            password = rabbitPass
         }
 
         handlerCalled = CompletableDeferred()
@@ -159,7 +177,7 @@ class WorkerIntegrationTest {
         }
         runCatching { stopKoin() }
         runCatching { dataSource.close() }
-        runCatching { rabbit.stop() }
+        runCatching { rabbit?.stop() }
         runCatching { postgres?.stop() }
     }
 

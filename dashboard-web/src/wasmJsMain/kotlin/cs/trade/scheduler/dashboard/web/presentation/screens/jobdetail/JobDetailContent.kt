@@ -18,6 +18,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -154,8 +155,15 @@ private fun JobDetailBody(
             "Scheduled" to (job.scheduledAt?.toString() ?: "—"),
             "Duration" to (job.durationMs?.let { "${it}ms" } ?: "—"),
             "Locked by" to (job.lockedBy ?: "—"),
-            "Progress" to (job.progress?.let { "${(it * 100).toInt()}% ${job.progressMsg.orEmpty()}" } ?: "—"),
         )
+
+        // Live progress bar: only when the handler has reported at least once. We keep
+        // it visible after terminal too — the last reported value is useful audit info
+        // (e.g. "made it to 0.9 before failing"). Updates arrive via WS firehose
+        // (DESIGN.md 22.3); the bar mutates without a REST refresh.
+        job.progress?.let { p ->
+            ProgressBlock(progress = p, msg = job.progressMsg)
+        }
 
         HorizontalDivider()
 
@@ -306,6 +314,28 @@ private fun JobDetailBody(
                 text = "Re-route result: $it",
                 color = MaterialTheme.colorScheme.primary,
                 style = MaterialTheme.typography.bodyMedium,
+            )
+        }
+    }
+}
+
+@Composable
+private fun ProgressBlock(progress: Float, msg: String?) {
+    val pct = (progress.coerceIn(0f, 1f) * 100).toInt()
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.fillMaxWidth()) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Progress", style = MaterialTheme.typography.titleSmall)
+            Text("$pct%", style = MaterialTheme.typography.bodyMedium)
+        }
+        LinearProgressIndicator(
+            progress = { progress.coerceIn(0f, 1f) },
+            modifier = Modifier.fillMaxWidth(),
+        )
+        if (!msg.isNullOrBlank()) {
+            Text(
+                text = msg,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
     }

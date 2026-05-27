@@ -27,6 +27,7 @@ import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.OutlinedButton
@@ -423,7 +424,20 @@ private fun JobRow(
                 .clickable(onClick = onClick),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Box(modifier = Modifier.width(140.dp)) { StateChip(job.state) }
+            Box(modifier = Modifier.width(140.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    StateChip(job.state)
+                    // Mini progress bar under the state chip — shows only for PROCESSING
+                    // rows that have reported. Stays under the chip's fixed 140.dp cell
+                    // so column alignment doesn't shift when bars appear/disappear.
+                    job.progress?.takeIf { job.state == JobState.PROCESSING }?.let { p ->
+                        LinearProgressIndicator(
+                            progress = { p.coerceIn(0f, 1f) },
+                            modifier = Modifier.fillMaxWidth().heightIn(min = 3.dp, max = 4.dp),
+                        )
+                    }
+                }
+            }
             Text(
                 job.queue,
                 style = MaterialTheme.typography.bodyMedium,

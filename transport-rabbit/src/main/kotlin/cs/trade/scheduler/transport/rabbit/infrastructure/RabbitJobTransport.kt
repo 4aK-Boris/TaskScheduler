@@ -175,6 +175,16 @@ public class RabbitJobTransport(
             }
             scope.cancel()
         }
+
+        override suspend fun setPrefetch(prefetch: Int) {
+            // Live update — basicQos can be called on a running channel at any time and
+            // the broker honours it on the next dispatch. Doesn't affect already-in-flight
+            // messages (the tuner's adjustment converges as those drain).
+            withContext(Dispatchers.IO) {
+                runCatching { channel.basicQos(prefetch) }
+                    .onFailure { log.warn("basicQos({}) failed on queue {}", prefetch, queue, it) }
+            }
+        }
     }
 
     private companion object {

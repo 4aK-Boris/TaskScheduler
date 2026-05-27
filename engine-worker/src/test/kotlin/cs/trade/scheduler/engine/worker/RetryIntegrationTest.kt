@@ -50,6 +50,25 @@ import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 import kotlin.uuid.Uuid
 
+@Serializable
+private data class FlakyJob(val payload: String) : Job
+
+@JobType(FlakyJob::class)
+private class AlwaysFailingHandler(
+    val invocations: AtomicInteger,
+    val onFinalSignal: CompletableDeferred<Triple<Int, JobContext, Throwable>>,
+) : JobHandler<FlakyJob> {
+
+    override suspend fun execute(ctx: JobContext, job: FlakyJob) {
+        val n = invocations.incrementAndGet()
+        throw RuntimeException("simulated failure (run #$n, ctx.attempt=${ctx.attempt})")
+    }
+
+    override suspend fun onFinalFailure(ctx: JobContext, job: FlakyJob, error: Throwable) {
+        onFinalSignal.complete(Triple(ctx.attempt, ctx, error))
+    }
+}
+
 /**
  * End-to-end retry path: handler that always throws → 3 attempts (per `maxAttempts = 3`)
  * → FAILED + `onFinalFailure` hook called with the last attempt's context.
@@ -57,30 +76,15 @@ import kotlin.uuid.Uuid
  * Backoff is a tiny [FixedDelay] so the whole test finishes in well under 5s.
  *
  * **PG provisioning.** Honours `EXTERNAL_PG_URL` for the shared scheduler-test-pg
- * setup; falls back to Testcontainers when absent. Rabbit always uses Testcontainers.
- * Manual lifecycle so the env override can short-circuit Docker for PG.
+ * setup; falls back to Testcontainers when absent.
+ *
+ * **Rabbit provisioning.** Honours `EXTERNAL_RABBIT_HOST` (+ optional `_PORT`, `_USER`,
+ * `_PASSWORD`) so CI can point at a shared `scheduler-test-rabbit` with the
+ * delayed-message-exchange plugin baked in. Falls back to a Testcontainers Rabbit when
+ * absent. Manual lifecycle so the env override can short-circuit Docker.
  */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class RetryIntegrationTest {
-
-    @Serializable
-    data class FlakyJob(val payload: String) : Job
-
-    @JobType(FlakyJob::class)
-    class AlwaysFailingHandler(
-        val invocations: AtomicInteger,
-        val onFinalSignal: CompletableDeferred<Triple<Int, JobContext, Throwable>>,
-    ) : JobHandler<FlakyJob> {
-
-        override suspend fun execute(ctx: JobContext, job: FlakyJob) {
-            val n = invocations.incrementAndGet()
-            throw RuntimeException("simulated failure (run #$n, ctx.attempt=${ctx.attempt})")
-        }
-
-        override suspend fun onFinalFailure(ctx: JobContext, job: FlakyJob, error: Throwable) {
-            onFinalSignal.complete(Triple(ctx.attempt, ctx, error))
-        }
-    }
 
     private companion object {
         private val rabbitImage: DockerImageName =
@@ -88,6 +92,7 @@ class RetryIntegrationTest {
                 .asCompatibleSubstituteFor("rabbitmq")
 
         private val externalUrl: String? = System.getenv("EXTERNAL_PG_URL")?.takeIf { it.isNotBlank() }
+        private val externalRabbitHost: String? = System.getenv("EXTERNAL_RABBIT_HOST")?.takeIf { it.isNotBlank() }
     }
 
     private lateinit var dataSource: HikariDataSource
@@ -96,7 +101,7 @@ class RetryIntegrationTest {
     private lateinit var invocations: AtomicInteger
     private lateinit var onFinalSignal: CompletableDeferred<Triple<Int, JobContext, Throwable>>
     private var postgres: PostgreSQLContainer<*>? = null
-    private lateinit var rabbit: RabbitMQContainer
+    private var rabbit: RabbitMQContainer? = null
 
     @BeforeAll
     fun setUp() {
@@ -117,8 +122,21 @@ class RetryIntegrationTest {
             pgUser = tc.username
             pgPass = tc.password
         }
-        rabbit = RabbitMQContainer(rabbitImage)
-        rabbit.start()
+        val rabbitHost: String; val rabbitPort: Int; val rabbitUser: String; val rabbitPass: String
+        if (externalRabbitHost != null) {
+            rabbitHost = externalRabbitHost
+            rabbitPort = System.getenv("EXTERNAL_RABBIT_PORT")?.toIntOrNull() ?: 5673
+            rabbitUser = System.getenv("EXTERNAL_RABBIT_USER") ?: "scheduler"
+            rabbitPass = System.getenv("EXTERNAL_RABBIT_PASSWORD") ?: "scheduler"
+        } else {
+            val tc = RabbitMQContainer(rabbitImage)
+            tc.start()
+            rabbit = tc
+            rabbitHost = tc.host
+            rabbitPort = tc.amqpPort
+            rabbitUser = tc.adminUsername
+            rabbitPass = tc.adminPassword
+        }
 
         dataSource = HikariDataSource(HikariConfig().apply {
             this.jdbcUrl = jdbcUrl
@@ -129,10 +147,10 @@ class RetryIntegrationTest {
         })
 
         connectionFactory = ConnectionFactory().apply {
-            host = rabbit.host
-            port = rabbit.amqpPort
-            username = rabbit.adminUsername
-            password = rabbit.adminPassword
+            host = rabbitHost
+            port = rabbitPort
+            username = rabbitUser
+            password = rabbitPass
         }
 
         invocations = AtomicInteger(0)
@@ -179,7 +197,7 @@ class RetryIntegrationTest {
         }
         runCatching { stopKoin() }
         runCatching { dataSource.close() }
-        runCatching { rabbit.stop() }
+        runCatching { rabbit?.stop() }
         runCatching { postgres?.stop() }
     }
 

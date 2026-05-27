@@ -2229,12 +2229,35 @@ GROUP BY queue;
 | Producer слишком быстрый | Producer-side rate limiter (semaphore / token bucket) |
 | Permanent overload | Архитектура — больше железа или меньше работы |
 
-### 20.7. Phase 2
+### 20.7. Adaptive prefetch — shipped (Phase 3)
+
+Per-queue `AdaptivePrefetch` config + `PrefetchTuner` (engine-worker). Each adaptive queue runs a background tuner loop on `tuneInterval` cadence:
+
+- **Overload signal** (p95 latency > target × 1.5) → halve `channel.basicQos(prefetch)` (AIMD-style multiplicative decrease)
+- **Idle signal** (p95 < target × 0.5) → additive bump `current + max(1, current/4)`
+- **Dead band** [0.5×target … 1.5×target] → no change
+
+Bounded by `minPrefetch / maxPrefetch`. Samples flow in from every `metrics.recordExecution` site (success, failure, timeout, cancel — slow failures tie up an in-flight slot just like slow successes). Rolling window (`ArrayDeque`, default 100) — older samples drop off the head; tuner refuses to act until window is ≥ 25% full to avoid noise on cold start. `channel.basicQos(N)` is broker-side live-update — runs on the existing consumer channel without restart. `ConsumerHandle.setPrefetch(N)` default-impl is a no-op so non-Rabbit transports (KafkaJobTransport when it lands, in-memory fakes) ignore the tuner safely.
+
+```kotlin
+schedulerWorkerModule {
+    queue("variable",
+        concurrency = 4,
+        prefetch = 8,
+        adaptive = AdaptivePrefetch(
+            targetLatency = 2.seconds,
+            minPrefetch = 4,
+            maxPrefetch = 32,
+        ),
+    )
+}
+```
+
+### 20.8. Phase 3+ остатки
 
 | Фича | Зачем |
 |---|---|
 | Prometheus `/metrics` endpoint в infra | Grafana + AlertManager + HPA |
-| Adaptive prefetch | Подстройка под p95 latency |
 | Circuit breaker per queue | Auto-pause при error rate > X% |
 | Backpressure visual indicator в Compose dashboard | "queue under load" badge |
 
@@ -2865,3 +2888,11 @@ NULL = пересылаем всё (default — для local dev). Production do
   - **Operability endpoints**: `/health/leader` (`{leader: bool}`, всегда 200); `/health/ready` теперь оборачивает Rabbit ping в `withTimeout(2.seconds)` + `Dispatchers.IO` так что повисший broker не блокирует Netty event loop.
   - **UI (dashboard-web)**: dark mode (localStorage > `prefers-color-scheme`, toggle в toolbar); freeform job-id поиск в nav bar; `payloadType` + `queue` фильтры в JobList; cursor-style пагинация (page/size с persistence); фильтры сохраняются в `BrowserStorage`; mobile responsive horizontal scroll для широких таблиц.
   - **Не реализовано (Phase 3 / на будущее)**: KSP lambda capture (раздел 21), ArchivalSink (18), adaptive prefetch + circuit breaker (20), custom dispatcher per queue (13), priority inheritance в DAG (19).
+
+- **2026-05-27** — Phase 3 batch (operability + long-running UX):
+  - **18.7 ArchivalSink** — shipped. `ArchivalSink` interface (Noop default Koin binding + reference `FileArchivalSink` writing JSONL per-day partitions). `RetentionCleanupBatchUseCase` calls `archive(...) → DELETE` in that order; sink throws → DELETE skipped for that batch, rows survive into next tick. Only `job` row is archived; `job_event/job_dependency/outbox` are CASCADE'd.
+  - **22.3 Long-running progress** — shipped end-to-end. `JobContext.updateProgress(progress, msg)` with 1s per-invocation throttle in `JobContextImpl`, `ReportProgressUseCase` writes `job.progress/progress_msg/progress_updated_at` (state-scoped to PROCESSING — late writes after terminal are silently dropped) + emits `WebSocketEvent.JobProgress`. PG LISTEN/NOTIFY backplane fans to all replicas, dashboard WS firehose pushes to clients. UI: `JobDetail` shows `LinearProgressIndicator` + label, `JobList` row carries a thin progress bar under the State chip (only PROCESSING + progress != null). Both screens update in-place from WS — no REST refetch on every tick.
+  - **20.7 Adaptive prefetch** — shipped. Per-queue `AdaptivePrefetch(targetLatency, minPrefetch, maxPrefetch, tuneInterval, sampleWindowSize)` config on `schedulerWorkerModule { queue(...) }`. `PrefetchTuner` keeps a rolling latency window per queue, runs in a background coroutine, calls `ConsumerHandle.setPrefetch(N)` on overload (p95 > target × 1.5 → halve) or idle (p95 < target × 0.5 → additive bump). `channel.basicQos(N)` is live-update — no consumer restart. Sample fed from `WorkerPool.processLocked`'s finally block, same site as `metrics.recordExecution`. Bounded by min/max, dead-band [0.5×, 1.5×] target. Default impl of `ConsumerHandle.setPrefetch` is a no-op so non-Rabbit transports ignore it.
+  - **Test infra (#274 fallout)**: `EXTERNAL_RABBIT_HOST` env-bypass pattern (analogous to `EXTERNAL_PG_URL`) for `scheduler-test-rabbit` container — Testcontainers Rabbit can't start on Docker-Desktop dev boxes where the daemon API returns a stub for non-CLI clients. 5 Rabbit-using tests migrated. Pre-existing nested-class `Class.forName` bug surfaced and fixed by lifting `@Serializable data class` Job declarations to file-level (same pattern as `WorkerTimeoutIntegrationTest.HangingJob`).
+  - **Dashboard auth fix**: `Routing.configureDashboardRouting()` → `Route.configureDashboardRouting()`. The previous `Routing.()` receiver escaped the `authenticate("dashboard") { ... }` lambda's `Route` scope, so `/api/jobs` etc. were silently public. Now genuinely gated; `BasicAuthGatingIntegrationTest`'s regression assertion flipped from 200 → 401.
+  - **Test isolation fixes**: `SafetyNetIntegrationTest` got `@BeforeEach` truncate of `job/outbox` (shared `scheduler-test-pg` was polluting `findOrphaned(...)` counts); `EnqueueIntegrationTest` and `OutboxPublisherIntegrationTest` scoped their "exactly N outbox rows" assertions to `jobId`-filtered counts rather than global. JSONB whitespace assertions (`{"userId":123}` vs `{"userId": 123}`) replaced with regex-tolerant matchers in `EnqueueIntegrationTest` / `RecurringIntegrationTest`.

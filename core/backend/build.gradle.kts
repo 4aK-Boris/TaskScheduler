@@ -9,6 +9,13 @@ dependencies {
     api(libs.bundles.kotlinxEcosystem)
     api(libs.kotlinxCoroutinesSlf4j)
 
+    // kotlin-reflect — function-ref API (Scheduler.enqueue(KFunction…)) needs KParameter /
+    // KType introspection at enqueue time and KCallable.callSuspend at execute time. Pulled
+    // here (not in :storage-postgres / :engine-worker individually) so the user-facing
+    // typed overloads on Scheduler can reference kotlin.reflect.full.* without each
+    // downstream module re-declaring the dep.
+    api(libs.kotlinReflect)
+
     api(libs.slf4jApi)
 
     // Koin runtime — Compiler Plugin generates module code at compile time (no KSP)

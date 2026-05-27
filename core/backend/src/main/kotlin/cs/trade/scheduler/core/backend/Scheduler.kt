@@ -1,6 +1,7 @@
 package cs.trade.scheduler.core.backend
 
 import cs.trade.scheduler.core.backend.handler.Job
+import kotlin.reflect.KFunction
 import cs.trade.scheduler.shared.CancelResult
 import cs.trade.scheduler.shared.DeleteResult
 import cs.trade.scheduler.shared.RerouteResult
@@ -106,4 +107,59 @@ public interface Scheduler {
         targetTag: String?,
         by: String? = null,
     ): RerouteResult
+
+    /**
+     * Function-ref enqueue primitive (DESIGN.md 21.2). The user-facing typed overloads
+     * `enqueue(Receiver::method, a1, …, aN)` live as extension functions in
+     * [cs.trade.scheduler.core.backend.functionref.FunctionRefEnqueueExtensions] and all
+     * funnel into this single method — implementations only need to handle one shape.
+     *
+     * Implementations own the args serialisation: the configured
+     * [cs.trade.scheduler.core.backend.SchedulerCoreConfig.json] is already in the
+     * `Scheduler` impl, and threading it through the extension layer would force the
+     * compile-time Koin plugin to validate a Koin lookup inside default-parameter
+     * expressions (which it can't statically resolve in test modules — KOIN-D003).
+     *
+     * Multi-binding fail-fast: an implementation MUST verify that exactly one Koin binding
+     * exists for the method's receiver class when [options.targetQualifier] is null, and
+     * that a matching qualified binding exists otherwise. The exception thrown on miss
+     * should be an [IllegalArgumentException] for symmetry with the args fail-fast in
+     * [cs.trade.scheduler.core.backend.functionref.FunctionRefEnqueuer.build].
+     */
+    public suspend fun enqueueFunctionRef(
+        method: KFunction<*>,
+        args: List<Any?>,
+        options: EnqueueOptions = EnqueueOptions(),
+    ): Uuid
+
+    /**
+     * Lambda-capture entry point (DESIGN.md 21.9). User writes:
+     *
+     * ```
+     * scheduler.enqueueLambda { mailer.send(123L, "welcome") }
+     * ```
+     *
+     * The `scheduler-compiler-plugin` rewrites this call at compile time into a
+     * [enqueueFunctionRef] invocation with the equivalent `KFunction` reference and
+     * serialised args. WITHOUT the compiler plugin applied, calls to this function throw
+     * at runtime — the bare stub here exists only so the call-site type-checks before
+     * lowering.
+     *
+     * Constraints on the lambda (enforced at compile time by the plugin):
+     *  - Single expression body — `{ receiver.method(arg1, arg2) }`. Conditionals,
+     *    multi-statement, intermediate locals are rejected with a compile-time error.
+     *  - Receiver must be a stable reference to a value in scope (typically a Koin-bound
+     *    bean reachable from the outer function). The plugin emits a function-ref against
+     *    the receiver's declared type, and the runtime resolves a binding from Koin.
+     *  - All argument values must be `@Serializable` per the rules in
+     *    [cs.trade.scheduler.core.backend.functionref.FunctionRefEnqueuer.build].
+     */
+    public suspend fun enqueueLambda(
+        options: EnqueueOptions = EnqueueOptions(),
+        @Suppress("UNUSED_PARAMETER") block: suspend () -> Unit,
+    ): Uuid = throw IllegalStateException(
+        "Scheduler.enqueueLambda { ... } must be lowered by the scheduler-compiler-plugin. " +
+            "Add `id(\"cs.trade.scheduler.compiler\")` to your app's plugins block, or use the " +
+            "explicit `enqueue(Receiver::method, args...)` form which works without the plugin.",
+    )
 }

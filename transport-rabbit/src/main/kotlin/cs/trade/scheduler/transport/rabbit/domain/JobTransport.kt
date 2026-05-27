@@ -47,4 +47,14 @@ public interface JobTransport {
 
 public interface ConsumerHandle {
     public suspend fun cancel()
+
+    /**
+     * Update the consumer's prefetch (Rabbit `basicQos`) without restarting it. Called by
+     * the worker-side adaptive tuner (DESIGN.md 20.7) to grow/shrink the in-flight window
+     * based on observed handler latency. Default impl is a no-op — non-Rabbit transports
+     * that don't model prefetch can ignore it; the tuner just won't move them.
+     */
+    public suspend fun setPrefetch(prefetch: Int) {
+        // intentionally empty — see KDoc
+    }
 }

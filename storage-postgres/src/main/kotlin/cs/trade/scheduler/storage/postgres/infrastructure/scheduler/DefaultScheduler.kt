@@ -9,7 +9,10 @@ import cs.trade.scheduler.core.backend.context.ContextCapture
 import cs.trade.scheduler.core.backend.context.ContextSnapshot
 import cs.trade.scheduler.core.backend.cron.CronExpr
 import cs.trade.scheduler.core.backend.events.EventBus
+import cs.trade.scheduler.core.backend.functionref.FunctionRefEnqueuer
+import cs.trade.scheduler.core.backend.functionref.FunctionRefPayload
 import cs.trade.scheduler.core.backend.handler.Job
+import kotlin.reflect.KFunction
 import cs.trade.scheduler.shared.CancelResult
 import cs.trade.scheduler.shared.DeleteResult
 import cs.trade.scheduler.shared.JobPriority
@@ -68,6 +71,15 @@ public class DefaultScheduler(
     private val events: JobEventRepository? = null,
     private val contextCapture: ContextCapture? = null,
     private val archivalSink: ArchivalSink = ArchivalSink.Noop,
+    /**
+     * Resolves Koin bindings for the function-ref API (DESIGN.md 21.5) so we can fail
+     * fast on multi-binding-without-qualifier at enqueue rather than at execute.
+     *
+     * Defaults to a lookup that does nothing — the constructor stays usable from tests
+     * that don't exercise the function-ref path. Production wiring (in
+     * `schedulerPostgresModule`) injects a real Koin-backed resolver.
+     */
+    private val functionRefBindingResolver: FunctionRefBindingResolver = FunctionRefBindingResolver.AlwaysOk,
 ) : Scheduler {
 
     private val json: Json get() = config.json
@@ -411,6 +423,76 @@ public class DefaultScheduler(
             if (ok) return RerouteResult.REROUTED
         }
         return RerouteResult.CONFLICT
+    }
+
+    override suspend fun enqueueFunctionRef(
+        method: KFunction<*>,
+        args: List<Any?>,
+        options: EnqueueOptions,
+    ): Uuid {
+        // Pack KFunction + args into the wire payload here (vs in the extension layer)
+        // so the configured Json serializer stays a private detail of this impl and
+        // Koin's compile-time validator doesn't see a `koin.get<SchedulerCoreConfig>()`
+        // propagated up through extension default-parameter expressions.
+        val built = FunctionRefEnqueuer.build(method, args, options.targetQualifier, json)
+        val payload = built.payload
+
+        // Fail-fast at enqueue if Koin won't be able to resolve this target at execute
+        // time. Same exception type as `FunctionRefEnqueuer`'s arg-serialisation check, so
+        // callers can `catch (e: IllegalArgumentException)` once for both classes of
+        // mis-configuration.
+        functionRefBindingResolver.requireResolvable(payload.targetType, payload.targetQualifier)
+
+        // Function-ref jobs piggyback on the sealed-class enqueue path: same row layout,
+        // same outbox row, same audit event. The ONLY shape difference is the payload —
+        // payload_type is the FUNCTION_REF_PAYLOAD_TYPE sentinel + payload_json holds the
+        // FunctionRefPayload's wire form. The worker branches on that at execute time.
+        val params = buildFunctionRefParams(payload, options)
+        val row = newJobRow(params, state = JobState.ENQUEUED, scheduledAt = null)
+
+        withContext(Dispatchers.IO) {
+            suspendTransaction(db = database) {
+                storage.jobs.insert(row)
+                storage.outbox.insert(
+                    NewOutboxEntry(
+                        jobId = params.jobId,
+                        routingKey = params.routingKey,
+                        priority = params.priority,
+                        delayMs = 0,
+                    ),
+                )
+                recordCreated(params.jobId, newState = JobState.ENQUEUED)
+            }
+        }
+        emitCreated(params)
+        return params.jobId
+    }
+
+    private fun buildFunctionRefParams(payload: FunctionRefPayload, options: EnqueueOptions): EnqueueParams {
+        val queue = options.queue ?: config.defaultQueue
+        val priority = options.priority ?: 0
+        val payloadJson = json.encodeToString(FunctionRefPayload.serializer(), payload)
+        val routingKey = when {
+            options.targetNode != null -> "node.${options.targetNode}"
+            options.targetTag != null -> "tag.${options.targetTag}"
+            else -> queue
+        }
+        val contextJson = if (options.captureContext && contextCapture != null) {
+            contextCapture.snapshot()?.let { json.encodeToString(ContextSnapshot.serializer(), it) }
+        } else null
+        return EnqueueParams(
+            jobId = Uuid.random(),
+            queue = queue,
+            priority = priority,
+            maxAttempts = options.maxAttempts ?: config.defaultMaxAttempts,
+            timeoutSeconds = options.timeout?.inWholeSeconds?.toInt(),
+            payloadType = FunctionRefPayload.FUNCTION_REF_PAYLOAD_TYPE,
+            payloadJson = payloadJson,
+            routingKey = routingKey,
+            targetNode = options.targetNode,
+            targetTag = options.targetTag,
+            contextJson = contextJson,
+        )
     }
 
     override suspend fun retry(jobId: Uuid, by: String?): RetryResult {

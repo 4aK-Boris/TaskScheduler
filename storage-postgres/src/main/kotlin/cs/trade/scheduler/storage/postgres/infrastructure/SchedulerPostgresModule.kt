@@ -26,6 +26,7 @@ import cs.trade.scheduler.storage.postgres.infrastructure.repositories.OutboxRep
 import cs.trade.scheduler.storage.postgres.infrastructure.repositories.RecurringJobRepositoryImpl
 import cs.trade.scheduler.storage.postgres.infrastructure.repositories.WorkerRepositoryImpl
 import cs.trade.scheduler.storage.postgres.infrastructure.scheduler.DefaultScheduler
+import cs.trade.scheduler.storage.postgres.infrastructure.scheduler.FunctionRefBindingResolver
 import cs.trade.scheduler.storage.postgres.infrastructure.scheduler.PostgresIdempotencyStore
 import org.flywaydb.core.Flyway
 import org.jetbrains.exposed.v1.jdbc.Database
@@ -126,6 +127,9 @@ public fun schedulerPostgresModule(configure: SchedulerPostgresConfig.() -> Unit
         }
         // Scheduler impl lives in :storage-postgres (uses storage + Database directly).
         // SchedulerCoreConfig must already be in the graph — added by schedulerCoreModule { }.
+        single<FunctionRefBindingResolver> {
+            FunctionRefBindingResolver.KoinBacked(getKoin())
+        }
         single<Scheduler> {
             DefaultScheduler(
                 storage = get(),
@@ -135,6 +139,7 @@ public fun schedulerPostgresModule(configure: SchedulerPostgresConfig.() -> Unit
                 events = get<JobEventRepository>(),
                 contextCapture = get<ContextCapture>(),
                 archivalSink = get<ArchivalSink>(),
+                functionRefBindingResolver = get<FunctionRefBindingResolver>(),
             )
         }
     }

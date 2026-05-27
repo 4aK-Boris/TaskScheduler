@@ -6,13 +6,10 @@ import com.rabbitmq.client.ConnectionFactory
 import com.zaxxer.hikari.HikariConfig
 import com.zaxxer.hikari.HikariDataSource
 import cs.trade.scheduler.core.backend.Scheduler
-import cs.trade.scheduler.core.backend.handler.Job
-import cs.trade.scheduler.core.backend.handler.JobContext
-import cs.trade.scheduler.core.backend.handler.JobHandler
-import cs.trade.scheduler.core.backend.handler.JobType
+import cs.trade.scheduler.core.backend.functionref.enqueue
 import cs.trade.scheduler.core.backend.schedulerCoreModule
+import cs.trade.scheduler.engine.infra.domain.usecases.PublishOutboxBatchUseCase
 import cs.trade.scheduler.engine.infra.infrastructure.schedulerInfraModule
-import cs.trade.scheduler.engine.infra.infrastructure.loops.OutboxPublisher
 import cs.trade.scheduler.engine.worker.infrastructure.WorkerPool
 import cs.trade.scheduler.engine.worker.infrastructure.schedulerWorkerModule
 import cs.trade.scheduler.shared.JobState
@@ -21,17 +18,13 @@ import cs.trade.scheduler.storage.postgres.infrastructure.schedulerPostgresModul
 import cs.trade.scheduler.transport.rabbit.domain.JobTransport
 import cs.trade.scheduler.transport.rabbit.infrastructure.schedulerRabbitModule
 import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
-import kotlinx.serialization.Serializable
 import org.junit.jupiter.api.AfterAll
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeAll
 import org.junit.jupiter.api.Test
@@ -39,49 +32,45 @@ import org.junit.jupiter.api.TestInstance
 import org.koin.core.context.GlobalContext
 import org.koin.core.context.startKoin
 import org.koin.core.context.stopKoin
-import org.koin.dsl.bind
 import org.koin.dsl.module
 import org.testcontainers.containers.PostgreSQLContainer
 import org.testcontainers.containers.RabbitMQContainer
 import org.testcontainers.utility.DockerImageName
-import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 
-@Serializable
-private data class SlowJob(val delayMs: Long) : Job
+/**
+ * `Mailer` target stub for the function-ref tests. Lives at file top-level so
+ * `qualifiedName` resolves to a stable FQN (the same gotcha that bit `HangingJob` —
+ * inner-class FQNs use `$`, but Kotlin reflection / `Class.forName` need the matching
+ * separator and we encode `qualifiedName`-style with `.` into the payload).
+ */
+class FunctionRefMailer {
+    val invocations: MutableList<Pair<Long, String>> = mutableListOf()
+    val invoked: CompletableDeferred<Pair<Long, String>> = CompletableDeferred()
 
-@JobType(SlowJob::class)
-private class SlowHandler(
-    val handlerStarted: CompletableDeferred<Unit>,
-) : JobHandler<SlowJob> {
-    override suspend fun execute(ctx: JobContext, job: SlowJob) {
-        handlerStarted.complete(Unit)
-        delay(job.delayMs)
+    @Suppress("unused")
+    suspend fun send(userId: Long, template: String) {
+        invocations += userId to template
+        if (!invoked.isCompleted) invoked.complete(userId to template)
     }
 }
 
 /**
- * Verifies that [HeartbeatLoop] actually keeps `locked_until` advancing while a slow
- * handler runs. Without heartbeat, `locked_until = pickup_time + lockDuration` would
- * stay frozen until SUCCEEDED clears it.
+ * End-to-end coverage for the function-reference API (DESIGN.md 21). Reuses the same
+ * `EXTERNAL_PG_URL` / `EXTERNAL_RABBIT_HOST` test infrastructure as the sealed-class
+ * `WorkerIntegrationTest` — function-ref jobs go through the SAME outbox → Rabbit →
+ * worker → finalize pipeline; only the dispatch step inside `WorkerPool.processLockedInner`
+ * differs.
  *
- * Setup choices:
- *  - `heartbeatInterval = 80ms`, `lockDuration = 2s` — heartbeat fires multiple times
- *    inside one execution; lockDuration is comfortably longer than the handler's sleep
- *    so we never test "did the safety net not fire" (a different concern).
- *  - Slow handler delays 500ms while signalling start via [handlerStarted] so the
- *    test loop knows when to begin sampling `locked_until`.
- *
- * **PG provisioning.** Honours `EXTERNAL_PG_URL` for the shared scheduler-test-pg
- * setup; falls back to Testcontainers when absent.
- *
- * **Rabbit provisioning.** Honours `EXTERNAL_RABBIT_HOST` (+ optional `_PORT`, `_USER`,
- * `_PASSWORD`) so CI can point at a shared `scheduler-test-rabbit` with the
- * delayed-message-exchange plugin baked in. Falls back to a Testcontainers Rabbit when
- * absent. Manual lifecycle so the env override can short-circuit Docker.
+ * Asserts:
+ *  1. `scheduler.enqueue(Mailer::send, 42L, "welcome")` returns a UUID and produces a job
+ *     row whose `payload_type` is `"function_ref"`.
+ *  2. The published Rabbit message is picked up by the worker, the FunctionRefRunner
+ *     resolves the Koin-bound `FunctionRefMailer`, decodes the args, and calls `send(42, "welcome")`.
+ *  3. The row finalises to SUCCEEDED with cleared lock fields.
  */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
-class HeartbeatIntegrationTest {
+class FunctionRefIntegrationTest {
 
     private companion object {
         private val rabbitImage: DockerImageName =
@@ -94,15 +83,14 @@ class HeartbeatIntegrationTest {
 
     private lateinit var dataSource: HikariDataSource
     private lateinit var connectionFactory: ConnectionFactory
-    private lateinit var publisherScope: CoroutineScope
-    private lateinit var handlerStarted: CompletableDeferred<Unit>
+    private lateinit var mailer: FunctionRefMailer
     private var postgres: PostgreSQLContainer<*>? = null
     private var rabbit: RabbitMQContainer? = null
 
     @BeforeAll
     fun setUp() {
-        // Defensive: a previous test class may have left a Koin instance running.
         runCatching { stopKoin() }
+
         val jdbcUrl: String; val pgUser: String; val pgPass: String
         if (externalUrl != null) {
             jdbcUrl = externalUrl
@@ -119,6 +107,7 @@ class HeartbeatIntegrationTest {
             pgUser = tc.username
             pgPass = tc.password
         }
+
         val rabbitHost: String; val rabbitPort: Int; val rabbitUser: String; val rabbitPass: String
         if (externalRabbitHost != null) {
             rabbitHost = externalRabbitHost
@@ -150,39 +139,36 @@ class HeartbeatIntegrationTest {
             password = rabbitPass
         }
 
-        handlerStarted = CompletableDeferred()
-        val testHandlerModule = module {
-            single { SlowHandler(handlerStarted) } bind JobHandler::class
-        }
+        mailer = FunctionRefMailer()
+        // The mailer is bound by its concrete class — the function-ref API resolves
+        // `targetType = FunctionRefMailer` via Koin's KClass lookup. No qualifier needed
+        // here because we have a single binding.
+        val testTargetModule = module { single { mailer } }
 
         startKoin {
             modules(
-                schedulerCoreModule { nodeId = "test-heartbeat" },
+                schedulerCoreModule { nodeId = "test-fnref" },
                 schedulerPostgresModule {
-                    this.dataSource = this@HeartbeatIntegrationTest.dataSource
+                    this.dataSource = this@FunctionRefIntegrationTest.dataSource
                     runMigrations = true
                 },
                 schedulerRabbitModule {
-                    connectionFactory = this@HeartbeatIntegrationTest.connectionFactory
+                    connectionFactory = this@FunctionRefIntegrationTest.connectionFactory
                     queues = listOf("default")
                 },
                 schedulerInfraModule(),
                 schedulerWorkerModule {
-                    nodeId = "test-heartbeat"
-                    heartbeatInterval = 80.milliseconds
-                    lockDuration = 2.seconds
+                    nodeId = "test-fnref"
+                    lockDuration = 60.seconds
                     queue("default", concurrency = 4)
                 },
-                testHandlerModule,
+                testTargetModule,
             )
         }
-
-        publisherScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     }
 
     @AfterAll
     fun tearDown() {
-        runCatching { publisherScope.cancel() }
         val koin = runCatching { GlobalContext.get() }.getOrNull()
         if (koin != null) {
             runCatching { runBlocking { koin.get<WorkerPool>().stop() } }
@@ -195,62 +181,59 @@ class HeartbeatIntegrationTest {
     }
 
     @Test
-    fun `lockedUntil advances while a slow handler runs and job ends SUCCEEDED`() = runBlocking {
+    fun `enqueue Mailer send via KFunction reference — full round-trip ends SUCCEEDED`() = runBlocking {
         val koin = GlobalContext.get()
         val scheduler = koin.get<Scheduler>()
         val workerPool = koin.get<WorkerPool>()
-        val outboxPublisher = koin.get<OutboxPublisher>()
+        val publishBatch = koin.get<PublishOutboxBatchUseCase>()
         val jobs = koin.get<JobRepository>()
 
         workerPool.start()
-        outboxPublisher.start(publisherScope, intervalMillis = 20L)
 
-        val jobId = scheduler.enqueue(SlowJob(delayMs = 500))
+        // KFunction2 reference. Compiler picks the correct `send(Long, String)` overload
+        // because Scheduler.enqueue(KFunction2<…>, …) only matches that shape.
+        val jobId = scheduler.enqueue(FunctionRefMailer::send, 42L, "welcome")
 
-        // Wait for handler to start — now we know the row is PROCESSING with an initial
-        // lockedUntil. Sample lockedUntil while the handler sleeps.
-        withTimeoutOrNull(5.seconds) { handlerStarted.await() }
-            ?: error("Handler never started — Rabbit dispatch broken?")
+        // The job row was written with payload_type = "function_ref" — that's the
+        // load-bearing breadcrumb that tells the worker to dispatch via FunctionRefRunner.
+        val saved = jobs.findById(jobId)
+        assertNotNull(saved, "Job row must exist after enqueue")
+        assertEquals("function_ref", saved!!.payloadType, "function-ref jobs use the sentinel payload_type")
 
-        val samples = mutableListOf<kotlin.time.Instant>()
-        // 6 samples × 70ms = 420ms of polling — well inside the 500ms handler delay.
-        repeat(6) {
-            val snap = jobs.findById(jobId)
-            snap?.lockedUntil?.let { samples.add(it) }
-            delay(70)
-        }
+        // Drain the outbox once so Rabbit receives the message. No background loop running.
+        assertTrue(publishBatch().getOrThrow() >= 1, "publisher should drain at least our row")
 
-        // Heartbeat fires every 80ms → expect at least a couple of distinct values.
-        val distinct = samples.toSet()
-        assertTrue(
-            distinct.size >= 2,
-            "Expected at least 2 distinct lockedUntil samples (heartbeat bumps), got: $samples",
-        )
-        val sortedAsc = distinct.sorted()
-        val span = sortedAsc.last() - sortedAsc.first()
-        assertTrue(
-            span >= 100.milliseconds,
-            "lockedUntil should advance by at least 100ms across samples, got $span (samples=$samples)",
-        )
+        // Wait for the user method to be called with the right args.
+        val invocation = withTimeoutOrNull(5.seconds) { mailer.invoked.await() }
+        assertNotNull(invocation, "Mailer.send was not invoked within 5s")
+        assertEquals(42L to "welcome", invocation)
 
-        // Handler finishes → markSucceeded → state==SUCCEEDED, locks cleared.
+        // The worker should then call markSucceeded → the row reaches SUCCEEDED.
         val finalState = pollForState(jobs, jobId, JobState.SUCCEEDED, timeoutMs = 5_000)
-        assertNotNull(finalState, "Job should reach SUCCEEDED state")
-        assertEquals(JobState.SUCCEEDED, finalState!!.state)
-        assertEquals(null, finalState.lockedBy)
-        assertEquals(null, finalState.lockedUntil)
+        assertEquals(JobState.SUCCEEDED, finalState?.state)
+        assertNull(finalState!!.lockedBy, "lockedBy cleared on SUCCEEDED")
+        assertNull(finalState.lockedUntil, "lockedUntil cleared on SUCCEEDED")
     }
 
     @Test
-    fun `extendLocks updates only PROCESSING rows of the given node`() = runBlocking {
-        // This second test is decoupled from the slow-handler test — it directly drives
-        // extendLocks() so we cover the repo behaviour even if test ordering changes.
+    fun `enqueue with no Koin binding for target — IAE at enqueue, no row inserted`() = runBlocking {
         val koin = GlobalContext.get()
-        val jobs = koin.get<JobRepository>()
+        val scheduler = koin.get<Scheduler>()
 
-        // No PROCESSING rows owned by "ghost-node" → 0 updates.
-        val updated = jobs.extendLocks(nodeId = "ghost-node", newLockedUntilMillis = System.currentTimeMillis() + 60_000)
-        assertEquals(0, updated, "ghost-node owns nothing — extendLocks should return 0")
+        // UnregisteredTarget isn't bound in the Koin graph. The function-ref binding
+        // resolver should fail fast at enqueue with a clear IAE.
+        val ex = runCatching {
+            scheduler.enqueue(UnregisteredTarget::doit, 1L)
+        }.exceptionOrNull()
+        assertNotNull(ex, "enqueue against an unbound target must fail")
+        assertTrue(
+            ex is IllegalArgumentException,
+            "expected IllegalArgumentException, got ${ex?.let { it::class.qualifiedName }}: ${ex?.message}",
+        )
+        assertTrue(
+            (ex?.message ?: "").contains("no Koin binding"),
+            "error must explain the missing binding: ${ex?.message}",
+        )
     }
 
     private suspend fun pollForState(
@@ -261,9 +244,18 @@ class HeartbeatIntegrationTest {
     ) = withTimeoutOrNull(timeoutMs) {
         var snap = jobs.findById(jobId)
         while (snap?.state != target) {
-            delay(25)
+            delay(50)
             snap = jobs.findById(jobId)
         }
         snap
+    }
+}
+
+// Target the second test references but never registers in Koin — the fail-fast resolver
+// should reject the enqueue before it touches the DB.
+class UnregisteredTarget {
+    @Suppress("unused")
+    suspend fun doit(x: Long) {
+        // never invoked
     }
 }

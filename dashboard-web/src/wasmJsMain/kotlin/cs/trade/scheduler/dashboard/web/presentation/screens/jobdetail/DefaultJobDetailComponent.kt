@@ -40,6 +40,7 @@ public class DefaultJobDetailComponent(
         refresh()
         refreshPausedTypes()
         subscribeToPauseEvents()
+        subscribeToProgressEvents()
     }
 
     private fun refreshPausedTypes() {
@@ -58,6 +59,31 @@ public class DefaultJobDetailComponent(
             events.events.collect { event ->
                 if (event is WebSocketEvent.JobTypePaused || event is WebSocketEvent.JobTypeUnpaused) {
                     refreshPausedTypes()
+                }
+            }
+        }
+    }
+
+    private fun subscribeToProgressEvents() {
+        scope.launch {
+            events.events.collect { event ->
+                if (event !is WebSocketEvent.JobProgress) return@collect
+                // In-place mutation, no REST refetch. Progress events fire up to once a
+                // second per job (handler-side throttle in JobContextImpl) — a full
+                // refresh would re-render the whole timeline and lose any in-flight UI
+                // interaction (e.g. an open reroute form).
+                val currentJobId = _model.value.jobId
+                if (event.id != currentJobId) return@collect
+                _model.update { m ->
+                    val d = m.detail ?: return@update m
+                    m.copy(
+                        detail = d.copy(
+                            job = d.job.copy(
+                                progress = event.progress,
+                                progressMsg = event.msg,
+                            ),
+                        ),
+                    )
                 }
             }
         }

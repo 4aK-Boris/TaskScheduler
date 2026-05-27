@@ -56,6 +56,13 @@ composeGradlePlugin = { module = "org.jetbrains.compose:compose-gradle-plugin", 
 composeCompilerGradlePlugin = { module = "org.jetbrains.kotlin:compose-compiler-gradle-plugin", version.ref = "kotlin" }
 
 # --- Kotlin ecosystem ---
+kotlinReflect = { module = "org.jetbrains.kotlin:kotlin-reflect", version.ref = "kotlin" }
+# K2 compiler plugin dev — kotlin-compiler-embeddable carries the FIR + IR APIs used by
+# `:scheduler-compiler-plugin`. compileOnly in plugin module (kotlinc provides at runtime).
+kotlinCompilerEmbeddable = { module = "org.jetbrains.kotlin:kotlin-compiler-embeddable", version.ref = "kotlin" }
+# Gradle subplugin API — for `:scheduler-compiler-plugin-gradle` to implement
+# KotlinCompilerPluginSupportPlugin.
+kotlinGradlePluginApi = { module = "org.jetbrains.kotlin:kotlin-gradle-plugin-api", version.ref = "kotlin" }
 kotlinxDatetime = { module = "org.jetbrains.kotlinx:kotlinx-datetime", version.ref = "kotlinxDatetime" }
 kotlinxSerialization = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinxSerialization" }
 kotlinxCoroutinesCore = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "kotlinxCoroutines" }
