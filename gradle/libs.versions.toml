@@ -87,6 +87,7 @@ ktorServerContentNegotiation = { module = "io.ktor:ktor-server-content-negotiati
 ktorSerializationKotlinxJson = { module = "io.ktor:ktor-serialization-kotlinx-json", version.ref = "ktor" }
 ktorServerWebsockets = { module = "io.ktor:ktor-server-websockets", version.ref = "ktor" }
 ktorServerAuth = { module = "io.ktor:ktor-server-auth", version.ref = "ktor" }
+ktorServerAuthJwt = { module = "io.ktor:ktor-server-auth-jwt", version.ref = "ktor" }
 ktorServerStatusPages = { module = "io.ktor:ktor-server-status-pages", version.ref = "ktor" }
 ktorServerCallLogging = { module = "io.ktor:ktor-server-call-logging", version.ref = "ktor" }
 ktorServerMetricsMicrometer = { module = "io.ktor:ktor-server-metrics-micrometer", version.ref = "ktor" }
@@ -148,6 +149,7 @@ ktorServer = [
     "ktorSerializationKotlinxJson",
     "ktorServerWebsockets",
     "ktorServerAuth",
+    "ktorServerAuthJwt",
     "ktorServerStatusPages",
     "ktorServerCallLogging",
     "ktorServerCompression",

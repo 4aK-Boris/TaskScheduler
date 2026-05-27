@@ -101,6 +101,7 @@ public class WorkerPool(
     private val coreConfig: SchedulerCoreConfig,
     private val prefetchTuner: PrefetchTuner,
     private val functionRefRunner: FunctionRefRunner,
+    private val circuitBreakers: CircuitBreakerRegistry,
 ) {
 
     private val log = LoggerFactory.getLogger(javaClass)
@@ -122,6 +123,10 @@ public class WorkerPool(
             workerRegistryLoop.start(scope)
 
             for (q in workerConfig.queues) {
+                // Circuit breaker register BEFORE consume.start so the first pickup is
+                // already gated. Per-node in-memory state; no cross-node sync.
+                q.circuitBreaker?.let { circuitBreakers.register(q.name, it) }
+
                 val handle = transport.consume(q.name, q.prefetch) { jobId ->
                     processOne(jobId, q)
                 }
@@ -284,6 +289,27 @@ public class WorkerPool(
             return
         }
 
+        // Circuit-breaker gate (DESIGN.md 20.7). If this node's breaker is OPEN or has
+        // an in-flight HALF_OPEN probe, release the lock + re-publish with a delay tied
+        // to `openDuration` so the next attempt arrives right when we're ready to retry.
+        // We DON'T trip on a refusal — the breaker tripped already and is intentionally
+        // not letting work through.
+        val cbConfig = workerConfig.queues.firstOrNull { it.name == locked.queue }?.circuitBreaker
+        if (cbConfig != null && !circuitBreakers.tryAcquire(locked.queue)) {
+            log.info(
+                "Job {} on q={} skipped by circuit breaker (state={}) — releasing + re-queueing in {}",
+                jobId, locked.queue, circuitBreakers.stateOf(locked.queue), cbConfig.openDuration,
+            )
+            deferPaused(
+                jobId = jobId,
+                expectedVersion = locked.version,
+                routingKey = routingKeyFor(locked),
+                priority = locked.priority.value,
+                backoff = cbConfig.openDuration,
+            )
+            return
+        }
+
         // Two dispatch shapes (DESIGN.md 21.1): sealed-class JobHandler vs function-ref
         // (payload_type == "function_ref"). For function-ref jobs there's no handler in
         // the registry and no @Serializable Job to decode — payload_json IS the
@@ -363,7 +389,18 @@ public class WorkerPool(
             .startSpan()
         // Make THIS span the current OTel context for the handler — overwrites the
         // parent-only OtelContextElement that restore() put in (same Key = replacement).
-        val handlerCtx = restored.coroutineContext + OtelContextElement(otelParent.with(span))
+        //
+        // Queue-level dispatcher override (DESIGN.md 13.3): if the QueueConfig declares
+        // a `dispatcher`, it takes over inside `withContext(handlerCtx)` below so the
+        // handler body runs on the user-chosen pool. Falls through to the consumer's
+        // default Dispatchers.IO when null. Note: only the handler body switches — the
+        // PG pickup / outbox writes / Rabbit ack stay on IO via their own `withContext`
+        // wrappers in the repo layer.
+        val queueConfig = workerConfig.queues.firstOrNull { it.name == locked.queue }
+        val queueDispatcher = queueConfig?.dispatcher
+        val handlerCtx = restored.coroutineContext +
+            OtelContextElement(otelParent.with(span)) +
+            (queueDispatcher ?: kotlin.coroutines.EmptyCoroutineContext)
 
         // Time only the user handler call — finalize / outbox writes are infra overhead
         // and would muddy the "how long does my job actually run" reading. `mark` snapshots
@@ -437,6 +474,17 @@ public class WorkerPool(
             // as long as a slow success. The tuner is a no-op for queues without an
             // AdaptivePrefetch config (see PrefetchTuner.record's early return).
             prefetchTuner.record(locked.queue, executeDuration)
+            // Feed the circuit breaker. CANCELLED counts as neither success nor failure
+            // for the breaker's purposes (operator action, not downstream health). Only
+            // genuine outcomes (SUCCESS, FAILED, RETRIED) flip the rolling window. RETRY
+            // implies the handler threw; we count it as a failure since the breaker's
+            // purpose is "downstream is sick", and a retry-able exception still means
+            // the call failed once.
+            when (outcome) {
+                JobOutcome.SUCCESS -> circuitBreakers.record(locked.queue, success = true)
+                JobOutcome.FAILED, JobOutcome.RETRIED -> circuitBreakers.record(locked.queue, success = false)
+                JobOutcome.CANCELLED -> { /* operator-driven, not a health signal */ }
+            }
         }
     }
 

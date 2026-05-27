@@ -126,6 +126,61 @@ class DagIntegrationTest {
     }
 
     @Test
+    fun `priority inheritance — child takes max of parent priorities when flag set`() = runBlocking {
+        // Two parents with different priorities (DESIGN.md 19.7 Phase 3).
+        val lowPrio = scheduler.enqueue(StepA(1), EnqueueOptions(priority = 2))
+        val highPrio = scheduler.enqueue(StepA(2), EnqueueOptions(priority = 8))
+
+        val childId = scheduler.enqueueAfter(
+            job = StepB(1),
+            waitFor = listOf(lowPrio, highPrio),
+            options = EnqueueOptions(inheritPriorityFromParents = true),
+        )
+
+        val child = jobs.findById(childId)!!
+        assertEquals(
+            8, child.priority.value,
+            "child must inherit max(parents.priority) — got ${child.priority.value} from parents 2, 8",
+        )
+    }
+
+    @Test
+    fun `priority inheritance — explicit priority wins over flag`() = runBlocking {
+        val highPrioParent = scheduler.enqueue(StepA(1), EnqueueOptions(priority = 9))
+
+        val childId = scheduler.enqueueAfter(
+            job = StepB(1),
+            waitFor = listOf(highPrioParent),
+            // BOTH explicit priority AND inherit flag — explicit wins (override chain
+            // priority 1 from DESIGN.md 19.3 extended).
+            options = EnqueueOptions(priority = 3, inheritPriorityFromParents = true),
+        )
+
+        val child = jobs.findById(childId)!!
+        assertEquals(
+            3, child.priority.value,
+            "explicit priority in EnqueueOptions must override the inheritance flag",
+        )
+    }
+
+    @Test
+    fun `priority inheritance — flag off keeps default zero even with high-priority parent`() = runBlocking {
+        val highPrioParent = scheduler.enqueue(StepA(1), EnqueueOptions(priority = 7))
+
+        val childId = scheduler.enqueueAfter(
+            job = StepB(1),
+            waitFor = listOf(highPrioParent),
+            options = EnqueueOptions(),    // no priority, no flag — defaults
+        )
+
+        val child = jobs.findById(childId)!!
+        assertEquals(
+            0, child.priority.value,
+            "without the flag, child priority must default to 0 regardless of parent",
+        )
+    }
+
+    @Test
     fun `enqueueAfter creates child in AWAITING_DEPS with pending_deps=1`() = runBlocking {
         val parentId = scheduler.enqueue(StepA(1))
         val childId = scheduler.enqueueAfter(

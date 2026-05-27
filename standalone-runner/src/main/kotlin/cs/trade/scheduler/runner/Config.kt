@@ -24,6 +24,20 @@ public data class RunnerConfig(
     val dashboardPort: Int,
     val dashboardAuthUser: String,
     val dashboardAuthPassword: String?,
+    /**
+     * Optional JWT bearer auth (Phase 3). When set alongside [dashboardAuthPassword], BOTH
+     * methods work — clients can present either `Authorization: Basic …` or
+     * `Authorization: Bearer <token>`. Tokens are validated as HMAC256-signed JWTs whose
+     * `iss` / `aud` claims match the configured strings (if any) and whose `sub` claim
+     * becomes the [io.ktor.server.auth.UserIdPrincipal] name used by audit attribution.
+     *
+     * Leaving the secret null disables JWT — BasicAuth alone if set, else open. Setting
+     * the secret without leaving issuer/audience null also works (Ktor's plugin accepts
+     * any token signed with the right secret).
+     */
+    val dashboardJwtSecret: String?,
+    val dashboardJwtIssuer: String?,
+    val dashboardJwtAudience: String?,
     val nodeId: String,
     val runMigrations: Boolean,
 ) {
@@ -75,6 +89,16 @@ public data class RunnerConfig(
             }
         }
 
+        // JWT secret must be long enough that a brute-force on the HMAC is infeasible. 32
+        // bytes (256-bit) is the natural floor for HS256; we soften to 16 chars so dev
+        // setups aren't forced to generate 32-char secrets, but warn at the cutoff.
+        val jwtSecret = dashboardJwtSecret
+        if (jwtSecret != null) {
+            if (jwtSecret.length < MIN_JWT_SECRET_LEN) {
+                failures += "DASHBOARD_JWT_SECRET must be at least $MIN_JWT_SECRET_LEN chars (got: ${jwtSecret.length})"
+            }
+        }
+
         if (failures.isNotEmpty()) {
             error(
                 "RunnerConfig validation failed (${failures.size} issue(s)):\n" +
@@ -86,6 +110,9 @@ public data class RunnerConfig(
     public companion object {
         /** OWASP-floor for a basic-auth secret. Real prod should use a passphrase / vault. */
         public const val MIN_DASHBOARD_PASSWORD_LEN: Int = 8
+
+        /** Floor for the JWT HMAC256 secret. 16 chars is below the cryptographic ideal of 32, but is the smallest still credible against casual brute-force. */
+        public const val MIN_JWT_SECRET_LEN: Int = 16
 
         /** Lowercased shortlist — case-insensitive match. Extend as bad defaults appear in incident reports. */
         private val WEAK_PASSWORDS: Set<String> = setOf("admin", "password")
@@ -102,6 +129,9 @@ public data class RunnerConfig(
             dashboardPort = optEnv("DASHBOARD_PORT", "8080").toInt(),
             dashboardAuthUser = optEnv("DASHBOARD_AUTH_USER", "admin"),
             dashboardAuthPassword = System.getenv("DASHBOARD_AUTH_PASSWORD"),
+            dashboardJwtSecret = System.getenv("DASHBOARD_JWT_SECRET"),
+            dashboardJwtIssuer = System.getenv("DASHBOARD_JWT_ISSUER"),
+            dashboardJwtAudience = System.getenv("DASHBOARD_JWT_AUDIENCE"),
             nodeId = optEnv("NODE_ID", "infra-${java.net.InetAddress.getLocalHost().hostName}"),
             runMigrations = optEnv("RUN_MIGRATIONS", "true").toBoolean(),
         )

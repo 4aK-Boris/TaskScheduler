@@ -1072,9 +1072,24 @@ Rabbit prefetch = сколько unack'ed сообщений consumer держи
 
 **Правило:** `prefetch >= concurrency`. По дефолту `prefetch = concurrency`. Override через `queue(..., prefetch = N)`.
 
-### 13.3. Coroutine dispatcher
+### 13.3. Coroutine dispatcher — shipped (Phase 3)
 
-`Dispatchers.IO` для всех queue (99% jobs — IO-bound). Кастомизация per-queue (`Dispatchers.Default` для CPU-bound, фиксированный пул) — Phase 2.
+Default `Dispatchers.IO` для всех queue (99% jobs — IO-bound). Per-queue override через `queue("…", dispatcher = …)` в `schedulerWorkerModule`:
+
+```kotlin
+schedulerWorkerModule {
+    queue("cpu-heavy",
+        concurrency = 4,
+        dispatcher = Dispatchers.Default,        // CPU-bound jobs
+    )
+    queue("isolated-cache",
+        concurrency = 1,
+        dispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher(),
+    )
+}
+```
+
+Только handler body выполняется на overridden dispatcher — Rabbit dispatch, PG pickup, outbox writes остаются на `Dispatchers.IO` через свои `withContext` обёртки в repo-слое. Реализация: `QueueConfig.dispatcher` добавляется в `handlerCtx` перед `withContext(handlerCtx) { handler.execute(...) }` в `WorkerPool.processLockedInner`.
 
 ### 13.4. Heartbeat и lock duration
 
@@ -2253,12 +2268,35 @@ schedulerWorkerModule {
 }
 ```
 
-### 20.8. Phase 3+ остатки
+### 20.8. Circuit breaker per queue — shipped (Phase 3)
+
+Per-queue `CircuitBreakerConfig` + `CircuitBreakerRegistry` (engine-worker). Three-state machine:
+
+- **CLOSED** — normal. Outcomes flow into a rolling sample window. Trip to OPEN when `failures / total > errorRateThreshold` AND `samples >= minSamples`.
+- **OPEN** — `WorkerPool.processLockedInner` checks `circuitBreakers.tryAcquire(queue)` after pickup; refused jobs are released through the same `DeferPausedJobUseCase` path (clear lock, re-publish outbox with `delayMs = openDuration`). After `openDuration` elapses, transitions to HALF_OPEN.
+- **HALF_OPEN** — exactly one in-flight probe allowed; success → CLOSED (and window cleared), failure → OPEN for another cycle.
+
+Per-node in-memory state (no cross-node sync). Other nodes keep serving when one trips — the breaker is consumer-side protection for one worker pool's downstream. Operator pause across the cluster is `job_type_pause` (DESIGN.md 22.1), not the breaker. CANCELLED outcomes don't feed the breaker (operator action ≠ downstream health signal); SUCCESS / FAILED / RETRIED do.
+
+```kotlin
+schedulerWorkerModule {
+    queue("flaky-api",
+        concurrency = 4,
+        circuitBreaker = CircuitBreakerConfig(
+            errorRateThreshold = 0.5,
+            minSamples = 10,
+            sampleWindow = 1.minutes,
+            openDuration = 30.seconds,
+        ),
+    )
+}
+```
+
+### 20.9. Phase 3+ остатки
 
 | Фича | Зачем |
 |---|---|
 | Prometheus `/metrics` endpoint в infra | Grafana + AlertManager + HPA |
-| Circuit breaker per queue | Auto-pause при error rate > X% |
 | Backpressure visual indicator в Compose dashboard | "queue under load" badge |
 
 ---

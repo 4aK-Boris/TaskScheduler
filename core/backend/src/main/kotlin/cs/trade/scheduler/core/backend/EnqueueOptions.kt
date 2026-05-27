@@ -21,6 +21,21 @@ public data class EnqueueOptions(
     val targetQualifier: String? = null,        // Koin qualifier for function-ref API
     val captureContext: Boolean = true,         // MDC + OTel (DESIGN.md 22.11)
     val onParentFailure: OnFailure = OnFailure.PROPAGATE_FAILURE,
+    /**
+     * When `true` AND used with [Scheduler.enqueueAfter], the child's effective priority
+     * becomes `max(parents.map { it.priority })` — useful for an urgent fan-out where the
+     * follow-up step should match the highest urgency of any parent.
+     *
+     * Override chain (DESIGN.md 19.3 extended for Phase 3):
+     *  1. explicit [priority] in [EnqueueOptions] — wins unconditionally
+     *  2. [inheritPriorityFromParents] = true — `max(parent.priority)` (skipped if 1)
+     *  3. handler default → global default (0)
+     *
+     * Ignored on the non-DAG entry points (`enqueue`, `scheduleAt`, `enqueueOnce`) — they
+     * have no parents to inherit from. Documented but not enforced via compile-time
+     * separation; misuse silently no-ops.
+     */
+    val inheritPriorityFromParents: Boolean = false,
 )
 
 /**

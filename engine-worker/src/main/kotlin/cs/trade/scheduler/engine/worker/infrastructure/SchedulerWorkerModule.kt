@@ -9,6 +9,7 @@ import cs.trade.scheduler.engine.worker.domain.usecases.ScheduleRetryUseCase
 import cs.trade.scheduler.engine.worker.infrastructure.loops.HeartbeatLoop
 import cs.trade.scheduler.engine.worker.infrastructure.loops.WorkerRegistryLoop
 import cs.trade.scheduler.engine.worker.infrastructure.metrics.JobMetrics
+import kotlinx.coroutines.CoroutineDispatcher
 import org.koin.core.module.Module
 import org.koin.core.module.dsl.singleOf
 import org.koin.dsl.module
@@ -34,6 +35,12 @@ import kotlin.time.Duration.Companion.seconds
  *             targetLatency = 2.seconds,
  *             minPrefetch = 4,
  *             maxPrefetch = 32,
+ *         ),
+ *         circuitBreaker = CircuitBreakerConfig(
+ *             errorRateThreshold = 0.5,
+ *             minSamples = 10,
+ *             sampleWindow = 1.minutes,
+ *             openDuration = 30.seconds,
  *         ),
  *     )
  * }
@@ -61,18 +68,78 @@ public class SchedulerWorkerConfig {
         prefetch: Int? = null,
         defaultPriority: Int = 0,
         adaptive: AdaptivePrefetch? = null,
+        circuitBreaker: CircuitBreakerConfig? = null,
+        dispatcher: CoroutineDispatcher? = null,
     ) {
-        queues += QueueConfig(name, concurrency, prefetch ?: concurrency, defaultPriority, adaptive)
+        queues += QueueConfig(name, concurrency, prefetch ?: concurrency, defaultPriority, adaptive, circuitBreaker, dispatcher)
     }
 }
 
+/**
+ * Per-queue worker config. [dispatcher] (DESIGN.md 13.3) overrides the default
+ * `Dispatchers.IO` used to run the handler body — useful for:
+ *  - CPU-heavy jobs that want a dedicated `Dispatchers.Default`-backed pool so blocking
+ *    on Rabbit redelivery doesn't starve other queues.
+ *  - Single-thread executor per queue (`newSingleThreadExecutor().asCoroutineDispatcher()`)
+ *    when handler code uses thread-local state that mustn't bleed across jobs.
+ *  - A user-provided pool sized differently from Hikari / Rabbit prefetch budgets.
+ *
+ * Null = inherit the worker pool's default (which today is `Dispatchers.IO` propagated
+ * from the consumer's coroutine scope). Doesn't affect the consumer loop itself — Rabbit
+ * dispatch and PG pickup always run on `Dispatchers.IO`.
+ */
 public data class QueueConfig(
     val name: String,
     val concurrency: Int,
     val prefetch: Int,
     val defaultPriority: Int,
     val adaptive: AdaptivePrefetch? = null,
+    val circuitBreaker: CircuitBreakerConfig? = null,
+    val dispatcher: CoroutineDispatcher? = null,
 )
+
+/**
+ * Per-queue circuit breaker (DESIGN.md 20.7 — Phase 3). When the rolling window of
+ * handler outcomes shows an error rate above [errorRateThreshold] (with at least
+ * [minSamples] samples to suppress noise), the breaker trips to OPEN: new pickups are
+ * released back to Rabbit with a delay so other nodes can try (or the same node retries
+ * after [openDuration]). After the cooldown, a single HALF_OPEN probe goes through —
+ * success closes the breaker, failure re-opens it for another cycle.
+ *
+ * **State is per-node, in-memory.** No cross-node sync — if node A trips, node B keeps
+ * serving. That's intentional: the breaker is a consumer-side protection for one
+ * worker pool's downstream. Operator-driven pause across the cluster is `job_type_pause`
+ * (DESIGN.md 22.1), not the breaker.
+ *
+ * **Released jobs go back through Rabbit, not lost.** A tripped breaker treats incoming
+ * deliveries the same way `DeferPausedJobUseCase` treats paused job types: clear the
+ * lock + re-publish the outbox row with `delayMs = openDuration`. So the job is alive
+ * the whole time, just not attempted on this node.
+ *
+ * @param errorRateThreshold Trip when (failures / total) within the window exceeds this
+ *   (range 0.0..1.0; e.g. 0.5 = 50%).
+ * @param minSamples Don't trip until we've seen this many samples in the window —
+ *   prevents a single early failure from killing the queue.
+ * @param sampleWindow How far back to look for samples. Older outcomes age out.
+ * @param openDuration How long the breaker stays OPEN before a HALF_OPEN probe is
+ *   allowed. Used both for the state-transition timer AND for the delay on released
+ *   re-publishes (so the message comes back exactly when we're ready to probe again).
+ */
+public data class CircuitBreakerConfig(
+    val errorRateThreshold: Double,
+    val minSamples: Int,
+    val sampleWindow: Duration,
+    val openDuration: Duration,
+) {
+    init {
+        require(errorRateThreshold in 0.0..1.0) {
+            "errorRateThreshold must be in [0.0, 1.0], got $errorRateThreshold"
+        }
+        require(minSamples >= 1) { "minSamples must be >= 1, got $minSamples" }
+        require(sampleWindow.isPositive()) { "sampleWindow must be positive, got $sampleWindow" }
+        require(openDuration.isPositive()) { "openDuration must be positive, got $openDuration" }
+    }
+}
 
 /**
  * Per-queue adaptive prefetch tuner (DESIGN.md 20.7). When set on a queue, a background
@@ -128,6 +195,10 @@ public fun schedulerWorkerModule(configure: SchedulerWorkerConfig.() -> Unit): M
         single<HandlerRegistry> { HandlerRegistry(getAll<JobHandler<*>>()) }
         singleOf(::WorkerInFlightCounter)
         singleOf(::PrefetchTuner)
+        // CircuitBreakerRegistry has a `clock` constructor param with a default; `singleOf`
+        // tries to resolve it from Koin and fails because no binding exists. Use the
+        // default arg explicitly via a manual `single { }` block.
+        single<CircuitBreakerRegistry> { CircuitBreakerRegistry() }
         // Function-ref runtime — receives KFunction-encoded jobs from DefaultScheduler
         // (DESIGN.md 21). The runner needs the running Koin context to resolve target
         // beans by KClass + qualifier at execute time.
@@ -166,6 +237,7 @@ public fun schedulerWorkerModule(configure: SchedulerWorkerConfig.() -> Unit): M
                 coreConfig = get(),
                 prefetchTuner = get(),
                 functionRefRunner = get(),
+                circuitBreakers = get(),
             )
         }
     }

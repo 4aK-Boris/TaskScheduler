@@ -253,7 +253,24 @@ public class DefaultScheduler(
         require(waitFor.isNotEmpty()) {
             "enqueueAfter requires at least one parent — use enqueue() for no-dep jobs"
         }
-        val params = buildParams(job, options)
+        // Priority inheritance (DESIGN.md 19.7 Phase 3). When explicit `options.priority`
+        // is null AND `inheritPriorityFromParents = true`, look up parents and take the
+        // max priority. Skipped if parents have been retention-cleaned by the time we
+        // look (returns 0 default for missing rows — parents gone means the job is
+        // racy anyway and the priority detail isn't load-bearing).
+        val effectiveOptions = if (options.priority == null && options.inheritPriorityFromParents) {
+            val parentMaxPriority = withContext(Dispatchers.IO) {
+                suspendTransaction(db = database) {
+                    waitFor.maxOf { parentId ->
+                        storage.jobs.findById(parentId)?.priority?.value ?: 0
+                    }
+                }
+            }
+            options.copy(priority = parentMaxPriority)
+        } else {
+            options
+        }
+        val params = buildParams(job, effectiveOptions)
         // pending_deps starts at waitFor.size; the child sits AWAITING_DEPS with no outbox
         // row until parents finish and FinalizeJobUseCase promotes it to ENQUEUED.
         val row = newJobRow(params, state = JobState.AWAITING_DEPS, scheduledAt = null)

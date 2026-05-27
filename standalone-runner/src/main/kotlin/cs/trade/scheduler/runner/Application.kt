@@ -25,10 +25,14 @@ import cs.trade.scheduler.transport.rabbit.infrastructure.schedulerRabbitModule
 import io.ktor.serialization.kotlinx.json.json
 import io.ktor.server.application.Application
 import io.ktor.server.application.install
+import com.auth0.jwt.JWT
+import com.auth0.jwt.algorithms.Algorithm
 import io.ktor.server.auth.Authentication
 import io.ktor.server.auth.UserIdPrincipal
 import io.ktor.server.auth.authenticate
 import io.ktor.server.auth.basic
+import io.ktor.server.auth.jwt.JWTPrincipal
+import io.ktor.server.auth.jwt.jwt
 import io.ktor.server.engine.embeddedServer
 import io.ktor.server.http.content.singlePageApplication
 import io.ktor.server.netty.Netty
@@ -157,6 +161,9 @@ public fun main() {
     val server = embeddedServer(Netty, port = config.dashboardPort) {
         configureKtor(
             authPassword = config.dashboardAuthPassword,
+            jwtSecret = config.dashboardJwtSecret,
+            jwtIssuer = config.dashboardJwtIssuer,
+            jwtAudience = config.dashboardJwtAudience,
             dataSource = dataSource,
             rabbitFactory = rabbitFactory,
             metricsRegistry = metricsRegistry,
@@ -186,6 +193,9 @@ public fun main() {
 
 private fun Application.configureKtor(
     authPassword: String?,
+    jwtSecret: String?,
+    jwtIssuer: String?,
+    jwtAudience: String?,
     dataSource: DataSource,
     rabbitFactory: ConnectionFactory,
     metricsRegistry: PrometheusMeterRegistry,
@@ -206,13 +216,42 @@ private fun Application.configureKtor(
         // Modules are already loaded via startKoin in main(); the plugin just exposes
         // the GlobalContext to Ktor's inject<>() helpers used by route files.
     }
-    if (authPassword != null) {
+    val authMethods = mutableListOf<String>()
+    if (authPassword != null || jwtSecret != null) {
         install(Authentication) {
-            basic("dashboard") {
-                realm = "TaskScheduler dashboard"
-                validate { creds ->
-                    if (creds.password == authPassword) UserIdPrincipal(creds.name) else null
+            // BasicAuth — same shape as before; opt-in via DASHBOARD_AUTH_PASSWORD.
+            if (authPassword != null) {
+                basic("dashboard") {
+                    realm = "TaskScheduler dashboard"
+                    validate { creds ->
+                        if (creds.password == authPassword) UserIdPrincipal(creds.name) else null
+                    }
                 }
+                authMethods += "dashboard"
+            }
+            // JWT — symmetric HMAC256 with the configured secret. `iss` and `aud` claims
+            // are validated when set. Token subject (`sub`) becomes the principal name
+            // for audit attribution. We install JWT in addition to (not instead of) Basic
+            // so service-to-service traffic can use bearer tokens while operators keep
+            // using the BasicAuth prompt from the SPA.
+            if (jwtSecret != null) {
+                jwt("jwt") {
+                    realm = "TaskScheduler dashboard"
+                    val verifier = JWT.require(Algorithm.HMAC256(jwtSecret))
+                        .apply {
+                            if (jwtIssuer != null) withIssuer(jwtIssuer)
+                            if (jwtAudience != null) withAudience(jwtAudience)
+                        }
+                        .build()
+                    verifier(verifier)
+                    validate { creds ->
+                        // Require a subject — otherwise audit attribution falls back to
+                        // "anonymous" which defeats the purpose of bearer auth.
+                        val sub = creds.payload.subject
+                        if (sub.isNullOrBlank()) null else JWTPrincipal(creds.payload)
+                    }
+                }
+                authMethods += "jwt"
             }
         }
     }
@@ -224,12 +263,12 @@ private fun Application.configureKtor(
         configureHealthRouting(dataSource, rabbitFactory, leader)
         configureMetricsRouting(metricsRegistry)
 
-        if (authPassword != null) {
-            // Single auth wrap covers REST AND the /api/ws/events WebSocket — Ktor
-            // validates BasicAuth during the HTTP upgrade phase, so an unauth'd client
-            // gets 401 before the WS handshake completes. See EventsRouting.kt for the
-            // browser-cached-creds caveat.
-            authenticate("dashboard") { configureDashboardRouting() }
+        if (authMethods.isNotEmpty()) {
+            // Multi-method wrap: a request that presents EITHER credential type passes.
+            // Ktor tries methods in declaration order; the first one that produces a
+            // principal wins. Covers REST AND the /api/ws/events WebSocket — see
+            // EventsRouting.kt for the browser-cached-creds caveat.
+            authenticate(*authMethods.toTypedArray()) { configureDashboardRouting() }
         } else {
             configureDashboardRouting()
         }
