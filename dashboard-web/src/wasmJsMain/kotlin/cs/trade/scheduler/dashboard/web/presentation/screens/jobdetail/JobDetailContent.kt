@@ -1,0 +1,481 @@
+package cs.trade.scheduler.dashboard.web.presentation.screens.jobdetail
+
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.unit.dp
+import com.arkivanov.decompose.extensions.compose.subscribeAsState
+import cs.trade.scheduler.dashboard.web.presentation.components.PausedBadge
+import cs.trade.scheduler.dashboard.web.presentation.components.StateChip
+import cs.trade.scheduler.dashboard.web.presentation.components.timeAgo
+import cs.trade.scheduler.shared.JobState
+import cs.trade.scheduler.shared.dto.JobDetail
+import cs.trade.scheduler.shared.dto.JobEventDto
+import cs.trade.scheduler.shared.dto.JobView
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+public fun JobDetailContent(component: JobDetailComponent) {
+    val state by component.model.subscribeAsState()
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = {
+                    Text(
+                        text = "Job ${state.jobId.take(8)}",
+                        fontFamily = FontFamily.Monospace,
+                    )
+                },
+                actions = {
+                    OutlinedButton(onClick = component::onRefreshClicked) { Text("Refresh") }
+                },
+            )
+        },
+    ) { padding ->
+        Box(modifier = Modifier.fillMaxSize().padding(padding)) {
+            when {
+                state.loading && state.detail == null -> CircularProgressIndicator(
+                    modifier = Modifier.align(Alignment.Center),
+                )
+                state.error != null && state.detail == null -> Text(
+                    text = state.error ?: "",
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.align(Alignment.Center).padding(16.dp),
+                )
+                state.detail != null -> JobDetailBody(
+                    detail = state.detail!!,
+                    paused = state.detail!!.job.payloadType in state.pausedTypes,
+                    cancelling = state.cancelling,
+                    onCancel = component::onCancelClicked,
+                    cancelMessage = state.cancelResult?.name,
+                    retrying = state.retrying,
+                    onRetry = component::onRetryClicked,
+                    retryMessage = state.retryResult?.name,
+                    deleting = state.deleting,
+                    confirmingDelete = state.confirmingDelete,
+                    onDelete = component::onDeleteClicked,
+                    onDeleteCancel = component::onDeleteConfirmCancelled,
+                    deleteMessage = state.deleteResult?.name,
+                    rerouting = state.rerouting,
+                    rerouteFormOpen = state.rerouteFormOpen,
+                    rerouteNode = state.rerouteNode,
+                    rerouteTag = state.rerouteTag,
+                    rerouteMessage = state.rerouteResult?.name,
+                    onRerouteToggle = component::onRerouteFormToggled,
+                    onRerouteNodeChange = component::onRerouteNodeChanged,
+                    onRerouteTagChange = component::onRerouteTagChanged,
+                    onRerouteSubmit = component::onRerouteSubmit,
+                    onBack = component::onBackClicked,
+                    onNavigate = component::onNeighbourClicked,
+                )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun JobDetailBody(
+    detail: JobDetail,
+    paused: Boolean,
+    cancelling: Boolean,
+    onCancel: () -> Unit,
+    cancelMessage: String?,
+    retrying: Boolean,
+    onRetry: () -> Unit,
+    retryMessage: String?,
+    deleting: Boolean,
+    confirmingDelete: Boolean,
+    onDelete: () -> Unit,
+    onDeleteCancel: () -> Unit,
+    deleteMessage: String?,
+    rerouting: Boolean,
+    rerouteFormOpen: Boolean,
+    rerouteNode: String,
+    rerouteTag: String,
+    rerouteMessage: String?,
+    onRerouteToggle: () -> Unit,
+    onRerouteNodeChange: (String) -> Unit,
+    onRerouteTagChange: (String) -> Unit,
+    onRerouteSubmit: () -> Unit,
+    onBack: () -> Unit,
+    onNavigate: (String) -> Unit,
+) {
+    val job = detail.job
+    val payloadJson = detail.payloadJson
+    Column(
+        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            StateChip(job.state)
+            Text(text = job.payloadType, style = MaterialTheme.typography.titleMedium)
+            if (paused) PausedBadge()
+        }
+
+        FactGrid(
+            "ID" to job.id,
+            "Queue" to job.queue,
+            "Priority" to job.priority.value.toString(),
+            "Attempts" to "${job.attempts}/${job.maxAttempts}",
+            "Created" to "${timeAgo(job.createdAt)} (${job.createdAt})",
+            "Updated" to "${timeAgo(job.updatedAt)} (${job.updatedAt})",
+            "Scheduled" to (job.scheduledAt?.toString() ?: "—"),
+            "Duration" to (job.durationMs?.let { "${it}ms" } ?: "—"),
+            "Locked by" to (job.lockedBy ?: "—"),
+            "Progress" to (job.progress?.let { "${(it * 100).toInt()}% ${job.progressMsg.orEmpty()}" } ?: "—"),
+        )
+
+        HorizontalDivider()
+
+        Text("Payload", style = MaterialTheme.typography.titleMedium)
+        Surface(
+            color = MaterialTheme.colorScheme.surfaceVariant,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text(
+                text = payloadJson,
+                style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                modifier = Modifier.padding(12.dp),
+            )
+        }
+
+        if (detail.parents.isNotEmpty() || detail.children.isNotEmpty()) {
+            HorizontalDivider()
+            DagNeighbours(parents = detail.parents, children = detail.children, onNavigate = onNavigate)
+        }
+
+        HorizontalDivider()
+
+        Text("Timeline (${detail.events.size})", style = MaterialTheme.typography.titleMedium)
+        if (detail.events.isEmpty()) {
+            Text(
+                text = "No events recorded yet",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        } else {
+            EventTimeline(detail.events)
+        }
+
+        HorizontalDivider()
+
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            OutlinedButton(onClick = onBack) { Text("Back") }
+            if (!job.state.isTerminal) {
+                Button(
+                    onClick = onCancel,
+                    enabled = !cancelling && !retrying,
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                ) {
+                    Text(if (cancelling) "Cancelling…" else "Cancel job")
+                }
+            }
+            // Manual retry is only meaningful on FAILED — SUCCEEDED / CANCELLED are
+            // deliberate end-states. Backend enforces this too (returns NOT_FAILED), but
+            // hiding the button keeps the UI honest.
+            if (job.state == JobState.FAILED) {
+                Button(
+                    onClick = onRetry,
+                    enabled = !retrying && !cancelling && !deleting,
+                ) {
+                    Text(if (retrying) "Retrying…" else "Retry")
+                }
+            }
+            // Delete is terminal-only — backend rejects others with NOT_TERMINAL but UI
+            // mirrors. Two-step inline confirm: first click arms (label flips + a Cancel
+            // button appears), second commits. Pop back to list on success.
+            if (job.state.isTerminal) {
+                Button(
+                    onClick = onDelete,
+                    enabled = !deleting,
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                ) {
+                    val label = when {
+                        deleting -> "Deleting…"
+                        confirmingDelete -> "Click again to confirm"
+                        else -> "Delete"
+                    }
+                    Text(label)
+                }
+                if (confirmingDelete && !deleting) {
+                    OutlinedButton(onClick = onDeleteCancel) { Text("Cancel delete") }
+                }
+            }
+            // Reroute — non-terminal only. Useful when a job sits in q.node.X with X
+            // offline. Toggle expands an inline form; backend accepts node OR tag.
+            if (!job.state.isTerminal) {
+                OutlinedButton(onClick = onRerouteToggle, enabled = !rerouting) {
+                    Text(if (rerouteFormOpen) "Cancel reroute" else "Re-route")
+                }
+            }
+        }
+
+        if (rerouteFormOpen) {
+            Surface(color = MaterialTheme.colorScheme.surfaceVariant, modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        "Re-route — fill node OR tag (or both empty to clear targets):",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        OutlinedTextField(
+                            value = rerouteNode,
+                            onValueChange = onRerouteNodeChange,
+                            label = { Text("Target node") },
+                            singleLine = true,
+                            enabled = !rerouting,
+                            modifier = Modifier.width(220.dp),
+                            textStyle = MaterialTheme.typography.bodySmall,
+                        )
+                        OutlinedTextField(
+                            value = rerouteTag,
+                            onValueChange = onRerouteTagChange,
+                            label = { Text("Target tag") },
+                            singleLine = true,
+                            enabled = !rerouting,
+                            modifier = Modifier.width(220.dp),
+                            textStyle = MaterialTheme.typography.bodySmall,
+                        )
+                        Button(onClick = onRerouteSubmit, enabled = !rerouting) {
+                            Text(if (rerouting) "Applying…" else "Apply")
+                        }
+                    }
+                }
+            }
+        }
+
+        cancelMessage?.let {
+            Text(
+                text = "Cancel result: $it",
+                color = MaterialTheme.colorScheme.primary,
+                style = MaterialTheme.typography.bodyMedium,
+            )
+        }
+        retryMessage?.let {
+            Text(
+                text = "Retry result: $it",
+                color = MaterialTheme.colorScheme.primary,
+                style = MaterialTheme.typography.bodyMedium,
+            )
+        }
+        deleteMessage?.let {
+            Text(
+                text = "Delete result: $it",
+                color = MaterialTheme.colorScheme.primary,
+                style = MaterialTheme.typography.bodyMedium,
+            )
+        }
+        rerouteMessage?.let {
+            Text(
+                text = "Re-route result: $it",
+                color = MaterialTheme.colorScheme.primary,
+                style = MaterialTheme.typography.bodyMedium,
+            )
+        }
+    }
+}
+
+@Composable
+private fun DagNeighbours(
+    parents: List<JobView>,
+    children: List<JobView>,
+    onNavigate: (String) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (parents.isNotEmpty()) {
+            Text("Parents (${parents.size})", style = MaterialTheme.typography.titleMedium)
+            parents.forEach { p -> NeighbourRow(p, onNavigate) }
+        }
+        if (children.isNotEmpty()) {
+            Text("Children (${children.size})", style = MaterialTheme.typography.titleMedium)
+            children.forEach { c -> NeighbourRow(c, onNavigate) }
+        }
+    }
+}
+
+@Composable
+private fun NeighbourRow(job: JobView, onNavigate: (String) -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onNavigate(job.id) }
+            .padding(vertical = 6.dp, horizontal = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Box(modifier = Modifier.width(140.dp)) { StateChip(job.state) }
+        Text(
+            text = job.payloadType.substringAfterLast('.'),
+            style = MaterialTheme.typography.bodyMedium,
+            modifier = Modifier.width(300.dp),
+        )
+        Text(
+            text = job.id.take(8),
+            style = MaterialTheme.typography.bodySmall.copy(
+                fontFamily = FontFamily.Monospace,
+                color = MaterialTheme.colorScheme.primary,
+            ),
+        )
+        Text(
+            text = timeAgo(job.updatedAt),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+@Composable
+private fun EventTimeline(events: List<JobEventDto>) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        events.forEach { ev ->
+            EventRow(ev)
+        }
+    }
+}
+
+@Composable
+private fun EventRow(ev: JobEventDto) {
+    // Per-event expansion state. Keyed by event id so re-composes preserve the toggle.
+    var stackExpanded by remember(ev.id) { mutableStateOf(false) }
+
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.Top,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Text(
+            text = timeAgo(ev.occurredAt),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.width(80.dp),
+        )
+        Text(
+            text = ev.eventType,
+            style = MaterialTheme.typography.labelMedium,
+            modifier = Modifier.width(140.dp),
+        )
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            modifier = Modifier.width(260.dp),
+        ) {
+            ev.prevState?.let { StateChip(it) }
+            if (ev.prevState != null && ev.newState != null) {
+                Text(
+                    "->",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            ev.newState?.let { StateChip(it) }
+        }
+        ev.actor?.let {
+            Text(
+                text = "by $it",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+    // Error message + collapsible stack trace (aligned under the row content, indented past
+    // the timestamp column so eye flow is "what failed" -> "the trace if I expand it").
+    if (ev.errorMsg != null || ev.errorStack != null) {
+        Column(
+            modifier = Modifier.padding(start = 92.dp).fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            ev.errorMsg?.let { msg ->
+                Text(
+                    text = msg,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+            ev.errorStack?.let { stack ->
+                val toggleLabel = if (stackExpanded) "▼ Hide stack trace" else "▶ Show stack trace"
+                Text(
+                    text = toggleLabel,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier
+                        .clickable { stackExpanded = !stackExpanded }
+                        .padding(vertical = 2.dp),
+                )
+                if (stackExpanded) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.errorContainer,
+                        shape = RoundedCornerShape(4.dp),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(
+                            text = stack,
+                            style = MaterialTheme.typography.bodySmall.copy(
+                                fontFamily = FontFamily.Monospace,
+                            ),
+                            color = MaterialTheme.colorScheme.onErrorContainer,
+                            modifier = Modifier.padding(8.dp),
+                        )
+                    }
+                    Spacer(Modifier.padding(top = 2.dp))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun FactGrid(vararg facts: Pair<String, String>) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        facts.forEach { (label, value) ->
+            Row(verticalAlignment = Alignment.Top) {
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.width(120.dp),
+                )
+                Text(
+                    text = value,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            }
+        }
+    }
+}
+

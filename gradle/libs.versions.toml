@@ -1,0 +1,174 @@
+# Version catalog — single source of truth for dependency versions.
+# https://docs.gradle.org/current/userguide/platforms.html
+
+[versions]
+# Kotlin + ecosystem
+kotlin = "2.3.21"
+kotlinxDatetime = "0.8.0"
+kotlinxSerialization = "1.11.0"
+kotlinxCoroutines = "1.11.0"
+
+# Compose Multiplatform (Web/wasmJs) — 1.10.1 runs on Java 21 LTS;
+# 1.11.x requires Java 24 in the Gradle plugin classpath.
+composeMultiplatform = "1.10.1"
+
+# Decompose (navigation + lifecycle for Compose MP)
+decompose = "3.5.0"
+essenty = "2.5.0"
+
+# DI — Koin 4.2+ uses native Compiler Plugin instead of KSP.
+# koin-annotations is published with the same version as koin-core. Plugin versions independently.
+# See https://insert-koin.io/docs/migration/from-ksp-to-compiler-plugin
+koin = "4.2.1"
+koinCompilerPlugin = "1.0.0"
+
+# Ktor (server + client)
+ktor = "3.5.0"
+
+# Storage
+postgresJdbc = "42.7.11"
+hikari = "7.0.2"
+exposed = "1.3.0"
+flyway = "12.6.2"
+
+# Transport
+amqpClient = "5.30.0"
+
+# Domain libs
+cronUtils = "9.2.1"
+konform = "0.11.1"
+
+# Observability
+openTelemetryApi = "1.62.0"
+micrometer = "1.17.0-RC1"
+slf4j = "2.0.18"
+logback = "1.5.32"
+
+# Test
+junit = "6.1.0"
+testcontainers = "1.21.3"   # Testcontainers 2.x not released yet on Maven Central
+mockk = "1.14.9"
+
+[libraries]
+# --- Build-time plugin dependencies (used in buildSrc) ---
+kotlinGradlePlugin = { module = "org.jetbrains.kotlin:kotlin-gradle-plugin", version.ref = "kotlin" }
+composeGradlePlugin = { module = "org.jetbrains.compose:compose-gradle-plugin", version.ref = "composeMultiplatform" }
+composeCompilerGradlePlugin = { module = "org.jetbrains.kotlin:compose-compiler-gradle-plugin", version.ref = "kotlin" }
+
+# --- Kotlin ecosystem ---
+kotlinxDatetime = { module = "org.jetbrains.kotlinx:kotlinx-datetime", version.ref = "kotlinxDatetime" }
+kotlinxSerialization = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinxSerialization" }
+kotlinxCoroutinesCore = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "kotlinxCoroutines" }
+kotlinxCoroutinesSlf4j = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-slf4j", version.ref = "kotlinxCoroutines" }
+
+# --- Decompose ---
+decompose = { module = "com.arkivanov.decompose:decompose", version.ref = "decompose" }
+decomposeExtensionsCompose = { module = "com.arkivanov.decompose:extensions-compose", version.ref = "decompose" }
+essentyLifecycle = { module = "com.arkivanov.essenty:lifecycle", version.ref = "essenty" }
+essentyLifecycleCoroutines = { module = "com.arkivanov.essenty:lifecycle-coroutines", version.ref = "essenty" }
+
+# --- Koin (Compiler Plugin since 4.2 — no KSP, no koin-ksp-compiler) ---
+koinCore = { module = "io.insert-koin:koin-core", version.ref = "koin" }
+koinKtor = { module = "io.insert-koin:koin-ktor", version.ref = "koin" }
+koinSlf4j = { module = "io.insert-koin:koin-logger-slf4j", version.ref = "koin" }
+koinAnnotations = { module = "io.insert-koin:koin-annotations", version.ref = "koin" }
+
+# --- Ktor server (для :dashboard-server, :standalone-runner) ---
+ktorServerCore = { module = "io.ktor:ktor-server-core", version.ref = "ktor" }
+ktorServerNetty = { module = "io.ktor:ktor-server-netty", version.ref = "ktor" }
+ktorServerContentNegotiation = { module = "io.ktor:ktor-server-content-negotiation", version.ref = "ktor" }
+ktorSerializationKotlinxJson = { module = "io.ktor:ktor-serialization-kotlinx-json", version.ref = "ktor" }
+ktorServerWebsockets = { module = "io.ktor:ktor-server-websockets", version.ref = "ktor" }
+ktorServerAuth = { module = "io.ktor:ktor-server-auth", version.ref = "ktor" }
+ktorServerStatusPages = { module = "io.ktor:ktor-server-status-pages", version.ref = "ktor" }
+ktorServerCallLogging = { module = "io.ktor:ktor-server-call-logging", version.ref = "ktor" }
+ktorServerMetricsMicrometer = { module = "io.ktor:ktor-server-metrics-micrometer", version.ref = "ktor" }
+ktorServerCompression = { module = "io.ktor:ktor-server-compression", version.ref = "ktor" }
+ktorServerCors = { module = "io.ktor:ktor-server-cors", version.ref = "ktor" }
+
+# --- Ktor client (для :core:frontend / :dashboard-web) ---
+ktorClientCore = { module = "io.ktor:ktor-client-core", version.ref = "ktor" }
+ktorClientWasmJs = { module = "io.ktor:ktor-client-js", version.ref = "ktor" } # для wasmJs target
+ktorClientContentNegotiation = { module = "io.ktor:ktor-client-content-negotiation", version.ref = "ktor" }
+ktorClientWebsockets = { module = "io.ktor:ktor-client-websockets", version.ref = "ktor" }
+
+# --- Storage ---
+postgresJdbc = { module = "org.postgresql:postgresql", version.ref = "postgresJdbc" }
+hikari = { module = "com.zaxxer:HikariCP", version.ref = "hikari" }
+exposedCore = { module = "org.jetbrains.exposed:exposed-core", version.ref = "exposed" }
+exposedJdbc = { module = "org.jetbrains.exposed:exposed-jdbc", version.ref = "exposed" }
+exposedDao = { module = "org.jetbrains.exposed:exposed-dao", version.ref = "exposed" }
+exposedJavaTime = { module = "org.jetbrains.exposed:exposed-java-time", version.ref = "exposed" }
+exposedJson = { module = "org.jetbrains.exposed:exposed-json", version.ref = "exposed" }
+flywayCore = { module = "org.flywaydb:flyway-core", version.ref = "flyway" }
+flywayPostgres = { module = "org.flywaydb:flyway-database-postgresql", version.ref = "flyway" }
+
+# --- Transport ---
+amqpClient = { module = "com.rabbitmq:amqp-client", version.ref = "amqpClient" }
+
+# --- Domain libs ---
+cronUtils = { module = "com.cronutils:cron-utils", version.ref = "cronUtils" }
+konform = { module = "io.konform:konform-jvm", version.ref = "konform" }
+
+# --- Observability ---
+openTelemetryApi = { module = "io.opentelemetry:opentelemetry-api", version.ref = "openTelemetryApi" }
+micrometerCore = { module = "io.micrometer:micrometer-core", version.ref = "micrometer" }
+micrometerPrometheus = { module = "io.micrometer:micrometer-registry-prometheus", version.ref = "micrometer" }
+slf4jApi = { module = "org.slf4j:slf4j-api", version.ref = "slf4j" }
+logbackClassic = { module = "ch.qos.logback:logback-classic", version.ref = "logback" }
+
+# --- Test ---
+junitJupiter = { module = "org.junit.jupiter:junit-jupiter", version.ref = "junit" }
+junitPlatformLauncher = { module = "org.junit.platform:junit-platform-launcher", version.ref = "junit" }
+testcontainers = { module = "org.testcontainers:testcontainers", version.ref = "testcontainers" }
+testcontainersPostgres = { module = "org.testcontainers:postgresql", version.ref = "testcontainers" }
+testcontainersRabbit = { module = "org.testcontainers:rabbitmq", version.ref = "testcontainers" }
+testcontainersJunit = { module = "org.testcontainers:junit-jupiter", version.ref = "testcontainers" }
+mockk = { module = "io.mockk:mockk", version.ref = "mockk" }
+kotlinxCoroutinesTest = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "kotlinxCoroutines" }
+ktorServerTestHost = { module = "io.ktor:ktor-server-test-host", version.ref = "ktor" }
+
+[bundles]
+# Used across most modules
+kotlinxEcosystem = ["kotlinxDatetime", "kotlinxSerialization", "kotlinxCoroutinesCore"]
+# Koin runtime — Compiler Plugin generates module code at compile time; only runtime libs needed.
+koinRuntime = ["koinCore", "koinAnnotations"]
+# Полный server-stack для :dashboard-server / :standalone-runner
+ktorServer = [
+    "ktorServerCore",
+    "ktorServerNetty",
+    "ktorServerContentNegotiation",
+    "ktorSerializationKotlinxJson",
+    "ktorServerWebsockets",
+    "ktorServerAuth",
+    "ktorServerStatusPages",
+    "ktorServerCallLogging",
+    "ktorServerCompression",
+]
+# wasmJs client для :core:frontend
+ktorClientWasm = [
+    "ktorClientCore",
+    "ktorClientWasmJs",
+    "ktorClientContentNegotiation",
+    "ktorSerializationKotlinxJson",
+    "ktorClientWebsockets",
+]
+# Decompose + extensions для UI
+decompose = ["decompose", "decomposeExtensionsCompose", "essentyLifecycle", "essentyLifecycleCoroutines"]
+# Exposed для PG
+exposed = ["exposedCore", "exposedJdbc", "exposedDao", "exposedJavaTime", "exposedJson"]
+# Flyway для миграций
+flyway = ["flywayCore", "flywayPostgres"]
+# Test stack
+test = ["junitJupiter", "kotlinxCoroutinesTest", "mockk"]
+# Integration test stack (testcontainers)
+integrationTest = ["testcontainers", "testcontainersPostgres", "testcontainersRabbit", "testcontainersJunit"]
+
+[plugins]
+kotlinJvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
+kotlinMultiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }
+kotlinPluginSerialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
+kotlinPluginCompose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+composeMultiplatform = { id = "org.jetbrains.compose", version.ref = "composeMultiplatform" }
+koinCompiler = { id = "io.insert-koin.compiler.plugin", version.ref = "koinCompilerPlugin" }
+shadow = { id = "com.gradleup.shadow", version = "9.0.0-beta12" }

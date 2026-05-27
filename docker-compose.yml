@@ -1,0 +1,67 @@
+# Local-dev compose: postgres + custom rabbitmq + scheduler-infra + demo app.
+# See DESIGN.md section 14.6.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: scheduler
+      POSTGRES_PASSWORD: scheduler
+      POSTGRES_DB: scheduler
+    ports: ["5432:5432"]
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U scheduler"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  rabbitmq:
+    build: ./docker/rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: scheduler
+      RABBITMQ_DEFAULT_PASS: scheduler
+    ports:
+      - "5672:5672"     # AMQP
+      - "15672:15672"   # management UI
+    volumes:
+      - rabbit_data:/var/lib/rabbitmq
+
+  scheduler-infra:
+    build:
+      context: .
+      dockerfile: docker/infra/Dockerfile
+    environment:
+      POSTGRES_URL: jdbc:postgresql://postgres:5432/scheduler
+      POSTGRES_USER: scheduler
+      POSTGRES_PASSWORD: scheduler
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_USER: scheduler
+      RABBITMQ_PASSWORD: scheduler
+      DASHBOARD_AUTH_PASSWORD: admin
+    ports: ["8080:8080"]
+    depends_on:
+      postgres: { condition: service_healthy }
+      rabbitmq: { condition: service_started }
+    restart: unless-stopped
+
+  app:
+    build:
+      context: .
+      dockerfile: docker/app/Dockerfile
+    environment:
+      POSTGRES_URL: jdbc:postgresql://postgres:5432/scheduler
+      POSTGRES_USER: scheduler
+      POSTGRES_PASSWORD: scheduler
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_USER: scheduler
+      RABBITMQ_PASSWORD: scheduler
+    depends_on:
+      - postgres
+      - rabbitmq
+      - scheduler-infra
+
+volumes:
+  pg_data: {}
+  rabbit_data: {}

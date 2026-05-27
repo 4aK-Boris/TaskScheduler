@@ -1,0 +1,62 @@
+// Entry point of the multi-project build. See DESIGN.md section 3 for the module map.
+
+pluginManagement {
+    repositories {
+        mavenCentral()
+        gradlePluginPortal()
+        google {
+            mavenContent {
+                includeGroupAndSubgroups("androidx")
+                includeGroupAndSubgroups("com.android")
+                includeGroupAndSubgroups("com.google")
+            }
+        }
+    }
+}
+
+dependencyResolutionManagement {
+    @Suppress("UnstableApiUsage")
+    repositories {
+        mavenCentral()
+        google {
+            mavenContent {
+                includeGroupAndSubgroups("androidx")
+                includeGroupAndSubgroups("com.android")
+                includeGroupAndSubgroups("com.google")
+            }
+        }
+        // Compose Multiplatform dev artifacts (если понадобятся pre-releases)
+        maven("https://maven.pkg.jetbrains.space/public/p/compose/dev")
+    }
+}
+
+plugins {
+    id("org.gradle.toolchains.foojay-resolver-convention") version "1.0.0"
+}
+
+rootProject.name = "TaskScheduler"
+
+// ----- Modules (см. DESIGN.md секция 3) -----
+
+// :core — кросс-модульные примитивы (без 3-layer внутри)
+include(":core:shared")
+include(":core:backend")
+include(":core:frontend")
+
+// Storage + transport — общие для user-app и infra
+include(":storage-postgres")
+include(":transport-rabbit")
+
+// Engine — режется по deployment role
+include(":engine-worker")  // ТОЛЬКО в user-app
+include(":engine-infra")   // ТОЛЬКО в scheduler-infra container
+
+// Dashboard
+include(":dashboard-server")  // Ktor backend, в scheduler-infra
+include(":dashboard-web")     // Compose Wasm SPA с Decompose
+
+// Standalone runner — main() для scheduler-infra Docker image
+include(":standalone-runner")
+
+// Demo user app
+include(":app")
