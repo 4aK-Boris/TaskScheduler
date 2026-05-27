@@ -751,6 +751,27 @@ public class JobRepositoryImpl(
         }
     }
 
+    override suspend fun countActiveByQueue(): Map<String, Long> = withContext(Dispatchers.IO) {
+        suspendTransaction(db = database) {
+            // GROUP BY queue over non-terminal rows. Exposed 1.x renamed the count()
+            // aggregate column-builder, and the cleanest robust path is a tiny raw SQL
+            // via `exec` — JobState names are an enum (no SQL injection surface). The
+            // dashboard polls this every 15s; the lack of a composite (state, queue)
+            // index is fine — the partial state-only index narrows the scan plenty.
+            val nonTerminal = JobState.entries
+                .filterNot { it.isTerminal }
+                .joinToString(",") { "'${it.name}'" }
+            val sql = "SELECT queue, COUNT(*) AS cnt FROM job WHERE state IN ($nonTerminal) GROUP BY queue"
+            val result = mutableMapOf<String, Long>()
+            exec(sql) { rs ->
+                while (rs.next()) {
+                    result[rs.getString("queue")] = rs.getLong("cnt")
+                }
+            }
+            result
+        }
+    }
+
     override suspend fun findScheduledDue(upperBound: Instant, limit: Int): List<Job> =
         withContext(Dispatchers.IO) {
             suspendTransaction(db = database) {

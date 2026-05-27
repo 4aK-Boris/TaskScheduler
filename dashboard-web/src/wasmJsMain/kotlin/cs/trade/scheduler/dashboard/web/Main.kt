@@ -7,6 +7,7 @@ import com.arkivanov.essenty.lifecycle.LifecycleRegistry
 import cs.trade.scheduler.dashboard.web.data.connection.ConnectionStatusStore
 import cs.trade.scheduler.dashboard.web.data.connection.EventStream
 import cs.trade.scheduler.dashboard.web.data.repositories.JobsRepositoryImpl
+import cs.trade.scheduler.dashboard.web.data.repositories.QueueHealthRepositoryImpl
 import cs.trade.scheduler.dashboard.web.data.repositories.RecurringRepositoryImpl
 import cs.trade.scheduler.dashboard.web.data.repositories.StatsRepositoryImpl
 import cs.trade.scheduler.dashboard.web.data.repositories.TypesRepositoryImpl
@@ -23,6 +24,7 @@ import cs.trade.scheduler.dashboard.web.domain.usecases.GetJobsListUseCase
 import cs.trade.scheduler.dashboard.web.domain.usecases.GetStatsOverviewUseCase
 import cs.trade.scheduler.dashboard.web.domain.usecases.ListKnownTypesUseCase
 import cs.trade.scheduler.dashboard.web.domain.usecases.ListPausedTypesUseCase
+import cs.trade.scheduler.dashboard.web.domain.usecases.ListQueuesHealthUseCase
 import cs.trade.scheduler.dashboard.web.domain.usecases.ListRecurringJobsUseCase
 import cs.trade.scheduler.dashboard.web.domain.usecases.ListWorkersUseCase
 import cs.trade.scheduler.dashboard.web.domain.usecases.PauseTypeUseCase
@@ -48,6 +50,7 @@ fun main() {
     val statsRepository = StatsRepositoryImpl()
     val workersRepository = WorkersRepositoryImpl()
     val typesRepository = TypesRepositoryImpl()
+    val queueHealthRepository = QueueHealthRepositoryImpl()
 
     // Shared WS subscription for the tab's lifetime — owns the reconnect loop and
     // feeds the connection-status badge. SupervisorJob so a hiccup inside the loop
@@ -75,6 +78,7 @@ fun main() {
         listWorkers = ListWorkersUseCase(workersRepository),
         listPausedTypes = ListPausedTypesUseCase(typesRepository),
         listKnownTypes = ListKnownTypesUseCase(typesRepository),
+        listQueuesHealth = ListQueuesHealthUseCase(queueHealthRepository),
         pauseType = PauseTypeUseCase(typesRepository),
         unpauseType = UnpauseTypeUseCase(typesRepository),
         eventStream = eventStream,

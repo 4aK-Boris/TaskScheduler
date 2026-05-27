@@ -5,6 +5,8 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -49,11 +51,14 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import com.arkivanov.decompose.extensions.compose.subscribeAsState
 import cs.trade.scheduler.dashboard.web.presentation.components.PausedBadge
+import cs.trade.scheduler.dashboard.web.presentation.components.QueueHealthBadge
 import cs.trade.scheduler.dashboard.web.presentation.components.StateChip
 import cs.trade.scheduler.dashboard.web.presentation.components.timeAgo
 import cs.trade.scheduler.shared.JobState
 import cs.trade.scheduler.shared.dto.BulkActionResponse
 import cs.trade.scheduler.shared.dto.JobView
+import cs.trade.scheduler.shared.dto.QueueHealthDto
+import cs.trade.scheduler.shared.dto.QueueHealthStatus
 
 // Sum of column widths (checkbox 44 + state 140 + queue 120 + payload 320 + attempts 80
 // + age 96 + id 130). We force this min width so the row keeps its grid even on a
@@ -90,6 +95,10 @@ public fun JobListContent(component: JobListComponent) {
                 onQueueChange = component::onQueueFilterChanged,
                 onPayloadTypeChange = component::onPayloadTypeFilterChanged,
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+            )
+            QueueHealthRow(
+                health = state.queueHealth,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
             )
             HorizontalDivider()
             if (state.selectedIds.isNotEmpty() || state.bulkResult != null || state.bulkInFlight) {
@@ -327,6 +336,23 @@ private fun formatBreakdown(byOutcome: Map<String, Int>): String =
     else byOutcome.entries
         .sortedByDescending { it.value }
         .joinToString(", ") { "${it.key}=${it.value}" }
+
+// Renders ELEVATED + OVERLOADED queue badges. NORMAL items short-circuit inside the
+// badge composable, so the row collapses to zero height when everything is healthy
+// (FlowRow with no children renders nothing visible).
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun QueueHealthRow(health: List<QueueHealthDto>, modifier: Modifier = Modifier) {
+    val visible = health.filter { it.status != QueueHealthStatus.NORMAL }
+    if (visible.isEmpty()) return
+    FlowRow(
+        modifier = modifier.padding(vertical = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        visible.forEach { item -> QueueHealthBadge(item) }
+    }
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable

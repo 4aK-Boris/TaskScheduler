@@ -17,6 +17,7 @@ import cs.trade.scheduler.dashboard.server.domain.usecases.DisableRecurringJobUs
 import cs.trade.scheduler.dashboard.server.domain.usecases.EnableRecurringJobUseCase
 import cs.trade.scheduler.dashboard.server.domain.usecases.GetJobDetailUseCase
 import cs.trade.scheduler.dashboard.server.domain.usecases.GetJobsListUseCase
+import cs.trade.scheduler.dashboard.server.domain.usecases.GetQueuesHealthUseCase
 import cs.trade.scheduler.dashboard.server.domain.usecases.GetStatsOverviewUseCase
 import cs.trade.scheduler.dashboard.server.domain.usecases.ListJobTypePausesUseCase
 import cs.trade.scheduler.dashboard.server.domain.usecases.ListKnownPayloadTypesUseCase
@@ -49,10 +50,35 @@ import org.koin.dsl.module
 public class SchedulerDashboardConfig {
     public var port: Int = 8080
 
+    /**
+     * Backpressure indicator thresholds (DESIGN.md 20.10). When a queue's non-terminal
+     * job count crosses [QueueHealthThresholds.elevated] it badges yellow; at
+     * [QueueHealthThresholds.overloaded] it badges red. Defaults are
+     * tuned for the "typical web-app worker pool" — single-digit jobs/sec, queues drain
+     * in seconds.
+     */
+    public var queueHealth: QueueHealthThresholds = QueueHealthThresholds()
+
     internal var authConfigure: DashboardAuthConfig.() -> Unit = { none() }
 
     public fun auth(configure: DashboardAuthConfig.() -> Unit) {
         authConfigure = configure
+    }
+}
+
+/**
+ * Thresholds that drive the UI badge color on the backpressure indicator (DESIGN.md
+ * 20.10). Validation: must be strictly increasing (elevated < overloaded) and both
+ * positive — caught at module instantiation.
+ */
+public data class QueueHealthThresholds(
+    val elevated: Long = 1_000,
+    val overloaded: Long = 5_000,
+) {
+    init {
+        require(elevated in 1..overloaded) {
+            "elevated ($elevated) must be ≥1 and ≤ overloaded ($overloaded)"
+        }
     }
 }
 
@@ -95,6 +121,9 @@ public fun schedulerDashboardModule(configure: SchedulerDashboardConfig.() -> Un
     val config = SchedulerDashboardConfig().apply(configure)
     return module {
         single<SchedulerDashboardConfig> { config }
+        // Pull the thresholds out so use cases can constructor-inject a small focused type
+        // rather than the whole dashboard config.
+        single<QueueHealthThresholds> { config.queueHealth }
 
         // api/ layer — stateless helpers; one instance per process.
         singleOf(::JobApiMapper)
@@ -120,6 +149,7 @@ public fun schedulerDashboardModule(configure: SchedulerDashboardConfig.() -> Un
         singleOf(::EnableRecurringJobUseCase)
         singleOf(::DisableRecurringJobUseCase)
         singleOf(::GetStatsOverviewUseCase)
+        singleOf(::GetQueuesHealthUseCase)
         singleOf(::ListWorkersUseCase)
         singleOf(::ListJobTypePausesUseCase)
         singleOf(::ListKnownPayloadTypesUseCase)

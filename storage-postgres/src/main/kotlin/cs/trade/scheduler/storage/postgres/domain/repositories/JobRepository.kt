@@ -207,6 +207,19 @@ public interface JobRepository {
     public suspend fun countByState(): Map<JobState, Long>
 
     /**
+     * "How loaded is each queue right now?" — counts non-terminal rows per queue. Used by
+     * the dashboard backpressure indicator (DESIGN.md 20.10) to decide whether a queue is
+     * normal / elevated / overloaded.
+     *
+     * Non-terminal here means ENQUEUED + PROCESSING + AWAITING_RETRY + AWAITING_DEPS +
+     * SCHEDULED — anything that's still in some form of flight. Returns a map keyed by
+     * queue name (queues with zero non-terminal rows are absent — caller defaults to 0).
+     *
+     * One GROUP BY query against the `job_state_*` indexes — fast enough for a 15s poll.
+     */
+    public suspend fun countActiveByQueue(): Map<String, Long>
+
+    /**
      * Bulk lookup of `payload_type` for a set of job ids. Used by the outbox publisher to
      * filter out paused payload types in one extra query per batch rather than per row.
      * Missing ids are simply absent from the returned map.

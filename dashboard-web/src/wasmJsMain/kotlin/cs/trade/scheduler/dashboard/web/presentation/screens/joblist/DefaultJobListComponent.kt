@@ -13,15 +13,18 @@ import cs.trade.scheduler.dashboard.web.domain.usecases.BulkRetryJobsUseCase
 import cs.trade.scheduler.dashboard.web.domain.usecases.GetJobsListUseCase
 import cs.trade.scheduler.dashboard.web.domain.usecases.ListKnownTypesUseCase
 import cs.trade.scheduler.dashboard.web.domain.usecases.ListPausedTypesUseCase
+import cs.trade.scheduler.dashboard.web.domain.usecases.ListQueuesHealthUseCase
 import cs.trade.scheduler.shared.JobState
 import cs.trade.scheduler.shared.dto.BulkActionResponse
 import cs.trade.scheduler.shared.events.WebSocketEvent
 import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlin.time.Duration.Companion.seconds
 
 public class DefaultJobListComponent(
     componentContext: ComponentContext,
@@ -31,6 +34,7 @@ public class DefaultJobListComponent(
     private val bulkDelete: BulkDeleteJobsUseCase,
     private val listPausedTypes: ListPausedTypesUseCase,
     private val listKnownTypes: ListKnownTypesUseCase,
+    private val listQueuesHealth: ListQueuesHealthUseCase,
     private val events: EventStream,
     private val onJobSelected: (jobId: String) -> Unit,
 ) : BaseComponent(componentContext), JobListComponent {
@@ -51,9 +55,11 @@ public class DefaultJobListComponent(
         refresh()
         refreshPausedTypes()
         refreshKnownTypes()
+        refreshQueueHealth()
         subscribeToEvents()
         observeRefreshSignal()
         observeFilterChangeSignal()
+        pollQueueHealth()
     }
 
     private fun refreshPausedTypes() {
@@ -73,6 +79,28 @@ public class DefaultJobListComponent(
                 onSuccess = { types -> _model.update { it.copy(knownTypes = types) } },
                 onFailure = { /* dropdown empty on failure — free-text still works */ },
             )
+        }
+    }
+
+    private fun refreshQueueHealth() {
+        scope.launch {
+            listQueuesHealth().fold(
+                onSuccess = { rows -> _model.update { it.copy(queueHealth = rows) } },
+                onFailure = { /* keep previous snapshot — stale badge is better than disappearing one */ },
+            )
+        }
+    }
+
+    // The badge needs a refresh cadence independent of the list (the list refreshes on
+    // every WS job event, but queue depth changes are slow-moving — 15s polling matches
+    // the operator's perception of "current"). Refresh on JobCreated/JobStateChanged in
+    // subscribeToEvents() handles the burst case.
+    private fun pollQueueHealth() {
+        scope.launch {
+            while (true) {
+                delay(QUEUE_HEALTH_POLL.seconds)
+                refreshQueueHealth()
+            }
         }
     }
 
@@ -221,7 +249,14 @@ public class DefaultJobListComponent(
                     event is WebSocketEvent.JobStateChanged ||
                     event is WebSocketEvent.JobDeleted ||
                     event is WebSocketEvent.RecurringTriggered
-                if (affectsList) refreshSignal.tryEmit(Unit)
+                if (affectsList) {
+                    refreshSignal.tryEmit(Unit)
+                    // Queue depth shifts on create/state-change; refresh badges alongside
+                    // the list so they don't lag the visible row counts.
+                    if (event is WebSocketEvent.JobCreated || event is WebSocketEvent.JobStateChanged) {
+                        refreshQueueHealth()
+                    }
+                }
                 if (event is WebSocketEvent.JobTypePaused || event is WebSocketEvent.JobTypeUnpaused) {
                     refreshPausedTypes()
                     refreshKnownTypes()
@@ -314,6 +349,7 @@ public class DefaultJobListComponent(
         const val FILTER_DEBOUNCE_MS = 300L
         const val FILTER_KEY = "dashboard.jobs.filter"
         const val MAX_PAGE_SIZE = 500
+        const val QUEUE_HEALTH_POLL = 15
         val persistedJson: Json = Json { ignoreUnknownKeys = true }
     }
 }

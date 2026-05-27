@@ -57,6 +57,7 @@ import kotlinx.coroutines.runBlocking
 import org.koin.core.context.GlobalContext
 import org.koin.core.context.startKoin
 import org.koin.core.context.stopKoin
+import org.koin.core.module.Module
 import org.koin.dsl.module
 import org.koin.ktor.plugin.Koin
 import org.koin.logger.slf4jLogger
@@ -88,43 +89,49 @@ public fun main() {
         json = SchedulerCoreConfig().json,  // same defaults as schedulerCoreModule binds
     )
 
+    // Single source of truth for Koin module list — shared between startKoin (so the infra
+    // loops below can koin.get<>() before Ktor boots) and install(Koin) inside Ktor (which
+    // — per koin-ktor 4.x KoinPlugin.kt — calls stopKoin()+startKoin() on install, blowing
+    // away the global context unless the same modules are re-passed here).
+    val koinModules: List<Module> = listOf(
+        schedulerCoreModule { nodeId = config.nodeId },
+        schedulerPostgresModule {
+            this.dataSource = dataSource
+            runMigrations = config.runMigrations
+        },
+        schedulerRabbitModule {
+            connectionFactory = rabbitFactory
+            queues = listOf("default", "email", "heavy")
+        },
+        schedulerInfraModule { /* DESIGN.md 18.3 defaults */ },
+        schedulerDashboardModule {
+            port = config.dashboardPort
+            if (config.dashboardAuthPassword != null) {
+                auth {
+                    basic {
+                        username = config.dashboardAuthUser
+                        password = config.dashboardAuthPassword
+                    }
+                }
+            } else {
+                log.warn("DASHBOARD_AUTH_PASSWORD not set — running dashboard without auth (local dev only)")
+            }
+        },
+        module {
+            single<EventBus> { postgresEventBus }
+            // Observability — Prometheus receives idempotency dedup counts via this
+            // MeterRegistry-backed sink. JobMetrics + WorkerMetricsBinder are
+            // user-app concerns (workers run there, not in the infra container).
+            // See DESIGN.md 22.5 / docs/grafana-dashboard.json for the full panel set.
+            single<cs.trade.scheduler.core.backend.idempotency.IdempotencyMetrics> {
+                MicrometerIdempotencyMetrics(metricsRegistry)
+            }
+        },
+    )
+
     startKoin {
         slf4jLogger()
-        modules(
-            schedulerCoreModule { nodeId = config.nodeId },
-            schedulerPostgresModule {
-                this.dataSource = dataSource
-                runMigrations = config.runMigrations
-            },
-            schedulerRabbitModule {
-                connectionFactory = rabbitFactory
-                queues = listOf("default", "email", "heavy")
-            },
-            schedulerInfraModule { /* DESIGN.md 18.3 defaults */ },
-            schedulerDashboardModule {
-                port = config.dashboardPort
-                if (config.dashboardAuthPassword != null) {
-                    auth {
-                        basic {
-                            username = config.dashboardAuthUser
-                            password = config.dashboardAuthPassword
-                        }
-                    }
-                } else {
-                    log.warn("DASHBOARD_AUTH_PASSWORD not set — running dashboard without auth (local dev only)")
-                }
-            },
-            module {
-                single<EventBus> { postgresEventBus }
-                // Observability — Prometheus receives idempotency dedup counts via this
-                // MeterRegistry-backed sink. JobMetrics + WorkerMetricsBinder are
-                // user-app concerns (workers run there, not in the infra container).
-                // See DESIGN.md 22.5 / docs/grafana-dashboard.json for the full panel set.
-                single<cs.trade.scheduler.core.backend.idempotency.IdempotencyMetrics> {
-                    MicrometerIdempotencyMetrics(metricsRegistry)
-                }
-            },
-        )
+        modules(koinModules)
     }
 
     val koin = GlobalContext.get()
@@ -177,6 +184,7 @@ public fun main() {
             rabbitFactory = rabbitFactory,
             metricsRegistry = metricsRegistry,
             leader = leader,
+            koinModules = koinModules,
         )
     }
 
@@ -209,6 +217,7 @@ private fun Application.configureKtor(
     rabbitFactory: ConnectionFactory,
     metricsRegistry: PrometheusMeterRegistry,
     leader: LeaderElection,
+    koinModules: List<Module>,
 ) {
     install(ContentNegotiation) { json() }
     install(Compression)
@@ -222,8 +231,12 @@ private fun Application.configureKtor(
     }
     install(Koin) {
         slf4jLogger()
-        // Modules are already loaded via startKoin in main(); the plugin just exposes
-        // the GlobalContext to Ktor's inject<>() helpers used by route files.
+        // koin-ktor 4.x KoinPlugin calls stopKoin()+startKoin(pluginConfig) on install,
+        // so the global context populated by startKoin{} in main() gets replaced. We pass
+        // the same module list back in so route-level inject<>() resolves the same DTOs.
+        // Loops in main() have already captured their dependencies via koin.get<>() before
+        // this point, so swapping the Koin instance underneath them is safe.
+        modules(koinModules)
     }
     val authMethods = mutableListOf<String>()
     if (authPassword != null || jwtSecret != null) {

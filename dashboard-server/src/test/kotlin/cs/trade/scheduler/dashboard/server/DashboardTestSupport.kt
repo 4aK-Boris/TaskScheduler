@@ -110,6 +110,7 @@ internal object DashboardTestSupport {
     fun dashboardModules(
         dataSource: HikariDataSource,
         nodeId: String,
+        queueHealthThresholds: cs.trade.scheduler.dashboard.server.QueueHealthThresholds? = null,
     ): Array<Module> = arrayOf(
         schedulerCoreModule { this.nodeId = nodeId },
         schedulerPostgresModule {
@@ -120,7 +121,13 @@ internal object DashboardTestSupport {
             this.runMigrations = false
             this.failFastOnSchemaMismatch = false
         },
-        schedulerDashboardModule { port = 0 /* unused in test host */ },
+        schedulerDashboardModule {
+            port = 0 /* unused in test host */
+            // QueuesHealthRoutingIntegrationTest's "custom thresholds" case threads in a
+            // small (elevated=10, overloaded=50) config so it can tip status with a few
+            // dozen inserts. Default null leaves the prod defaults (1k / 5k) intact.
+            queueHealthThresholds?.let { queueHealth = it }
+        },
         module { single<EventBus> { InMemoryEventBus() } },
     )
 

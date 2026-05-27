@@ -28,6 +28,7 @@ import cs.trade.scheduler.dashboard.web.domain.usecases.GetJobsListUseCase
 import cs.trade.scheduler.dashboard.web.domain.usecases.GetStatsOverviewUseCase
 import cs.trade.scheduler.dashboard.web.domain.usecases.ListKnownTypesUseCase
 import cs.trade.scheduler.dashboard.web.domain.usecases.ListPausedTypesUseCase
+import cs.trade.scheduler.dashboard.web.domain.usecases.ListQueuesHealthUseCase
 import cs.trade.scheduler.dashboard.web.domain.usecases.ListRecurringJobsUseCase
 import cs.trade.scheduler.dashboard.web.domain.usecases.ListWorkersUseCase
 import cs.trade.scheduler.dashboard.web.domain.usecases.PauseTypeUseCase
@@ -61,6 +62,7 @@ public class DefaultRootComponent(
     private val listWorkers: ListWorkersUseCase,
     private val listPausedTypes: ListPausedTypesUseCase,
     private val listKnownTypes: ListKnownTypesUseCase,
+    private val listQueuesHealth: ListQueuesHealthUseCase,
     private val pauseType: PauseTypeUseCase,
     private val unpauseType: UnpauseTypeUseCase,
     private val eventStream: EventStream,
@@ -136,6 +138,7 @@ public class DefaultRootComponent(
                 bulkDelete = bulkDelete,
                 listPausedTypes = listPausedTypes,
                 listKnownTypes = listKnownTypes,
+                listQueuesHealth = listQueuesHealth,
                 events = eventStream,
                 onJobSelected = { jobId -> navigation.push(RootComponent.Config.JobDetail(jobId)) },
             )

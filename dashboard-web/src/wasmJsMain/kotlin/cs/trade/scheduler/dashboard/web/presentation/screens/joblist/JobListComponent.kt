@@ -4,6 +4,7 @@ import com.arkivanov.decompose.value.Value
 import cs.trade.scheduler.shared.JobState
 import cs.trade.scheduler.shared.dto.BulkActionResponse
 import cs.trade.scheduler.shared.dto.JobView
+import cs.trade.scheduler.shared.dto.QueueHealthDto
 
 /**
  * Decompose component for the JobList screen. Plays the role of a ViewModel — there is no
@@ -66,5 +67,9 @@ public interface JobListComponent {
          * bulk-retry, or delete). See DESIGN.md 18.6.
          */
         val dlqOnly: Boolean = false,
+        // Per-queue backpressure snapshot driving the header badges. Refreshed every 15s
+        // and alongside the main list refresh. Queues with NORMAL status are still
+        // included; the badge composable handles the no-render gating.
+        val queueHealth: List<QueueHealthDto> = emptyList(),
     )
 }
