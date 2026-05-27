@@ -58,6 +58,9 @@ include(":dashboard-web")     // Compose Wasm SPA с Decompose
 // Standalone runner — main() для scheduler-infra Docker image
 include(":standalone-runner")
 
+// Spring Boot starter — drop-in для пользователей Spring (см. DESIGN/README).
+include(":scheduler-spring-boot-starter")
+
 // Demo user app
 include(":app")
 

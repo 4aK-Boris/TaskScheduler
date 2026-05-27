@@ -44,6 +44,12 @@ micrometer = "1.17.0-RC1"
 slf4j = "2.0.18"
 logback = "1.5.32"
 
+# Spring Boot starter module (`scheduler-spring-boot-starter`). 3.5.x is the most
+# recent Boot 3.x line at the time of writing; anything >= 3.2 works for
+# AutoConfiguration.imports loading.
+spring = "3.5.0"
+springFramework = "6.2.6"
+
 # Test
 junit = "6.1.0"
 testcontainers = "1.21.3"   # Testcontainers 2.x not released yet on Maven Central
@@ -124,6 +130,13 @@ micrometerCore = { module = "io.micrometer:micrometer-core", version.ref = "micr
 micrometerPrometheus = { module = "io.micrometer:micrometer-registry-prometheus", version.ref = "micrometer" }
 slf4jApi = { module = "org.slf4j:slf4j-api", version.ref = "slf4j" }
 logbackClassic = { module = "ch.qos.logback:logback-classic", version.ref = "logback" }
+
+# --- Spring (для :scheduler-spring-boot-starter) ---
+springBootAutoConfigure = { module = "org.springframework.boot:spring-boot-autoconfigure", version.ref = "spring" }
+springBootStarter = { module = "org.springframework.boot:spring-boot-starter", version.ref = "spring" }
+springBootConfigurationProcessor = { module = "org.springframework.boot:spring-boot-configuration-processor", version.ref = "spring" }
+springBootTest = { module = "org.springframework.boot:spring-boot-test", version.ref = "spring" }
+springContext = { module = "org.springframework:spring-context", version.ref = "springFramework" }
 
 # --- Test ---
 junitJupiter = { module = "org.junit.jupiter:junit-jupiter", version.ref = "junit" }
