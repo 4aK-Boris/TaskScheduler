@@ -910,6 +910,69 @@ public class JobRepositoryImpl(
             }
         }
 
+    override suspend fun statsByPayloadType(windowHours: Int): List<JobRepository.TypeStatsRow> {
+        require(windowHours > 0) { "windowHours must be positive, got $windowHours" }
+        return withContext(Dispatchers.IO) {
+            suspendTransaction(db = database) {
+                // Exposed 1.x's aggregate-builder API is flaky for `FILTER (WHERE ...)` and
+                // `percentile_cont WITHIN GROUP (...)` clauses — both are PG-native shapes
+                // that don't fit cleanly into the typed-column DSL. Raw SQL is the cleanest
+                // option here. `windowHours` is a validated Int (positive, bounded by the
+                // caller's UseCase to [1..720]), so embedding it as a literal in the
+                // interval cast is safe from SQL injection. Same trick we use for the
+                // non-terminal enum list in countActiveByQueue.
+                val sql = """
+                    SELECT payload_type,
+                           queue,
+                           count(*) FILTER (WHERE state = 'SUCCEEDED') AS success_count,
+                           count(*) FILTER (WHERE state = 'FAILED')    AS failed_count,
+                           count(*) FILTER (WHERE state = 'CANCELLED') AS cancelled_count,
+                           coalesce(
+                               sum(GREATEST(attempts - 1, 0))
+                                   FILTER (WHERE state IN ('SUCCEEDED','FAILED')),
+                               0
+                           ) AS retry_count,
+                           avg(duration_ms)::bigint AS avg_duration_ms,
+                           min(duration_ms)         AS min_duration_ms,
+                           max(duration_ms)         AS max_duration_ms,
+                           percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms)::bigint
+                               AS p95_duration_ms
+                    FROM job
+                    WHERE updated_at > now() - ($windowHours || ' hours')::interval
+                      AND state IN ('SUCCEEDED','FAILED','CANCELLED')
+                    GROUP BY payload_type, queue
+                    ORDER BY success_count DESC, failed_count DESC
+                """.trimIndent()
+                val out = mutableListOf<JobRepository.TypeStatsRow>()
+                exec(sql) { rs ->
+                    while (rs.next()) {
+                        // ResultSet#getLong returns 0 for SQL NULL, so we explicitly read
+                        // boxed Long for the nullable duration columns. The non-null count
+                        // columns are wrapped in coalesce / FILTER so 0 is the correct
+                        // default and a primitive getLong is fine.
+                        val avg = rs.getObject("avg_duration_ms") as? Number
+                        val min = rs.getObject("min_duration_ms") as? Number
+                        val max = rs.getObject("max_duration_ms") as? Number
+                        val p95 = rs.getObject("p95_duration_ms") as? Number
+                        out += JobRepository.TypeStatsRow(
+                            payloadType = rs.getString("payload_type"),
+                            queue = rs.getString("queue"),
+                            successCount = rs.getLong("success_count"),
+                            failedCount = rs.getLong("failed_count"),
+                            cancelledCount = rs.getLong("cancelled_count"),
+                            retryCount = rs.getLong("retry_count"),
+                            avgDurationMs = avg?.toLong(),
+                            minDurationMs = min?.toLong(),
+                            maxDurationMs = max?.toLong(),
+                            p95DurationMs = p95?.toLong(),
+                        )
+                    }
+                }
+                out
+            }
+        }
+    }
+
     override suspend fun findPayloadTypesByIds(ids: Collection<Uuid>): Map<Uuid, String> {
         if (ids.isEmpty()) return emptyMap()
         return withContext(Dispatchers.IO) {

@@ -19,6 +19,7 @@ import cs.trade.scheduler.dashboard.server.domain.usecases.GetJobDetailUseCase
 import cs.trade.scheduler.dashboard.server.domain.usecases.GetJobsListUseCase
 import cs.trade.scheduler.dashboard.server.domain.usecases.GetQueuesHealthUseCase
 import cs.trade.scheduler.dashboard.server.domain.usecases.GetStatsOverviewUseCase
+import cs.trade.scheduler.dashboard.server.domain.usecases.GetTypesStatsUseCase
 import cs.trade.scheduler.dashboard.server.domain.usecases.ListJobTypePausesUseCase
 import cs.trade.scheduler.dashboard.server.domain.usecases.ListKnownPayloadTypesUseCase
 import cs.trade.scheduler.dashboard.server.domain.usecases.ListRecurringJobsUseCase
@@ -149,6 +150,7 @@ public fun schedulerDashboardModule(configure: SchedulerDashboardConfig.() -> Un
         singleOf(::EnableRecurringJobUseCase)
         singleOf(::DisableRecurringJobUseCase)
         singleOf(::GetStatsOverviewUseCase)
+        singleOf(::GetTypesStatsUseCase)
         singleOf(::GetQueuesHealthUseCase)
         singleOf(::ListWorkersUseCase)
         singleOf(::ListJobTypePausesUseCase)

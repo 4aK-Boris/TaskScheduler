@@ -8,6 +8,7 @@ import cs.trade.scheduler.dashboard.web.presentation.screens.joblist.JobListComp
 import cs.trade.scheduler.dashboard.web.presentation.screens.recurring.RecurringListComponent
 import cs.trade.scheduler.dashboard.web.presentation.screens.stats.StatsComponent
 import cs.trade.scheduler.dashboard.web.presentation.screens.types.TypesComponent
+import cs.trade.scheduler.dashboard.web.presentation.screens.typesstats.TypeStatsComponent
 import cs.trade.scheduler.dashboard.web.presentation.screens.workers.WorkersComponent
 import kotlinx.serialization.Serializable
 
@@ -27,6 +28,7 @@ public interface RootComponent {
     public fun onNavigateToStats()
     public fun onNavigateToWorkers()
     public fun onNavigateToTypes()
+    public fun onNavigateToTypeStats()
     public fun onToggleTheme()
 
     /** Push the job-detail screen for the given id. Called from nav search box. */
@@ -39,6 +41,7 @@ public interface RootComponent {
         public class Stats(public val component: StatsComponent) : Child
         public class Workers(public val component: WorkersComponent) : Child
         public class Types(public val component: TypesComponent) : Child
+        public class TypeStats(public val component: TypeStatsComponent) : Child
     }
 
     @Serializable
@@ -60,5 +63,8 @@ public interface RootComponent {
 
         @Serializable
         public data object Types : Config
+
+        @Serializable
+        public data object TypeStats : Config
     }
 }

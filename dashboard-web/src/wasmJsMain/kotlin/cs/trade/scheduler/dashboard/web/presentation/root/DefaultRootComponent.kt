@@ -30,6 +30,7 @@ import cs.trade.scheduler.dashboard.web.domain.usecases.ListKnownTypesUseCase
 import cs.trade.scheduler.dashboard.web.domain.usecases.ListPausedTypesUseCase
 import cs.trade.scheduler.dashboard.web.domain.usecases.ListQueuesHealthUseCase
 import cs.trade.scheduler.dashboard.web.domain.usecases.ListRecurringJobsUseCase
+import cs.trade.scheduler.dashboard.web.domain.usecases.ListTypeStatsUseCase
 import cs.trade.scheduler.dashboard.web.domain.usecases.ListWorkersUseCase
 import cs.trade.scheduler.dashboard.web.domain.usecases.PauseTypeUseCase
 import cs.trade.scheduler.dashboard.web.domain.usecases.RerouteJobUseCase
@@ -40,6 +41,7 @@ import cs.trade.scheduler.dashboard.web.presentation.screens.joblist.DefaultJobL
 import cs.trade.scheduler.dashboard.web.presentation.screens.recurring.DefaultRecurringListComponent
 import cs.trade.scheduler.dashboard.web.presentation.screens.stats.DefaultStatsComponent
 import cs.trade.scheduler.dashboard.web.presentation.screens.types.DefaultTypesComponent
+import cs.trade.scheduler.dashboard.web.presentation.screens.typesstats.DefaultTypeStatsComponent
 import cs.trade.scheduler.dashboard.web.presentation.screens.workers.DefaultWorkersComponent
 
 // Root nav host. Each child is constructed with its own scoped UseCases — no DI
@@ -65,6 +67,7 @@ public class DefaultRootComponent(
     private val listQueuesHealth: ListQueuesHealthUseCase,
     private val pauseType: PauseTypeUseCase,
     private val unpauseType: UnpauseTypeUseCase,
+    private val listTypeStats: ListTypeStatsUseCase,
     private val eventStream: EventStream,
     connectionStatus: ConnectionStatusStore,
 ) : BaseComponent(componentContext), RootComponent {
@@ -120,6 +123,7 @@ public class DefaultRootComponent(
     override fun onNavigateToStats() = navigation.replaceCurrent(RootComponent.Config.Stats)
     override fun onNavigateToWorkers() = navigation.replaceCurrent(RootComponent.Config.Workers)
     override fun onNavigateToTypes() = navigation.replaceCurrent(RootComponent.Config.Types)
+    override fun onNavigateToTypeStats() = navigation.replaceCurrent(RootComponent.Config.TypeStats)
 
     private companion object {
         const val DARK_KEY = "dashboard.dark"
@@ -192,6 +196,13 @@ public class DefaultRootComponent(
                 pauseUseCase = pauseType,
                 unpauseUseCase = unpauseType,
                 events = eventStream,
+                onBack = ::onNavigateToJobs,
+            )
+        )
+        RootComponent.Config.TypeStats -> RootComponent.Child.TypeStats(
+            DefaultTypeStatsComponent(
+                componentContext = ctx,
+                listUseCase = listTypeStats,
                 onBack = ::onNavigateToJobs,
             )
         )

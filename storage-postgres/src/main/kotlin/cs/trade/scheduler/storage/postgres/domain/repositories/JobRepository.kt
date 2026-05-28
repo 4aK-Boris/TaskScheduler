@@ -321,6 +321,30 @@ public interface JobRepository {
      */
     public suspend fun releaseProcessingLock(jobId: Uuid, expectedVersion: Int): Boolean
 
+    /**
+     * Aggregate per-(payload_type, queue) stats for terminal rows whose `updated_at` falls
+     * within the trailing [windowHours]. Used by /api/stats/types — DESIGN.md 22.4.
+     *
+     * SUCCEEDED / FAILED / CANCELLED are bucketed separately; duration aggregates come from
+     * the `duration_ms` column (NULL-tolerant). p95 uses Postgres `percentile_cont(0.95)`.
+     * Returns empty list when no rows match the window.
+     */
+    public suspend fun statsByPayloadType(windowHours: Int): List<TypeStatsRow>
+
+    /** One row of [statsByPayloadType] — unrolled here so the storage layer stays DTO-free. */
+    public data class TypeStatsRow(
+        val payloadType: String,
+        val queue: String,
+        val successCount: Long,
+        val failedCount: Long,
+        val cancelledCount: Long,
+        val retryCount: Long,
+        val avgDurationMs: Long?,
+        val minDurationMs: Long?,
+        val maxDurationMs: Long?,
+        val p95DurationMs: Long?,
+    )
+
     /** Outcome of [decrementPendingDeps]. See its KDoc for semantics. */
     public enum class DepDecrementResult {
         /** Counter went from N → N-1 with N > 1; row stays AWAITING_DEPS. */

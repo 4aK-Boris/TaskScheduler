@@ -10,6 +10,7 @@ import cs.trade.scheduler.dashboard.web.data.repositories.JobsRepositoryImpl
 import cs.trade.scheduler.dashboard.web.data.repositories.QueueHealthRepositoryImpl
 import cs.trade.scheduler.dashboard.web.data.repositories.RecurringRepositoryImpl
 import cs.trade.scheduler.dashboard.web.data.repositories.StatsRepositoryImpl
+import cs.trade.scheduler.dashboard.web.data.repositories.TypeStatsRepositoryImpl
 import cs.trade.scheduler.dashboard.web.data.repositories.TypesRepositoryImpl
 import cs.trade.scheduler.dashboard.web.data.repositories.WorkersRepositoryImpl
 import cs.trade.scheduler.dashboard.web.domain.usecases.BulkCancelJobsUseCase
@@ -26,6 +27,7 @@ import cs.trade.scheduler.dashboard.web.domain.usecases.ListKnownTypesUseCase
 import cs.trade.scheduler.dashboard.web.domain.usecases.ListPausedTypesUseCase
 import cs.trade.scheduler.dashboard.web.domain.usecases.ListQueuesHealthUseCase
 import cs.trade.scheduler.dashboard.web.domain.usecases.ListRecurringJobsUseCase
+import cs.trade.scheduler.dashboard.web.domain.usecases.ListTypeStatsUseCase
 import cs.trade.scheduler.dashboard.web.domain.usecases.ListWorkersUseCase
 import cs.trade.scheduler.dashboard.web.domain.usecases.PauseTypeUseCase
 import cs.trade.scheduler.dashboard.web.domain.usecases.RerouteJobUseCase
@@ -50,6 +52,7 @@ fun main() {
     val statsRepository = StatsRepositoryImpl()
     val workersRepository = WorkersRepositoryImpl()
     val typesRepository = TypesRepositoryImpl()
+    val typeStatsRepository = TypeStatsRepositoryImpl()
     val queueHealthRepository = QueueHealthRepositoryImpl()
 
     // Shared WS subscription for the tab's lifetime — owns the reconnect loop and
@@ -81,6 +84,7 @@ fun main() {
         listQueuesHealth = ListQueuesHealthUseCase(queueHealthRepository),
         pauseType = PauseTypeUseCase(typesRepository),
         unpauseType = UnpauseTypeUseCase(typesRepository),
+        listTypeStats = ListTypeStatsUseCase(typeStatsRepository),
         eventStream = eventStream,
         connectionStatus = connectionStatus,
     )

@@ -41,6 +41,7 @@ import cs.trade.scheduler.dashboard.web.presentation.screens.joblist.JobListCont
 import cs.trade.scheduler.dashboard.web.presentation.screens.recurring.RecurringListContent
 import cs.trade.scheduler.dashboard.web.presentation.screens.stats.StatsContent
 import cs.trade.scheduler.dashboard.web.presentation.screens.types.TypesContent
+import cs.trade.scheduler.dashboard.web.presentation.screens.typesstats.TypeStatsContent
 import cs.trade.scheduler.dashboard.web.presentation.screens.workers.WorkersContent
 
 @Composable
@@ -60,6 +61,7 @@ public fun RootContent(component: RootComponent) {
                 onStats = component::onNavigateToStats,
                 onWorkers = component::onNavigateToWorkers,
                 onTypes = component::onNavigateToTypes,
+                onTypeStats = component::onNavigateToTypeStats,
                 onToggleTheme = component::onToggleTheme,
                 onJumpToJob = component::onJumpToJob,
             )
@@ -72,6 +74,7 @@ public fun RootContent(component: RootComponent) {
                     is RootComponent.Child.Stats -> StatsContent(child.component)
                     is RootComponent.Child.Workers -> WorkersContent(child.component)
                     is RootComponent.Child.Types -> TypesContent(child.component)
+                    is RootComponent.Child.TypeStats -> TypeStatsContent(child.component)
                 }
             }
         }
@@ -89,6 +92,7 @@ private fun SectionNav(
     onStats: () -> Unit,
     onWorkers: () -> Unit,
     onTypes: () -> Unit,
+    onTypeStats: () -> Unit,
     onToggleTheme: () -> Unit,
     onJumpToJob: (String) -> Unit,
 ) {
@@ -118,6 +122,11 @@ private fun SectionNav(
                     label = "Types",
                     isActive = active is RootComponent.Config.Types,
                     onClick = onTypes,
+                )
+                NavLink(
+                    label = "Type Stats",
+                    isActive = active is RootComponent.Config.TypeStats,
+                    onClick = onTypeStats,
                 )
                 NavLink(
                     label = "Stats",
