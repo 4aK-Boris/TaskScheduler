@@ -7,7 +7,6 @@ import com.zaxxer.hikari.HikariConfig
 import com.zaxxer.hikari.HikariDataSource
 import cs.trade.scheduler.core.backend.Scheduler
 import cs.trade.scheduler.core.backend.handler.Job
-import cs.trade.scheduler.core.backend.handler.JobCancellationException
 import cs.trade.scheduler.core.backend.handler.JobContext
 import cs.trade.scheduler.core.backend.handler.JobHandler
 import cs.trade.scheduler.core.backend.handler.JobType
@@ -35,6 +34,7 @@ import org.junit.jupiter.api.AfterAll
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.BeforeAll
+import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestInstance
 import org.koin.core.context.GlobalContext
@@ -45,53 +45,79 @@ import org.koin.dsl.module
 import org.testcontainers.containers.PostgreSQLContainer
 import org.testcontainers.containers.RabbitMQContainer
 import org.testcontainers.utility.DockerImageName
-import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 
 @Serializable
-private data class LongRunningJob(val maxIterations: Int = 200) : Job
+private data class NonPollingJob(val unused: Int = 0) : Job
 
-@JobType(LongRunningJob::class)
-private class CooperativeHandler(
-    val handlerStarted: CompletableDeferred<Unit>,
-    val cancelledNormally: CompletableDeferred<Unit>,
-) : JobHandler<LongRunningJob> {
+@Serializable
+private data class StubbornJob(val unused: Int = 0) : Job
 
-    override suspend fun execute(ctx: JobContext, job: LongRunningJob) {
-        handlerStarted.complete(Unit)
+/**
+ * Per-test signal holders. The handlers are singletons in the shared Koin graph (one
+ * `@BeforeAll` startup), but each test needs fresh `CompletableDeferred`s — so the handlers
+ * read them through `@Volatile` fields that `@BeforeEach` swaps. Tests run sequentially, so
+ * there's no cross-test interleaving on these.
+ */
+private object CancelPushHooks {
+    @Volatile var nonPollingStarted: CompletableDeferred<Unit> = CompletableDeferred()
+    @Volatile var nonPollingUnwound: CompletableDeferred<Unit> = CompletableDeferred()
+    @Volatile var stubbornStarted: CompletableDeferred<Unit> = CompletableDeferred()
+}
+
+/**
+ * A handler that NEVER polls [JobContext.isCancellationRequested] — it just suspends in a
+ * `delay` loop. Proves the push path (DESIGN.md 22.7): a `job_cancel` NOTIFY cancels the
+ * handler coroutine directly, interrupting it at the `delay` suspension without any
+ * cooperative polling on the handler's part. The `finally` fires on coroutine cancellation.
+ */
+@JobType(NonPollingJob::class)
+private class NonPollingHandler : JobHandler<NonPollingJob> {
+    override suspend fun execute(ctx: JobContext, job: NonPollingJob) {
+        CancelPushHooks.nonPollingStarted.complete(Unit)
         try {
-            repeat(job.maxIterations) {
-                if (ctx.isCancellationRequested()) {
-                    throw JobCancellationException("user asked to stop on iteration $it")
-                }
-                delay(40)
-            }
-            error("Handler reached iteration limit without seeing cancel — bug or slow test")
+            repeat(2_000) { delay(50) }
+            error("NonPollingHandler ran to completion — push cancel never interrupted it")
         } finally {
-            // Completes whether we threw JobCancellationException via the cooperative poll OR
-            // were cancelled at the delay() suspension point by the job_cancel push (DESIGN.md
-            // 22.7) — both legitimately end the row CANCELLED, and the push can win the race.
-            if (!cancelledNormally.isCompleted) cancelledNormally.complete(Unit)
+            if (!CancelPushHooks.nonPollingUnwound.isCompleted) CancelPushHooks.nonPollingUnwound.complete(Unit)
         }
     }
 }
 
 /**
- * Full pipeline cancel-in-flight: while a long-running handler is polling
- * `isCancellationRequested`, an external `Scheduler.cancel` call should be observed by
- * the handler within one poll cycle. Handler throws [JobCancellationException] →
- * worker marks the row CANCELLED (terminal, no retry).
+ * A non-cooperative handler: a blocking loop with no suspension points, so coroutine
+ * cancellation can't touch it. The worker must force the row terminal FAILED once the
+ * grace period elapses (DESIGN.md 22.7). Bounded so the leaked coroutine eventually
+ * returns and the JVM can exit.
+ */
+@JobType(StubbornJob::class)
+private class StubbornHandler : JobHandler<StubbornJob> {
+    override suspend fun execute(ctx: JobContext, job: StubbornJob) {
+        CancelPushHooks.stubbornStarted.complete(Unit)
+        val deadline = System.currentTimeMillis() + STUBBORN_RUN_MS
+        while (System.currentTimeMillis() < deadline) {
+            @Suppress("BlockingMethodInNonBlockingContext")
+            Thread.sleep(50)
+        }
+    }
+
+    private companion object {
+        const val STUBBORN_RUN_MS = 4_000L
+    }
+}
+
+/**
+ * Push-based cancellation of PROCESSING jobs (DESIGN.md 22.7) — the two cases the
+ * cooperative-polling [CancelInFlightIntegrationTest] doesn't cover:
+ *  1. A handler that only suspends (never polls) is still interrupted by the NOTIFY-driven
+ *     coroutine cancel → terminal CANCELLED.
+ *  2. A non-cooperative blocking handler is force-killed after [cancelGracePeriod] → FAILED.
  *
- * **PG provisioning.** Honours `EXTERNAL_PG_URL` for the shared scheduler-test-pg
- * setup; falls back to Testcontainers when absent.
- *
- * **Rabbit provisioning.** Honours `EXTERNAL_RABBIT_HOST` (+ optional `_PORT`, `_USER`,
- * `_PASSWORD`) so CI can point at a shared `scheduler-test-rabbit` with the
- * delayed-message-exchange plugin baked in. Falls back to a Testcontainers Rabbit when
- * absent. Manual lifecycle so the env override can short-circuit Docker.
+ * Same `EXTERNAL_PG_URL` / `EXTERNAL_RABBIT_HOST` provisioning as the sibling tests.
+ * `cancelGracePeriod` is shrunk to 1s so the force-kill case runs fast.
  */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
-class CancelInFlightIntegrationTest {
+class CancelPushIntegrationTest {
 
     private companion object {
         private val rabbitImage: DockerImageName =
@@ -105,8 +131,6 @@ class CancelInFlightIntegrationTest {
     private lateinit var dataSource: HikariDataSource
     private lateinit var connectionFactory: ConnectionFactory
     private lateinit var publisherScope: CoroutineScope
-    private lateinit var handlerStarted: CompletableDeferred<Unit>
-    private lateinit var cancelledNormally: CompletableDeferred<Unit>
     private var postgres: PostgreSQLContainer<*>? = null
     private var rabbit: RabbitMQContainer? = null
 
@@ -160,28 +184,27 @@ class CancelInFlightIntegrationTest {
             password = rabbitPass
         }
 
-        handlerStarted = CompletableDeferred()
-        cancelledNormally = CompletableDeferred()
         val testHandlerModule = module {
-            single { CooperativeHandler(handlerStarted, cancelledNormally) } bind JobHandler::class
+            single { NonPollingHandler() } bind JobHandler::class
+            single { StubbornHandler() } bind JobHandler::class
         }
 
         startKoin {
             modules(
-                schedulerCoreModule { nodeId = "test-cancel-inflight" },
+                schedulerCoreModule { nodeId = "test-cancel-push" },
                 schedulerPostgresModule {
-                    this.dataSource = this@CancelInFlightIntegrationTest.dataSource
+                    this.dataSource = this@CancelPushIntegrationTest.dataSource
                     runMigrations = true
                 },
                 schedulerRabbitModule {
-                    connectionFactory = this@CancelInFlightIntegrationTest.connectionFactory
+                    connectionFactory = this@CancelPushIntegrationTest.connectionFactory
                     queues = listOf("default")
                 },
                 schedulerInfraModule(),
                 schedulerWorkerModule {
-                    nodeId = "test-cancel-inflight"
+                    nodeId = "test-cancel-push"
                     lockDuration = 60.seconds
-                    heartbeatInterval = 200.milliseconds
+                    cancelGracePeriod = 1.seconds
                     queue("default", concurrency = 4)
                 },
                 testHandlerModule,
@@ -189,6 +212,17 @@ class CancelInFlightIntegrationTest {
         }
 
         publisherScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        runBlocking {
+            GlobalContext.get().get<WorkerPool>().start()
+            GlobalContext.get().get<OutboxPublisher>().start(publisherScope, intervalMillis = 20L)
+        }
+    }
+
+    @BeforeEach
+    fun resetSignals() {
+        CancelPushHooks.nonPollingStarted = CompletableDeferred()
+        CancelPushHooks.nonPollingUnwound = CompletableDeferred()
+        CancelPushHooks.stubbornStarted = CompletableDeferred()
     }
 
     @AfterAll
@@ -206,37 +240,51 @@ class CancelInFlightIntegrationTest {
     }
 
     @Test
-    fun `cancel during PROCESSING ends as terminal CANCELLED`() = runBlocking {
+    fun `push cancel interrupts a non-polling handler — ends CANCELLED`() = runBlocking {
         val koin = GlobalContext.get()
         val scheduler = koin.get<Scheduler>()
-        val workerPool = koin.get<WorkerPool>()
-        val outboxPublisher = koin.get<OutboxPublisher>()
         val jobs = koin.get<JobRepository>()
 
-        workerPool.start()
-        outboxPublisher.start(publisherScope, intervalMillis = 20L)
+        val jobId = scheduler.enqueue(NonPollingJob())
 
-        val jobId = scheduler.enqueue(LongRunningJob())
+        withTimeoutOrNull(5.seconds) { CancelPushHooks.nonPollingStarted.await() }
+            ?: error("NonPollingHandler never started")
 
-        // Wait for handler to actually start running.
-        withTimeoutOrNull(5.seconds) { handlerStarted.await() }
-            ?: error("Handler never started")
-
-        // Now ask to cancel — handler should observe within a poll cycle (40ms).
         val cancelResult = scheduler.cancel(jobId, by = "test")
         assertEquals(CancelResult.CANCEL_REQUESTED, cancelResult)
 
-        // Handler hits the polling check, throws JobCancellationException.
-        withTimeoutOrNull(5.seconds) { cancelledNormally.await() }
-            ?: error("Handler never observed the cancellation")
+        // The handler never polls — the only way it stops is the push cancelling its
+        // coroutine at the delay() suspension point.
+        withTimeoutOrNull(5.seconds) { CancelPushHooks.nonPollingUnwound.await() }
+            ?: error("NonPollingHandler was not interrupted by the push cancel")
 
-        // Worker writes terminal CANCELLED after handler throws.
         val finalState = pollForState(jobs, jobId, JobState.CANCELLED, timeoutMs = 5_000)
-        assertNotNull(finalState, "Job should reach CANCELLED state after handler throws")
+        assertNotNull(finalState, "Job should reach CANCELLED after the push cancel")
         assertEquals(JobState.CANCELLED, finalState!!.state)
         assertEquals(null, finalState.lockedBy)
-        assertEquals(null, finalState.lockedUntil)
         assertEquals("test", finalState.cancelRequestedBy)
+    }
+
+    @Test
+    fun `non-cooperative handler is force-killed after grace — ends FAILED`() = runBlocking {
+        val koin = GlobalContext.get()
+        val scheduler = koin.get<Scheduler>()
+        val jobs = koin.get<JobRepository>()
+
+        val jobId = scheduler.enqueue(StubbornJob())
+
+        withTimeoutOrNull(5.seconds) { CancelPushHooks.stubbornStarted.await() }
+            ?: error("StubbornHandler never started")
+
+        val cancelResult = scheduler.cancel(jobId, by = "test")
+        assertEquals(CancelResult.CANCEL_REQUESTED, cancelResult)
+
+        // Handler ignores cancellation (blocking loop). After the 1s grace the worker must
+        // force the row terminal FAILED rather than wait for the handler to finish.
+        val finalState = pollForState(jobs, jobId, JobState.FAILED, timeoutMs = 6_000)
+        assertNotNull(finalState, "Non-cooperative job should be force-FAILED after the grace window")
+        assertEquals(JobState.FAILED, finalState!!.state)
+        assertEquals(null, finalState.lockedBy)
     }
 
     private suspend fun pollForState(

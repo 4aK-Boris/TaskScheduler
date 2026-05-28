@@ -26,8 +26,10 @@ import cs.trade.scheduler.storage.postgres.domain.models.Job as JobRow
 import cs.trade.scheduler.storage.postgres.domain.repositories.JobRepository
 import cs.trade.scheduler.storage.postgres.domain.repositories.JobTypePauseRepository
 import cs.trade.scheduler.storage.postgres.domain.repositories.WorkerRepository
+import cs.trade.scheduler.storage.postgres.infrastructure.events.JobCancelListener
 import cs.trade.scheduler.transport.rabbit.domain.ConsumerHandle
 import cs.trade.scheduler.transport.rabbit.domain.JobTransport
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -35,7 +37,9 @@ import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -43,6 +47,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
+import java.util.concurrent.ConcurrentHashMap
 import kotlinx.serialization.serializer
 import org.slf4j.LoggerFactory
 import org.slf4j.MDC
@@ -102,12 +107,23 @@ public class WorkerPool(
     private val prefetchTuner: PrefetchTuner,
     private val functionRefRunner: FunctionRefRunner,
     private val circuitBreakers: CircuitBreakerRegistry,
+    private val cancelListener: JobCancelListener,
 ) {
 
     private val log = LoggerFactory.getLogger(javaClass)
     private val consumers = mutableListOf<ConsumerHandle>()
     private val mutex = Mutex()
     private var internalScope: CoroutineScope? = null
+
+    /**
+     * Jobs currently executing on THIS node, keyed by id (DESIGN.md 22.7). Populated for
+     * the duration of `handler.execute` so the `job_cancel` listener can cancel the running
+     * coroutine. [ActiveHandle.version] is the row version at pickup — `requestCancellation`
+     * doesn't bump it, so it's still valid for the force-kill CAS finalize.
+     */
+    private val activeJobs = ConcurrentHashMap<Uuid, ActiveHandle>()
+
+    private class ActiveHandle(val job: kotlinx.coroutines.Job, val version: Int)
 
     public suspend fun start() {
         mutex.withLock {
@@ -121,6 +137,10 @@ public class WorkerPool(
             internalScope = scope
             heartbeatLoop.start(scope)
             workerRegistryLoop.start(scope)
+            // Push-based in-flight cancel (DESIGN.md 22.7): react to job_cancel NOTIFYs by
+            // cancelling the running handler coroutine. onSignal is non-blocking — the grace
+            // wait + force-kill happens in its own coroutine inside onCancelSignal.
+            cancelListener.start(scope) { jobId -> onCancelSignal(jobId) }
 
             for (q in workerConfig.queues) {
                 // Circuit breaker register BEFORE consume.start so the first pickup is
@@ -152,6 +172,39 @@ public class WorkerPool(
             val next = prefetchTuner.tune(queue.name) ?: continue
             runCatching { handle.setPrefetch(next) }
                 .onFailure { log.warn("setPrefetch({}) on queue {} threw", next, queue.name, it) }
+        }
+    }
+
+    /**
+     * React to a `job_cancel` NOTIFY (DESIGN.md 22.7). Cancels the running handler
+     * coroutine and waits up to [SchedulerWorkerConfig.cancelGracePeriod]:
+     *  - **Cooperative handler** — unwinds at its next suspension point within the grace
+     *    window; the delivery coroutine's `CancellationException` catch finalizes CANCELLED.
+     *    Nothing more to do here.
+     *  - **Non-cooperative handler** (CPU loop / blocking I/O that never yields) — still
+     *    running past the grace window. We force the row terminal FAILED so the dashboard
+     *    and DAG move on; the coroutine leaks until it eventually returns (documented
+     *    trade-off). FAILED, not CANCELLED, signals "didn't stop cleanly".
+     *
+     * No-op if the job isn't running on this node (signal was for another worker, or the
+     * handler already finished and deregistered).
+     */
+    private fun onCancelSignal(jobId: Uuid) {
+        val handle = activeJobs[jobId] ?: return
+        val scope = internalScope ?: return
+        scope.launch {
+            log.info("job_cancel signal for {} — cancelling handler (grace={})", jobId, workerConfig.cancelGracePeriod)
+            handle.job.cancel(CancellationException("cancel requested via dashboard for job $jobId"))
+            val finishedInGrace = withTimeoutOrNull(workerConfig.cancelGracePeriod.inWholeMilliseconds) {
+                handle.job.join()
+            }
+            if (finishedInGrace == null) {
+                val msg = "force-cancelled: handler did not respond within ${workerConfig.cancelGracePeriod}"
+                log.warn("Job {} {} — marking FAILED; handler coroutine leaks until it yields", jobId, msg)
+                runCatching {
+                    finalize(jobId, handle.version, JobState.FAILED, errorMsg = msg)
+                }.onFailure { log.warn("force-cancel finalize for {} threw", jobId, it) }
+            }
         }
     }
 
@@ -420,15 +473,25 @@ public class WorkerPool(
         try {
             try {
                 withContext(handlerCtx) {
-                    withTimeout(timeoutDuration) {
-                        if (isFunctionRef) {
-                            // Function-ref jobs don't take ctx in their user-facing method
-                            // signature — the runner resolves target + method + args from the
-                            // FunctionRefPayload and invokes via KFunction.callSuspend.
-                            functionRefRunner.run(locked.payloadJson)
-                        } else {
-                            handler!!.execute(ctx, payload!!)
+                    // Register this handler coroutine so the job_cancel listener can cancel
+                    // it mid-flight (DESIGN.md 22.7). The listener cancels THIS job; the
+                    // outer delivery coroutine stays active and routes the CANCELLED outcome
+                    // in the catch below. Removed in finally the instant the handler unwinds
+                    // so a late signal finds nothing and a natural SUCCESS isn't clobbered.
+                    activeJobs[jobId] = ActiveHandle(coroutineContext.job, locked.version)
+                    try {
+                        withTimeout(timeoutDuration) {
+                            if (isFunctionRef) {
+                                // Function-ref jobs don't take ctx in their user-facing method
+                                // signature — the runner resolves target + method + args from the
+                                // FunctionRefPayload and invokes via KFunction.callSuspend.
+                                functionRefRunner.run(locked.payloadJson)
+                            } else {
+                                handler!!.execute(ctx, payload!!)
+                            }
                         }
+                    } finally {
+                        activeJobs.remove(jobId)
                     }
                 }
                 executeDuration = mark.elapsedNow()
@@ -455,6 +518,22 @@ public class WorkerPool(
                 span.setAttribute(ATTR_JOB_OUTCOME, JobOutcome.CANCELLED.tagValue)
                 log.info("Job {} honored cancel request via JobCancellationException", jobId, cancel)
                 finalize(jobId, locked.version, JobState.CANCELLED, errorMsg = cancel.message)
+            } catch (ce: CancellationException) {
+                executeDuration = mark.elapsedNow()
+                // Push-cancel (DESIGN.md 22.7): the job_cancel listener cancelled the handler
+                // coroutine and it unwound at a suspension point. The delivery coroutine
+                // itself is still active (only the child handler job was cancelled), so WE
+                // own the terminal transition. If the delivery coroutine was ALSO cancelled
+                // (worker shutdown tearing down the consumer scope), rethrow so structured
+                // concurrency unwinds cleanly — the row stays PROCESSING and SafetyNetPoller
+                // recovers it after lockDuration.
+                if (!currentCoroutineContext().isActive) throw ce
+                outcome = JobOutcome.CANCELLED
+                span.setAttribute(ATTR_JOB_OUTCOME, JobOutcome.CANCELLED.tagValue)
+                log.info("Job {} cancelled in-flight via job_cancel push — marking CANCELLED", jobId)
+                // CAS-guarded on the pickup version. If the listener already force-FAILED
+                // this row past the grace window, the version moved on and this no-ops.
+                finalize(jobId, locked.version, JobState.CANCELLED, errorMsg = "cancelled in-flight")
             } catch (t: Throwable) {
                 executeDuration = mark.elapsedNow()
                 outcome = handleFailure(locked, payload, handler, ctx, t)

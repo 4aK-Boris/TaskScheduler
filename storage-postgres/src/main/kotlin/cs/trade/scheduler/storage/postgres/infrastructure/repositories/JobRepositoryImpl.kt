@@ -610,6 +610,13 @@ public class JobRepositoryImpl(
                     new = JobState.PROCESSING,
                     actor = by,
                 )
+                // Push the request to whichever worker is running this row right now
+                // (DESIGN.md 22.7). NOTIFY is transactional — it fires only if this UPDATE
+                // commits, so a rolled-back stamp never signals a phantom cancel. The
+                // worker's dedicated job_cancel listener reacts in ~ms; cooperative handlers
+                // that only poll `cancel_requested_at` still work without it. jobId is a Uuid
+                // (hex + dashes) so interpolating it into the payload literal is injection-safe.
+                exec("SELECT pg_notify('job_cancel', '$jobId')")
             }
             updated
         }

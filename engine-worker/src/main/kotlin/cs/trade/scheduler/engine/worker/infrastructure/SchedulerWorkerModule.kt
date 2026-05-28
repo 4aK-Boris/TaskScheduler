@@ -1,5 +1,6 @@
 package cs.trade.scheduler.engine.worker.infrastructure
 
+import com.zaxxer.hikari.HikariDataSource
 import cs.trade.scheduler.core.backend.handler.JobHandler
 import cs.trade.scheduler.engine.worker.domain.usecases.DeferPausedJobUseCase
 import cs.trade.scheduler.engine.worker.domain.usecases.FinalizeJobUseCase
@@ -9,6 +10,7 @@ import cs.trade.scheduler.engine.worker.domain.usecases.ScheduleRetryUseCase
 import cs.trade.scheduler.engine.worker.infrastructure.loops.HeartbeatLoop
 import cs.trade.scheduler.engine.worker.infrastructure.loops.WorkerRegistryLoop
 import cs.trade.scheduler.engine.worker.infrastructure.metrics.JobMetrics
+import cs.trade.scheduler.storage.postgres.infrastructure.events.JobCancelListener
 import kotlinx.coroutines.CoroutineDispatcher
 import org.koin.core.module.Module
 import org.koin.core.module.dsl.singleOf
@@ -205,6 +207,23 @@ public fun schedulerWorkerModule(configure: SchedulerWorkerConfig.() -> Unit): M
         single<FunctionRefRunner> {
             FunctionRefRunner(koin = getKoin(), json = get<cs.trade.scheduler.core.backend.SchedulerCoreConfig>().json)
         }
+        // job_cancel listener (DESIGN.md 22.7) needs raw JDBC creds for a dedicated LISTEN
+        // connection — same reason PostgresEventBus / LeaderElection bypass the Hikari pool.
+        // Pull them off the bound DataSource, which the documented setup always makes a
+        // HikariDataSource. A non-Hikari DataSource can override this binding manually.
+        single<JobCancelListener> {
+            val hikari = get<javax.sql.DataSource>() as? HikariDataSource
+                ?: error(
+                    "JobCancelListener needs a HikariDataSource to source raw JDBC credentials " +
+                        "for its dedicated LISTEN connection. Bind a HikariDataSource (the documented " +
+                        "setup) or override single<JobCancelListener> { ... } yourself.",
+                )
+            JobCancelListener(
+                jdbcUrl = hikari.jdbcUrl,
+                jdbcUser = hikari.username,
+                jdbcPassword = hikari.password,
+            )
+        }
         singleOf(::ScheduleRetryUseCase)
         singleOf(::PropagateRollupProgressUseCase)
         singleOf(::FinalizeJobUseCase)
@@ -238,6 +257,7 @@ public fun schedulerWorkerModule(configure: SchedulerWorkerConfig.() -> Unit): M
                 prefetchTuner = get(),
                 functionRefRunner = get(),
                 circuitBreakers = get(),
+                cancelListener = get(),
             )
         }
     }

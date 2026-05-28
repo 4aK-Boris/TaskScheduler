@@ -2667,9 +2667,17 @@ schedulerInfraModule {
 
 Прометей пополняется через скан БД (раз в `metricsCollectInterval`, дефолт 10s) + event listeners на job state transitions.
 
-### 22.7. Cancellation in PROCESSING state
+### 22.7. Cancellation in PROCESSING state — shipped (Phase 3)
 
 Cancel из dashboard когда job уже выполняется на worker-е.
+
+**Реализовано:** `requestCancellation` штампует `cancel_requested_at` и шлёт транзакционный
+`NOTIFY job_cancel, '<jobId>'`. Каждый worker держит выделенное LISTEN-соединение
+(`JobCancelListener`) и при сигнале отменяет корутину выполняющегося хендлера
+(`activeJobs` map в `WorkerPool`). Кооперативный хендлер разворачивается на ближайшем
+suspend point → CANCELLED. Некооперативный (CPU/blocking-loop) после `cancelGracePeriod`
+форсится в FAILED ("force-cancelled"), его корутина утекает до естественного завершения.
+Поллинг `JobContext.isCancellationRequested` остаётся как fallback, когда push потерян.
 
 **Базовая семантика — Kotlin coroutines кооперативны:**
 - Worker оборачивает handler в `workerScope.launch { handler.execute(ctx, payload) }`
