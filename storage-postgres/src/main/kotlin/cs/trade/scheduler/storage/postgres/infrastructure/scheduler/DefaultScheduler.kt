@@ -473,8 +473,29 @@ public class DefaultScheduler(
         // Koin's compile-time validator doesn't see a `koin.get<SchedulerCoreConfig>()`
         // propagated up through extension default-parameter expressions.
         val built = FunctionRefEnqueuer.build(method, args, options.targetQualifier, json)
-        val payload = built.payload
+        return insertFunctionRef(built.payload, options)
+    }
 
+    override suspend fun enqueueFunctionRefRaw(
+        targetType: String,
+        methodSignature: String,
+        args: List<Any?>,
+        options: EnqueueOptions,
+    ): Uuid {
+        // Compiler-plugin lowering of `enqueueLambda { … }` (DESIGN.md 21.9). The plugin
+        // hands us the receiver type + method signature as strings (it can't synthesise a
+        // KFunction in IR); buildFromTarget reflects the KFunction back out and produces the
+        // identical FunctionRefPayload, so the row is indistinguishable from the explicit
+        // `enqueue(Recv::method, …)` path below.
+        val built = FunctionRefEnqueuer.buildFromTarget(targetType, methodSignature, args, options.targetQualifier, json)
+        return insertFunctionRef(built.payload, options)
+    }
+
+    /**
+     * Shared tail of both function-ref enqueue entry points: fail-fast Koin check, then the
+     * same row + outbox + audit insert as the sealed-class path.
+     */
+    private suspend fun insertFunctionRef(payload: FunctionRefPayload, options: EnqueueOptions): Uuid {
         // Fail-fast at enqueue if Koin won't be able to resolve this target at execute
         // time. Same exception type as `FunctionRefEnqueuer`'s arg-serialisation check, so
         // callers can `catch (e: IllegalArgumentException)` once for both classes of

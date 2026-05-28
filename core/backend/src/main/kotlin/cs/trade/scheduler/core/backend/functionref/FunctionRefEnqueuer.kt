@@ -11,6 +11,7 @@ import kotlin.reflect.KFunction
 import kotlin.reflect.KParameter
 import kotlin.reflect.KType
 import kotlin.reflect.full.createType
+import kotlin.reflect.full.functions
 import kotlin.reflect.jvm.jvmErasure
 
 /**
@@ -79,6 +80,58 @@ public object FunctionRefEnqueuer {
                 args = encoded,
             ),
         )
+    }
+
+    /**
+     * Variant for the compiler-plugin lowering of `enqueueLambda { … }` (DESIGN.md 21.9).
+     * The plugin can't hand us a `KFunction` in IR, so it gives us the receiver's declared
+     * type FQN + the method's disambiguating [methodSignatureOf] string instead. We reflect
+     * the `KFunction` back out — the SAME way the worker's `FunctionRefRunner` resolves a
+     * method on the receiver class — and delegate to [build]. So the wire payload, the args
+     * serialisation (declared-`KType`-driven), and the fail-fast policy are all identical to
+     * the explicit `enqueue(Recv::method, …)` path.
+     *
+     * Class-loading / signature-matching failures surface as [IllegalArgumentException] at
+     * the enqueue site, matching [build]'s fail-fast contract.
+     */
+    public fun buildFromTarget(
+        targetType: String,
+        methodSignature: String,
+        args: List<Any?>,
+        targetQualifier: String?,
+        json: Json,
+    ): Result {
+        val receiverClass = runCatching { Class.forName(targetType).kotlin }.getOrElse { cause ->
+            throw IllegalArgumentException(
+                "Function-ref API (lambda capture): receiver class $targetType is not on the " +
+                    "classpath at enqueue time. The compiler plugin emitted this from a " +
+                    "`enqueueLambda { … }` call — did the receiver type get renamed/removed?",
+                cause,
+            )
+        }
+        val method = resolveBySignature(receiverClass, methodSignature)
+        return build(method, args, targetQualifier, json)
+    }
+
+    /**
+     * Find the member function on [receiverClass] whose [methodSignatureOf] equals
+     * [signature]. Mirrors `FunctionRefRunner.resolveMethod` on the worker so both sides
+     * agree on which overload a signature names.
+     */
+    private fun resolveBySignature(receiverClass: KClass<*>, signature: String): KFunction<*> {
+        val candidates = receiverClass.functions.filter { methodSignatureOf(it) == signature }
+        return when {
+            candidates.size == 1 -> candidates.single()
+            candidates.isEmpty() -> {
+                val available = receiverClass.functions.joinToString("; ") { methodSignatureOf(it) }
+                throw IllegalArgumentException(
+                    "Function-ref API (lambda capture): no method on ${receiverClass.qualifiedName} " +
+                        "matches signature $signature. Available: [$available].",
+                )
+            }
+            // JVM base/override clash — same tie-break as the worker: take the first.
+            else -> candidates.first()
+        }
     }
 
     public data class Result(

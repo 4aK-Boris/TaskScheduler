@@ -21,6 +21,12 @@ dependencies {
 
     testImplementation(libs.bundles.test)
     testRuntimeOnly(libs.junitPlatformLauncher)
+
+    // Function-ref lambda capture compiler plugin (DESIGN.md 21.9). Activated ONLY for the
+    // test compilation so SchedulerLambdaCaptureTest can exercise the real IR rewrite of
+    // `enqueueLambda { … }`. The plugin self-registers via its META-INF/services
+    // CompilerPluginRegistrar once it is on the kotlinc plugin classpath — no -Xplugin flag.
+    "kotlinCompilerPluginClasspathTest"(project(":scheduler-compiler-plugin"))
 }
 
 application {

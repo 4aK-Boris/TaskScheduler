@@ -2471,11 +2471,53 @@ class Mailer {
 // при resolve находим method по signature, не по имени
 ```
 
-### 21.9. Lambda capture через KSP — Phase 2
+### 21.9. Lambda capture через K2 compiler plugin — shipped
 
-Полный lambda capture (`scheduler.enqueue { mailer.send(123L, "welcome") }`) — Phase 2 через KSP-плагин. KSP transforms call site в эквивалент function-ref enqueue на этапе компиляции.
+Полный lambda capture работает через **K2 kotlinc compiler plugin** (не KSP — KSP не умеет переписывать call-site, только генерировать новый код):
 
-В MVP — sealed-class + function-ref.
+```kotlin
+scheduler.enqueueLambda { mailer.send(123L, "welcome") }
+```
+
+**Реализация (Stage 2).** `:scheduler-compiler-plugin` регистрирует `IrGenerationExtension`
+(`SchedulerIrGenerationExtension`), который на IR-стадии находит вызовы
+`Scheduler.enqueueLambda { recv.method(args) }` и переписывает их в:
+
+```kotlin
+scheduler.enqueueFunctionRefRaw(
+    "com.example.Mailer",                 // FQN типа получателя
+    "send(kotlin.Long,kotlin.String)",    // формат FunctionRefEnqueuer.methodSignatureOf
+    listOf(123L, "welcome"),
+    options,                              // проброшен; опущен → дефолт на call-site
+)
+```
+
+Почему строки + `listOf`, а не синтез `KFunction`-ссылки в IR: построение
+reflection-capable `IrFunctionReference` многословно и хрупко между версиями компилятора
+(rich-vs-plain reference split в 2.2). Две `String`-константы плюс `listOf(...)` тривиальны
+и стабильны, а `Scheduler.enqueueFunctionRefRaw` рефлексивно восстанавливает `KFunction` из
+типа+сигнатуры (через `FunctionRefEnqueuer.buildFromTarget`) и заходит в **тот же** payload-build +
+insert, что и явный `enqueue(Recv::method, …)`. Полученная job-строка байт-в-байт идентична.
+
+**Поддерживаемая форма лямбды** (всё остальное — compile ERROR из IR-стадии): одно выражение
+`{ receiver.method(args...) }`, receiver — member-вызов (не top-level/extension/context),
+не-generic метод с конкретными типами параметров, ≤5 аргументов.
+
+**Резолюция fake-override.** Конкретный реализатор `Scheduler` несёт fake-override дефолтного
+`enqueueLambda`; матчинг идёт через `resolveFakeOverride()`, поэтому call ловится независимо от
+статического типа получателя.
+
+**Подключение в user-app.** Gradle-subplugin `:scheduler-compiler-plugin-gradle`
+(`id("cs.trade.scheduler.compiler")`); внутри этого репо — через
+`kotlinCompilerPluginClasspath<SourceSet>(project(":scheduler-compiler-plugin"))`
+(плагин само-регистрируется через `META-INF/services`). Тест:
+`app/.../SchedulerLambdaCaptureTest` — гоняет реальный compile-time rewrite и сверяет payload
+с явным reference-формом.
+
+Без плагина `enqueueLambda { … }` бросает `IllegalStateException` в рантайме (stub в
+`Scheduler`), подсказывая применить плагин или явный `enqueue(Recv::method, …)`.
+
+В MVP по-прежнему доступны sealed-class + function-ref как compiler-free пути.
 
 ---
 
@@ -2946,7 +2988,7 @@ NULL = пересылаем всё (default — для local dev). Production do
 - [ ] **ArchivalSink (Phase 2):** S3/GCS/file backends для архива удаляемых jobs/events перед DELETE.
 - [ ] **Priority inheritance в DAG (Phase 2):** `EnqueueOptions(inheritPriorityFromParents = true)` если будет реальный кейс.
 - [ ] **Adaptive prefetch + circuit breaker (Phase 2):** автоматическая адаптация под нагрузку.
-- [ ] **Lambda capture (Phase 2):** KSP плагин для `enqueue { mailer.send(123) }`.
+- [x] **Lambda capture — shipped:** K2 compiler plugin для `enqueueLambda { mailer.send(123) }` (см. 21.9; не KSP — KSP не переписывает call-site).
 
 ---
 

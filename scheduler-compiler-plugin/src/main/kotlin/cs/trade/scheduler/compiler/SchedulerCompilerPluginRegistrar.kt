@@ -11,10 +11,12 @@ import org.jetbrains.kotlin.config.CompilerConfiguration
  * plugin (DESIGN.md 21.9). Registered via `META-INF/services` so kotlinc picks it up
  * when the plugin jar is on the classpath.
  *
- * For now this only wires the [IrGenerationExtension]. A FIR-side checker can be added
- * later if we want compile-time diagnostics for lambdas that the plugin can't rewrite
- * (e.g. multi-statement bodies, calls on non-injectable receivers); without it the
- * runtime stub in `Scheduler.enqueueLambda` carries the error.
+ * Wires the [IrGenerationExtension] that performs the actual `enqueueLambda { … }` →
+ * `enqueueFunctionRefRaw(…)` rewrite. Unsupported lambda shapes are reported as compile
+ * ERRORs from the IR stage (see [SchedulerIrGenerationExtension]); a future FIR-side
+ * checker could surface those diagnostics earlier (during analysis) but isn't required
+ * for correctness — the IR transform already fails the build on a bad shape, and an
+ * un-rewritten call hits the throwing stub in `Scheduler.enqueueLambda` at runtime.
  */
 public class SchedulerCompilerPluginRegistrar : CompilerPluginRegistrar() {
 
@@ -28,10 +30,8 @@ public class SchedulerCompilerPluginRegistrar : CompilerPluginRegistrar() {
     override val pluginId: String = "cs.trade.scheduler.compiler"
 
     override fun ExtensionStorage.registerExtensions(configuration: CompilerConfiguration) {
-        // Pass the configuration to the IR extension so it can reach the
-        // MessageCollector — Stage 1 reports candidate call-sites via the LOGGING
-        // channel (visible with `-Xverbose-logs` or via test harnesses); Stage 2 will
-        // upgrade those to ERROR for unsupported lambda shapes.
+        // Pass the configuration through so the IR extension can reach the MessageCollector
+        // for its rewrite-count LOGGING line and its ERROR diagnostics on unsupported shapes.
         IrGenerationExtension.registerExtension(SchedulerIrGenerationExtension(configuration))
     }
 }

@@ -133,6 +133,32 @@ public interface Scheduler {
     ): Uuid
 
     /**
+     * Lowered target of [enqueueLambda] (DESIGN.md 21.9). The `scheduler-compiler-plugin`
+     * IR transform replaces `enqueueLambda { recv.method(a1, a2) }` with a call to this
+     * primitive, passing the receiver's declared type FQN, the method's disambiguating
+     * signature (same format as [cs.trade.scheduler.core.backend.functionref.FunctionRefEnqueuer.methodSignatureOf]),
+     * and the captured args as a `List<Any?>`.
+     *
+     * It exists as a separate entry point from [enqueueFunctionRef] because the plugin can
+     * cheaply emit two string constants + a `listOf(...)` at the call site, but cannot
+     * cheaply (or portably across compiler versions) synthesise a reflection-capable
+     * `KFunction` reference in IR. The impl re-derives the `KFunction` reflectively from
+     * `targetType` + `methodSignature` and then funnels into the exact same payload-build
+     * and insert path as [enqueueFunctionRef] — the produced job row is byte-for-byte the
+     * same as if the user had written `enqueue(Recv::method, a1, a2)`.
+     *
+     * Not meant to be called by hand — use the typed `enqueue(Recv::method, …)` overloads
+     * (compiler-free) or `enqueueLambda { … }` (with the plugin). Calling it directly works
+     * but you own getting [methodSignature] exactly right.
+     */
+    public suspend fun enqueueFunctionRefRaw(
+        targetType: String,
+        methodSignature: String,
+        args: List<Any?>,
+        options: EnqueueOptions = EnqueueOptions(),
+    ): Uuid
+
+    /**
      * Lambda-capture entry point (DESIGN.md 21.9). User writes:
      *
      * ```
