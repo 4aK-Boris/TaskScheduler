@@ -3,7 +3,9 @@ package cs.trade.scheduler.runner
 import com.rabbitmq.client.ConnectionFactory
 import com.zaxxer.hikari.HikariConfig
 import com.zaxxer.hikari.HikariDataSource
+import cs.trade.scheduler.archival.s3.S3ArchivalSink
 import cs.trade.scheduler.core.backend.SchedulerCoreConfig
+import cs.trade.scheduler.core.backend.archival.ArchivalSink
 import cs.trade.scheduler.core.backend.events.EventBus
 import cs.trade.scheduler.core.backend.schedulerCoreModule
 import cs.trade.scheduler.dashboard.server.api.routes.configureDashboardRouting
@@ -73,6 +75,9 @@ public fun main() {
     // once beats N restart cycles fixing one env var at a time.
     config.validate()
     log.info("Starting scheduler-infra (node={}, dashboard port={})", config.nodeId, config.dashboardPort)
+    config.archiveS3?.let {
+        log.info("S3 archival ENABLED — terminal rows archived before DELETE (bucket={}, endpoint={})", it.bucket, it.endpoint ?: "AWS")
+    }
 
     val dataSource = buildDataSource(config)
     val rabbitFactory = buildRabbitFactory(config)
@@ -127,7 +132,10 @@ public fun main() {
                 MicrometerIdempotencyMetrics(metricsRegistry)
             }
         },
-    )
+        // S3 archival — bound only when ARCHIVE_S3_BUCKET is set, AFTER schedulerInfraModule
+        // so it overrides the ArchivalSink.Noop default (Koin last-wins). The retention loop
+        // routes terminal rows through it before DELETE (DESIGN.md 18.7).
+    ) + listOfNotNull(config.archiveS3?.let(::archivalS3Module))
 
     startKoin {
         slf4jLogger()
@@ -197,6 +205,8 @@ public fun main() {
         // dead replica's TCP timeout to fire).
         runCatching { leader.release() }
         runCatching { runBlocking { koin.get<JobTransport>().close() } }
+        // Close the archival sink's S3 client (no-op for the Noop default) before stopKoin.
+        runCatching { (koin.get<ArchivalSink>() as? AutoCloseable)?.close() }
         runCatching { stopKoin() }
         runCatching { (dataSource as? HikariDataSource)?.close() }
         // Closeable JVM binders (JvmGcMetrics registers a Notification listener) live
@@ -306,6 +316,25 @@ private fun Application.configureKtor(
             filesPath = "dashboard-web"
             defaultPage = "index.html"
         }
+    }
+}
+
+/**
+ * Koin module binding the S3-compatible [ArchivalSink] over the `Noop` default. Pulled into
+ * the module list only when [RunnerConfig.archiveS3] is non-null, AFTER `schedulerInfraModule`
+ * so last-wins makes the retention loop use it. `internal` so the wiring is unit-testable.
+ */
+internal fun archivalS3Module(s3: RunnerConfig.ArchiveS3Config): Module = module {
+    single<ArchivalSink> {
+        S3ArchivalSink.create(
+            bucket = s3.bucket,
+            region = s3.region,
+            endpoint = s3.endpoint,
+            accessKeyId = s3.accessKeyId,
+            secretAccessKey = s3.secretAccessKey,
+            pathStyleAccess = s3.pathStyleAccess ?: (s3.endpoint != null),
+            keyPrefix = s3.keyPrefix,
+        )
     }
 }
 

@@ -15,6 +15,10 @@ dependencies {
     implementation(project(":transport-rabbit"))
     implementation(project(":engine-infra"))
     implementation(project(":dashboard-server"))
+    // Bundled into the prebuilt scheduler-infra image so S3 archival can be switched on
+    // via ARCHIVE_S3_* env vars (DESIGN.md 18.7 / 14.5). The library modules stay SDK-free;
+    // only this deployment artifact carries the AWS SDK.
+    implementation(project(":archival-s3"))
 
     implementation(libs.bundles.ktorServer)
     implementation(libs.ktorServerMetricsMicrometer)

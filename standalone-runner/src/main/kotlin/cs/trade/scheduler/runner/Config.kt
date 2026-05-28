@@ -40,7 +40,48 @@ public data class RunnerConfig(
     val dashboardJwtAudience: String?,
     val nodeId: String,
     val runMigrations: Boolean,
+    /**
+     * Optional S3-compatible archival (DESIGN.md 18.7). `null` → the retention loop deletes
+     * terminal rows with no cold-storage copy (`ArchivalSink.Noop`). Set `ARCHIVE_S3_BUCKET`
+     * to enable; the `:archival-s3` sink is bundled in this image and bound over the Noop
+     * default (Koin last-wins).
+     */
+    val archiveS3: ArchiveS3Config?,
 ) {
+    /**
+     * Settings for the S3-compatible [cs.trade.scheduler.archival.s3.S3ArchivalSink].
+     * [accessKeyId]/[secretAccessKey] null → AWS default credential chain (env, profile,
+     * instance role). [endpoint] null → real AWS; set it for MinIO / R2 / GCS-S3 / Spaces.
+     */
+    public data class ArchiveS3Config(
+        val bucket: String,
+        val region: String,
+        val endpoint: String?,
+        val accessKeyId: String?,
+        val secretAccessKey: String?,
+        /** null → auto: path-style when a custom [endpoint] is set, virtual-hosted on AWS. */
+        val pathStyleAccess: Boolean?,
+        val keyPrefix: String,
+    ) {
+        public companion object {
+            /** Parse `ARCHIVE_S3_*` via an injectable getenv. Returns null when the bucket is unset. */
+            public fun fromEnv(get: (String) -> String?): ArchiveS3Config? {
+                val bucket = get("ARCHIVE_S3_BUCKET")?.takeIf { it.isNotBlank() } ?: return null
+                return ArchiveS3Config(
+                    bucket = bucket,
+                    region = get("ARCHIVE_S3_REGION")?.takeIf { it.isNotBlank() } ?: "us-east-1",
+                    endpoint = get("ARCHIVE_S3_ENDPOINT")?.takeIf { it.isNotBlank() },
+                    accessKeyId = get("ARCHIVE_S3_ACCESS_KEY")?.takeIf { it.isNotBlank() },
+                    secretAccessKey = get("ARCHIVE_S3_SECRET_KEY")?.takeIf { it.isNotBlank() }
+                        ?: get("ARCHIVE_S3_SECRET_KEY_FILE")?.takeIf { it.isNotBlank() }
+                            ?.let { java.nio.file.Files.readString(java.nio.file.Path.of(it)).trim() },
+                    pathStyleAccess = get("ARCHIVE_S3_PATH_STYLE")?.toBooleanStrictOrNull(),
+                    keyPrefix = get("ARCHIVE_S3_KEY_PREFIX")?.takeIf { it.isNotBlank() } ?: "",
+                )
+            }
+        }
+    }
+
     /**
      * Cross-field semantic validation. Accumulates ALL failures into a single
      * `IllegalStateException` so a deploy with three misconfigured env vars only takes one
@@ -99,6 +140,22 @@ public data class RunnerConfig(
             }
         }
 
+        // S3 archival, if enabled. A custom endpoint must carry an http(s):// scheme (the
+        // AWS SDK's URI.create silently accepts a bare host and then fails opaquely on first
+        // PutObject). Credentials are all-or-nothing — one half set without the other almost
+        // always means a typo, and SigV4 with a half-populated key fails cryptically.
+        val s3 = archiveS3
+        if (s3 != null) {
+            if (s3.region.isBlank()) failures += "ARCHIVE_S3_REGION is blank"
+            if (s3.endpoint != null && !s3.endpoint.startsWith("http://") && !s3.endpoint.startsWith("https://")) {
+                failures += "ARCHIVE_S3_ENDPOINT must start with http:// or https:// (got: ${s3.endpoint})"
+            }
+            if ((s3.accessKeyId == null) != (s3.secretAccessKey == null)) {
+                failures += "ARCHIVE_S3_ACCESS_KEY and ARCHIVE_S3_SECRET_KEY must be set together " +
+                    "(or both omitted to use the AWS default credential chain)"
+            }
+        }
+
         if (failures.isNotEmpty()) {
             error(
                 "RunnerConfig validation failed (${failures.size} issue(s)):\n" +
@@ -134,6 +191,7 @@ public data class RunnerConfig(
             dashboardJwtAudience = System.getenv("DASHBOARD_JWT_AUDIENCE"),
             nodeId = optEnv("NODE_ID", "infra-${java.net.InetAddress.getLocalHost().hostName}"),
             runMigrations = optEnv("RUN_MIGRATIONS", "true").toBoolean(),
+            archiveS3 = ArchiveS3Config.fromEnv(System::getenv),
         )
 
         private fun requireEnv(name: String): String =
