@@ -48,6 +48,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import java.util.concurrent.ConcurrentHashMap
+import kotlinx.serialization.SerializationException
 import kotlinx.serialization.serializer
 import org.slf4j.LoggerFactory
 import org.slf4j.MDC
@@ -384,11 +385,19 @@ public class WorkerPool(
                 finalize(jobId, locked.version, JobState.FAILED, errorMsg = msg)
                 return
             }
-            payload = decodePayload(jobId, locked.payloadType, locked.payloadJson)
-            if (payload == null) {
-                val msg = "Could not decode payload for job $jobId (type=${locked.payloadType})"
-                log.error(msg)
-                finalize(jobId, locked.version, JobState.FAILED, errorMsg = msg)
+            payload = decodePayload(locked.payloadType, locked.payloadJson).getOrElse { cause ->
+                // Decode failure at pickup is terminal — the stored bytes won't change on
+                // retry (DESIGN.md 22.9). A schema mismatch (removed/renamed required field)
+                // gets a message naming the mismatch; anything else falls back to the raw
+                // cause. Either way: no retry, straight to FAILED.
+                val schemaMsg = schemaErrorOf(cause)
+                val msg = if (schemaMsg != null) {
+                    "Schema error decoding payload (type=${locked.payloadType}): $schemaMsg"
+                } else {
+                    "Could not decode payload (type=${locked.payloadType}): ${cause.message ?: cause::class.simpleName}"
+                }
+                log.error("Marking job {} FAILED: {}", jobId, msg, cause)
+                finalize(jobId, locked.version, JobState.FAILED, errorMsg = msg.take(MAX_ERROR_MSG_LEN))
                 return
             }
         }
@@ -591,6 +600,28 @@ public class WorkerPool(
         val errorMsg = error.message?.take(MAX_ERROR_MSG_LEN) ?: error::class.simpleName
         val errorStack = error.stackTraceToString().take(MAX_ERROR_STACK_LEN)
 
+        // Schema-evolution guard (DESIGN.md 22.9): a payload that can't be deserialised
+        // against the current code (removed/renamed required field, changed type) will
+        // NEVER succeed on retry — the stored bytes don't change. Short-circuit to terminal
+        // FAILED regardless of the retry policy, with a message that names the mismatch.
+        // function-ref jobs surface here too: the runner decodes args at execute time, so a
+        // stale arg schema throws SerializationException from inside handler.execute.
+        schemaErrorOf(error)?.let { schemaMsg ->
+            log.error("Job {} hit a payload schema error — terminal, no retry: {}", locked.id, schemaMsg, error)
+            finalize(
+                locked.id,
+                locked.version,
+                JobState.FAILED,
+                errorMsg = "Schema error (payload incompatible with current code): $schemaMsg".take(MAX_ERROR_MSG_LEN),
+                errorStack = errorStack,
+            )
+            if (handler != null && payload != null) {
+                runCatching { handler.onFinalFailure(ctx, payload, error) }
+                    .onFailure { log.error("onFinalFailure hook for job {} threw", locked.id, it) }
+            }
+            return JobOutcome.FAILED
+        }
+
         if (!retriesLeft) {
             log.error(
                 "Job {} failed terminally on attempt {}/{} (policy={})",
@@ -638,6 +669,10 @@ public class WorkerPool(
         const val MAX_ERROR_MSG_LEN = 2_000
         const val MAX_ERROR_STACK_LEN = 8_000
 
+        // Cap on cause-chain traversal in schemaErrorOf — defends against a pathological
+        // self-referential cause cycle. 32 is far deeper than any real wrapping.
+        const val MAX_CAUSE_DEPTH = 32
+
         // Re-deliver paused jobs after this long. Long enough that a brief pause doesn't
         // generate thrash, short enough that a typical unpause sees the row come back
         // within a minute or two.
@@ -671,14 +706,27 @@ public class WorkerPool(
         else -> job.queue
     }
 
-    private fun decodePayload(jobId: Uuid, payloadType: String, payloadJson: String): Job? = runCatching {
+    private fun decodePayload(payloadType: String, payloadJson: String): Result<Job> = runCatching {
         val kClass = Class.forName(payloadType).kotlin
         val serializer = serializer(kClass.starProjectedType)
         coreConfig.json.decodeFromString(serializer, payloadJson) as Job
-    }.getOrElse {
-        // Include jobId in the message so a grep on a specific job pulls this row out of
-        // the noise even if MDC isn't being rendered by the configured layout.
-        log.error("Failed to decode payload for job {} type={}: {}", jobId, payloadType, it.message)
-        null
+    }
+
+    /**
+     * Walk the cause chain for a [SerializationException] — a payload schema mismatch
+     * (DESIGN.md 22.9). Returns its message (or class name) when found, else null. Used to
+     * classify a failure as non-retriable: re-running can't fix bytes that don't match the
+     * current data class. The chain walk matters because the runner / kotlinx wrap the
+     * original `SerializationException` as a `cause` under a higher-level exception.
+     */
+    private fun schemaErrorOf(t: Throwable): String? {
+        var cur: Throwable? = t
+        var guard = 0
+        while (cur != null && guard < MAX_CAUSE_DEPTH) {
+            if (cur is SerializationException) return cur.message ?: cur::class.simpleName ?: "deserialization error"
+            cur = cur.cause
+            guard++
+        }
+        return null
     }
 }

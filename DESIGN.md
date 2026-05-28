@@ -2734,14 +2734,16 @@ schedulerWorkerModule {
 
 **DAG impact:** cancelled job обрабатывает dependents так же как failed (по `on_failure`: PROPAGATE_FAILURE → cancel cascade, CANCEL_CHILD → cancel, IGNORE → continue с decrement).
 
-### 22.9. Payload schema evolution — частично
+### 22.9. Payload schema evolution — shipped
 
-> **Статус аудита (2026-05-28):** forward-compat реализован — `SchedulerCoreConfig.json`
-> ставит `ignoreUnknownKeys = true`, так что добавление полей не ломает старые payload'ы.
-> **GAP:** удаление/переименование *обязательного* поля по-прежнему падает на decode →
-> `WorkerPool.decodePayload` возвращает null → FAILED, но как обычная ошибка (может
-> уйти в retry). Не реализовано: классификация schema-ошибки как терминальной
-> (no-retry) с понятным сообщением + опциональный "park" state. См. пример ниже.
+> **Статус (2026-05-28):** forward-compat — `SchedulerCoreConfig.json` ставит
+> `ignoreUnknownKeys = true` (добавление полей безопасно). Несовместимый payload
+> (удалённое/переименованное обязательное поле, смена типа) теперь классифицируется как
+> **терминальный, без retry**: `WorkerPool` ловит `SerializationException` в цепочке
+> причин (и на decode-at-pickup, и из `handleFailure` — последнее покрывает function-ref,
+> где args декодируются во время выполнения) и пишет FAILED с сообщением, называющим
+> mismatch. Повторы бессмысленны — байты не изменятся. Покрыто
+> `SchemaEvolutionIntegrationTest`. "Park" state и schema-hash алерты — по-прежнему Phase 2.
 
 Реальная prod-проблема: в очереди тысячи jobs со старой схемой `SendEmail(userId, template)`, деплой с новой `SendEmail(userId, template, fromAddress)` — старые jobs не парсятся.
 
