@@ -199,6 +199,65 @@ class RecurringIntegrationTest {
     }
 
     @Test
+    fun `CATCH_UP_ALL fires one job per missed slot while CATCH_UP_ONE collapses to one`() = runBlocking {
+        // Unique payload markers so the counts isolate from other tests sharing this PG.
+        val tenantAll = System.nanoTime()
+        val tenantOne = tenantAll + 1
+        val idAll = "catchup-all-$tenantAll"
+        val idOne = "catchup-one-$tenantAll"
+
+        // Both: every-minute cron, identical 5-minute backlog. Only the policy differs.
+        scheduler.recurring(
+            RecurringDefinition(
+                id = idAll, cron = "* * * * *", job = DailyReport(tenantId = tenantAll),
+                misfirePolicy = MisfirePolicy.CATCH_UP_ALL,
+            ),
+        )
+        scheduler.recurring(
+            RecurringDefinition(
+                id = idOne, cron = "* * * * *", job = DailyReport(tenantId = tenantOne),
+                misfirePolicy = MisfirePolicy.CATCH_UP_ONE,
+            ),
+        )
+
+        // Force both overdue at a REAL cron slot: a minute boundary 5 minutes in the past
+        // (every-minute cron fires on minute boundaries, so this is a genuine missed slot).
+        val nowMinute = kotlin.time.Instant.fromEpochSeconds(kotlin.time.Clock.System.now().epochSeconds / 60 * 60)
+        val overdue = nowMinute - kotlin.time.Duration.parse("PT5M")
+        recurring.upsert(recurring.findById(idAll)!!.copy(nextTriggerAt = overdue))
+        recurring.upsert(recurring.findById(idOne)!!.copy(nextTriggerAt = overdue))
+
+        fireDue().getOrThrow()
+
+        val createdAll = countCreatedJobs(tenantAll)
+        val createdOne = countCreatedJobs(tenantOne)
+
+        // CATCH_UP_ONE collapses any backlog to a single job.
+        assertEquals(1, createdOne, "CATCH_UP_ONE must fire exactly once regardless of backlog")
+        // CATCH_UP_ALL fires one per missed minute. A 5-minute backlog yields 6 slots
+        // (boundary-5 .. boundary inclusive); allow +1 for a minute rollover mid-test.
+        assertTrue(
+            createdAll >= 5,
+            "CATCH_UP_ALL must fire one job per missed slot (>=5 for a 5-min backlog), got $createdAll",
+        )
+        assertTrue(createdAll > createdOne, "CATCH_UP_ALL must out-fire CATCH_UP_ONE on the same backlog")
+
+        // Both rows resume in the future (no longer due).
+        val now = kotlin.time.Clock.System.now()
+        assertTrue(recurring.findById(idAll)!!.nextTriggerAt > now, "CATCH_UP_ALL row must advance past now")
+        assertTrue(recurring.findById(idOne)!!.nextTriggerAt > now, "CATCH_UP_ONE row must advance past now")
+    }
+
+    /** Count ENQUEUED jobs carrying this recurring's unique payload marker, via the outbox. */
+    private suspend fun countCreatedJobs(tenantId: Long): Int =
+        outbox.findUnpublished(limit = 1000)
+            .mapNotNull { jobs.findById(it.jobId) }
+            .count {
+                it.payloadType == DailyReport::class.qualifiedName &&
+                    Regex("\"tenantId\"\\s*:\\s*$tenantId\\b").containsMatchIn(it.payloadJson)
+            }
+
+    @Test
     fun `disabled recurring is not picked up by fireDue`() = runBlocking {
         val id = "disabled-${System.nanoTime()}"
         scheduler.recurring(

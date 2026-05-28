@@ -624,6 +624,14 @@ scheduler.recurring(
 - `CATCH_UP_ONE` (default) — запускаем 1 раз (догнать), остальные пропускаем
 - `CATCH_UP_ALL` — выполняем все пропущенные (для billing-snapshots и т.п. где каждый run важен)
 
+Реализация (`FireDueRecurringJobsUseCase` + `CronExpr.catchUpPlan`): для `CATCH_UP_ALL`
+создаётся по одной job на каждый пропущенный cron-слот в `[nextTriggerAt, now]` — все N
+INSERT'ов под одним CAS на `last_triggered_at` (проигравшая реплика откатывает всю пачку).
+Ограничение `MAX_CATCH_UP_PER_TICK` (500) на тик: при превышении `next_trigger_at`
+остаётся на первом непогашенном слоте, остаток догоняется на следующих тиках (не теряется,
+не флудит одну транзакцию). `SKIP` сейчас ведёт себя как `CATCH_UP_ONE` — строгий
+«skip-if-missed» требует downtime-tracking, которого пока нет.
+
 **Timezone** — IANA TZ name (`Europe/Berlin`, `America/New_York`); NULL = UTC. cron-utils умеет per-execution TZ.
 
 ---
@@ -3029,3 +3037,5 @@ NULL = пересылаем всё (default — для local dev). Production do
   - **Test infra (#274 fallout)**: `EXTERNAL_RABBIT_HOST` env-bypass pattern (analogous to `EXTERNAL_PG_URL`) for `scheduler-test-rabbit` container — Testcontainers Rabbit can't start on Docker-Desktop dev boxes where the daemon API returns a stub for non-CLI clients. 5 Rabbit-using tests migrated. Pre-existing nested-class `Class.forName` bug surfaced and fixed by lifting `@Serializable data class` Job declarations to file-level (same pattern as `WorkerTimeoutIntegrationTest.HangingJob`).
   - **Dashboard auth fix**: `Routing.configureDashboardRouting()` → `Route.configureDashboardRouting()`. The previous `Routing.()` receiver escaped the `authenticate("dashboard") { ... }` lambda's `Route` scope, so `/api/jobs` etc. were silently public. Now genuinely gated; `BasicAuthGatingIntegrationTest`'s regression assertion flipped from 200 → 401.
   - **Test isolation fixes**: `SafetyNetIntegrationTest` got `@BeforeEach` truncate of `job/outbox` (shared `scheduler-test-pg` was polluting `findOrphaned(...)` counts); `EnqueueIntegrationTest` and `OutboxPublisherIntegrationTest` scoped their "exactly N outbox rows" assertions to `jobId`-filtered counts rather than global. JSONB whitespace assertions (`{"userId":123}` vs `{"userId": 123}`) replaced with regex-tolerant matchers in `EnqueueIntegrationTest` / `RecurringIntegrationTest`.
+
+- **2026-05-29** — **`CATCH_UP_ALL` misfire policy implemented** (was treated as `CATCH_UP_ONE` + WARN). `CronExpr.catchUpPlan(expression, firstMissed, now, tz, limit)` walks cron slots from `nextTriggerAt` forward, counting every missed slot `<= now` (returns occurrences + next trigger + capped flag); pure + unit-tested (6 cases incl. cadence, cap-parking, tz). `FireDueRecurringJobsUseCase` now plans per-policy and inserts one `job`+outbox per missed slot, all under the single `markFiredAndScheduleNext` CAS (losing replica rolls back the whole batch). Bounded by `MAX_CATCH_UP_PER_TICK=500`/tick — overflow parks `next_trigger_at` at the first un-fired slot so the remainder catches up on later ticks (no drop, no transaction flood). `RecurringIntegrationTest` adds a CATCH_UP_ALL-vs-CATCH_UP_ONE contrast on an identical 5-minute backlog. DESIGN.md 8.5 updated. This closes the last "not implemented in MVP" marker in live code.

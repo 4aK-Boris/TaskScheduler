@@ -32,19 +32,27 @@ import kotlin.uuid.Uuid
  *      - INSERT a fresh `job` row (state=ENQUEUED) carrying the recurring's payload,
  *      - INSERT an outbox row (delay=0) — published by [OutboxPublisher] to a worker.
  *
- * **Misfire handling (MVP):**
+ * **Misfire handling:**
  *  - `CATCH_UP_ONE` (default): fire once now, set `nextTriggerAt = next future cron slot`.
  *  - `SKIP`: same effective behaviour — fire once when picked up. (DESIGN.md's strict
  *    "skip if missed" requires downtime tracking we don't have yet.)
- *  - `CATCH_UP_ALL`: treated as `CATCH_UP_ONE` for MVP + log a WARN.
+ *  - `CATCH_UP_ALL`: fire one job per missed cron slot in `[nextTriggerAt, now]` (for
+ *    snapshot/billing workloads where every run matters). Bounded by
+ *    [MAX_CATCH_UP_PER_TICK] per tick — if more slots are still missed after the cap, the
+ *    next trigger is left at the next un-fired slot so the remainder catches up on later
+ *    ticks rather than flooding one transaction or being dropped.
  *
- * **Bad cron:** if `nextExecution` throws (invalid expression slipped in), disable the
- * row so the loop doesn't keep failing on the same one and surface to operators via
- * `enabled=false`.
+ * The per-row return value of the firing path is the number of `job` rows created, so a
+ * single `CATCH_UP_ALL` row can contribute many. [invoke] sums them.
+ *
+ * **Bad cron:** if parsing or `nextExecution` throws (invalid expression slipped in, or a
+ * degenerate cron with no future), disable the row so the loop doesn't keep failing on the
+ * same one — surfaced to operators via `enabled=false`.
  *
  * Single replica per scheduler-infra container in MVP. Multi-replica via advisory-lock
  * leader election is Phase 2 (DESIGN.md 14.3); the CAS on `last_triggered_at` already
- * prevents double-fire even before then.
+ * prevents double-fire even before then — for `CATCH_UP_ALL` the whole batch of N inserts
+ * shares the one CAS, so a losing replica rolls back all N.
  */
 public class FireDueRecurringJobsUseCase(
     private val database: Database,
@@ -65,87 +73,109 @@ public class FireDueRecurringJobsUseCase(
             log.info("RecurringScheduler firing {} due row(s)", due.size)
             var fired = 0
             for (row in due) {
-                if (row.misfirePolicy == MisfirePolicy.CATCH_UP_ALL) {
-                    log.warn(
-                        "CATCH_UP_ALL is not implemented in MVP for '{}' — firing once (CATCH_UP_ONE behavior)",
-                        row.id,
-                    )
-                }
-
-                val nextTrigger = runCatching {
-                    CronExpr.nextAfter(row.cron, now, row.timezone)
-                }.getOrElse { t ->
+                val plan = runCatching { planFiring(row, now) }.getOrElse { t ->
                     log.error(
-                        "Invalid cron '{}' on recurring '{}' — disabling row to stop the bleed",
+                        "Invalid/expired cron '{}' on recurring '{}' — disabling row to stop the bleed",
                         row.cron, row.id, t,
                     )
                     recurringJobs.disable(row.id)
                     continue
                 }
-
-                if (fireOne(row, now, nextTrigger)) fired++
+                if (plan.capped) {
+                    log.warn(
+                        "CATCH_UP_ALL for '{}' capped at {} occurrence(s) this tick; remaining missed " +
+                            "slots will fire on subsequent ticks",
+                        row.id, MAX_CATCH_UP_PER_TICK,
+                    )
+                }
+                fired += fire(row, now, plan)
             }
             fired
         }
 
-    private suspend fun fireOne(row: RecurringJobRow, now: Instant, next: Instant): Boolean =
+    /** How many jobs to create for [row] this tick and where its next trigger lands. */
+    private fun planFiring(row: RecurringJobRow, now: Instant): FiringPlan = when (row.misfirePolicy) {
+        MisfirePolicy.CATCH_UP_ALL -> {
+            val cu = CronExpr.catchUpPlan(
+                expression = row.cron,
+                firstMissed = row.nextTriggerAt,
+                now = now,
+                timezone = row.timezone,
+                limit = MAX_CATCH_UP_PER_TICK,
+            )
+            FiringPlan(occurrences = cu.occurrences, nextTrigger = cu.nextTrigger, capped = cu.capped)
+        }
+        // CATCH_UP_ONE + SKIP collapse the backlog into a single fire and resume from the
+        // next future slot. Strict SKIP-if-missed needs downtime tracking we don't have.
+        MisfirePolicy.CATCH_UP_ONE, MisfirePolicy.SKIP ->
+            FiringPlan(occurrences = 1, nextTrigger = CronExpr.nextAfter(row.cron, now, row.timezone), capped = false)
+    }
+
+    private data class FiringPlan(val occurrences: Int, val nextTrigger: Instant, val capped: Boolean)
+
+    /** Returns the number of `job` rows created (0 if another replica won the CAS). */
+    private suspend fun fire(row: RecurringJobRow, now: Instant, plan: FiringPlan): Int =
         withContext(Dispatchers.IO) {
             suspendTransaction(db = database) {
                 // CAS the recurring row first — if another replica fired in between our
-                // findDue and now, this returns false and the rest of the txn rolls back.
+                // findDue and now, this returns false and the rest of the txn rolls back
+                // (including every catch-up job insert below).
                 val claimed = recurringJobs.markFiredAndScheduleNext(
                     id = row.id,
                     expectedLastTriggeredAt = row.lastTriggeredAt,
                     firedAt = now,
-                    next = next,
+                    next = plan.nextTrigger,
                 )
                 if (!claimed) {
                     log.debug("Recurring '{}' already fired by another replica — skipping", row.id)
-                    return@suspendTransaction false
+                    return@suspendTransaction 0
                 }
-
-                val jobId = Uuid.random()
-                val jobRow = JobRow(
-                    id = jobId,
-                    state = JobState.ENQUEUED,
-                    queue = row.queue,
-                    priority = JobPriority(row.priority),
-                    payloadType = row.payloadType,
-                    payloadJson = row.payloadJson,
-                    scheduledAt = null,
-                    attempts = 0,
-                    maxAttempts = coreConfig.defaultMaxAttempts,
-                    timeoutSeconds = null,
-                    lockedBy = null,
-                    lockedUntil = null,
-                    pendingDeps = 0,
-                    version = 0,
-                    idempotencyKey = null,
-                    targetNode = row.targetNode,
-                    targetTag = row.targetTag,
-                    progress = null,
-                    progressMsg = null,
-                    progressUpdatedAt = null,
-                    startedAt = null,
-                    durationMs = null,
-                    cancelRequestedAt = null,
-                    cancelRequestedBy = null,
-                    contextJson = null,
-                    createdAt = now,
-                    updatedAt = now,
-                )
-                jobs.insert(jobRow)
-                outbox.insert(
-                    NewOutboxEntry(
-                        jobId = jobId,
-                        routingKey = routingKeyFor(row),
-                        priority = row.priority,
-                        delayMs = 0,
-                    ),
-                )
-                true
+                repeat(plan.occurrences) { insertJobAndOutbox(row, now) }
+                plan.occurrences
             }
         }
+
+    private suspend fun insertJobAndOutbox(row: RecurringJobRow, now: Instant) {
+        val jobId = Uuid.random()
+        val jobRow = JobRow(
+            id = jobId,
+            state = JobState.ENQUEUED,
+            queue = row.queue,
+            priority = JobPriority(row.priority),
+            payloadType = row.payloadType,
+            payloadJson = row.payloadJson,
+            scheduledAt = null,
+            attempts = 0,
+            maxAttempts = coreConfig.defaultMaxAttempts,
+            timeoutSeconds = null,
+            lockedBy = null,
+            lockedUntil = null,
+            pendingDeps = 0,
+            version = 0,
+            idempotencyKey = null,
+            targetNode = row.targetNode,
+            targetTag = row.targetTag,
+            progress = null,
+            progressMsg = null,
+            progressUpdatedAt = null,
+            startedAt = null,
+            durationMs = null,
+            cancelRequestedAt = null,
+            cancelRequestedBy = null,
+            contextJson = null,
+            createdAt = now,
+            updatedAt = now,
+        )
+        jobs.insert(jobRow)
+        outbox.insert(
+            NewOutboxEntry(
+                jobId = jobId,
+                routingKey = routingKeyFor(row),
+                priority = row.priority,
+                delayMs = 0,
+            ),
+        )
+    }
 
     private fun routingKeyFor(row: RecurringJobRow): String = when {
         row.targetNode != null -> "node.${row.targetNode}"
@@ -155,5 +185,12 @@ public class FireDueRecurringJobsUseCase(
 
     public companion object {
         public const val DEFAULT_BATCH_SIZE: Int = 100
+
+        /**
+         * Upper bound on `CATCH_UP_ALL` jobs created for one recurring row in a single tick.
+         * Keeps a long downtime with a frequent cron from flooding one transaction; the
+         * remainder is not dropped — it fires on subsequent ticks (see [planFiring]).
+         */
+        public const val MAX_CATCH_UP_PER_TICK: Int = 500
     }
 }

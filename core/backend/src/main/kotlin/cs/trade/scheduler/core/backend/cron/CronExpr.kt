@@ -53,6 +53,47 @@ public object CronExpr {
     public fun nextAfter(expression: String, reference: Instant, timezone: String? = null): Instant =
         nextExecution(parse(expression), reference, timezoneOrUtc(timezone))
 
+    /**
+     * Catch-up plan for `CATCH_UP_ALL` misfire handling (DESIGN.md 8.5). Walks cron slots
+     * forward starting at [firstMissed] (inclusive — it's the slot that made the recurring
+     * row due) and counts every slot that is `<= now`, capped at [limit].
+     *
+     * The returned [CatchUpPlan.nextTrigger] is the slot to persist as the row's next
+     * trigger:
+     *  - under the cap → the first slot strictly after [now] (fully caught up);
+     *  - at the cap ([CatchUpPlan.capped] = true) → the next still-missed slot (`<= now`),
+     *    so the remaining occurrences fire on later ticks instead of being silently dropped.
+     *
+     * [firstMissed] must be a real cron slot (callers pass the row's `nextTriggerAt`, which
+     * always is). Because [nextExecution] is strictly-after, `slot` increases every step, so
+     * the walk always terminates — at the latest when it passes [now] or hits [limit].
+     */
+    public fun catchUpPlan(
+        expression: String,
+        firstMissed: Instant,
+        now: Instant,
+        timezone: String? = null,
+        limit: Int,
+    ): CatchUpPlan {
+        require(limit > 0) { "catchUpPlan limit must be positive, got $limit" }
+        val cron = parse(expression)
+        val zone = timezoneOrUtc(timezone)
+        var slot = firstMissed
+        var count = 0
+        while (slot <= now && count < limit) {
+            count++
+            slot = nextExecution(cron, slot, zone)
+        }
+        return CatchUpPlan(occurrences = count, nextTrigger = slot, capped = slot <= now)
+    }
+
+    /** Result of [catchUpPlan]: how many missed slots to fire and where the next trigger lands. */
+    public data class CatchUpPlan(
+        val occurrences: Int,
+        val nextTrigger: Instant,
+        val capped: Boolean,
+    )
+
     /** IANA → [ZoneId], with UTC fallback. */
     public fun timezoneOrUtc(iana: String?): ZoneId =
         if (iana.isNullOrBlank()) ZoneOffset.UTC else ZoneId.of(iana)

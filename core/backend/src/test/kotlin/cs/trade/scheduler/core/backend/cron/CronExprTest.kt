@@ -138,4 +138,90 @@ class CronExprTest {
         val next2 = CronExpr.nextExecution(cron, ref)
         assertEquals(next1, next2)
     }
+
+    // --- catchUpPlan: CATCH_UP_ALL misfire support (DESIGN.md 8.5 / 22-recurring) --------
+
+    @Test
+    fun `catchUpPlan counts every missed minute and resumes after now`() {
+        // firstMissed 10:00, now 10:05 → slots 10:00..10:05 inclusive = 6 occurrences,
+        // next trigger is the first slot strictly after now (10:06), nothing capped.
+        val plan = CronExpr.catchUpPlan(
+            expression = "* * * * *",
+            firstMissed = at(2026, 5, 27, 10, 0),
+            now = at(2026, 5, 27, 10, 5),
+            limit = 100,
+        )
+        assertEquals(6, plan.occurrences)
+        assertEquals(at(2026, 5, 27, 10, 6), plan.nextTrigger)
+        assertEquals(false, plan.capped)
+    }
+
+    @Test
+    fun `catchUpPlan with no backlog fires exactly the due slot`() {
+        // firstMissed == now: only the due slot itself counts, next trigger is the slot after.
+        val plan = CronExpr.catchUpPlan(
+            expression = "* * * * *",
+            firstMissed = at(2026, 5, 27, 10, 0),
+            now = at(2026, 5, 27, 10, 0),
+            limit = 100,
+        )
+        assertEquals(1, plan.occurrences)
+        assertEquals(at(2026, 5, 27, 10, 1), plan.nextTrigger)
+        assertEquals(false, plan.capped)
+    }
+
+    @Test
+    fun `catchUpPlan respects the cron cadence — hourly, not per-minute`() {
+        // "0 * * * *" = top of each hour. Backlog 10:00 → 12:30 has 3 slots (10,11,12:00).
+        val plan = CronExpr.catchUpPlan(
+            expression = "0 * * * *",
+            firstMissed = at(2026, 5, 27, 10, 0),
+            now = at(2026, 5, 27, 12, 30),
+            limit = 100,
+        )
+        assertEquals(3, plan.occurrences)
+        assertEquals(at(2026, 5, 27, 13, 0), plan.nextTrigger)
+        assertEquals(false, plan.capped)
+    }
+
+    @Test
+    fun `catchUpPlan caps the batch and parks the next trigger at the first un-fired slot`() {
+        // 11 slots due (10:00..10:10) but limit=3 → fire 3, leave next trigger at the 4th
+        // (10:03, still <= now) so the remainder catches up on later ticks. capped=true.
+        val plan = CronExpr.catchUpPlan(
+            expression = "* * * * *",
+            firstMissed = at(2026, 5, 27, 10, 0),
+            now = at(2026, 5, 27, 10, 10),
+            limit = 3,
+        )
+        assertEquals(3, plan.occurrences)
+        assertEquals(at(2026, 5, 27, 10, 3), plan.nextTrigger)
+        assertEquals(true, plan.capped)
+        assertTrue(plan.nextTrigger <= at(2026, 5, 27, 10, 10), "parked trigger must still be in the backlog")
+    }
+
+    @Test
+    fun `catchUpPlan walks daily slots in the row timezone`() {
+        // Daily 09:00 Berlin, missed 3 days. Proves cadence + tz threading for the billing
+        // use case. firstMissed = 2026-05-27 09:00 Berlin; now = 2026-05-30 12:00 Berlin.
+        val plan = CronExpr.catchUpPlan(
+            expression = "0 9 * * *",
+            firstMissed = at(2026, 5, 27, 9, 0, berlin),
+            now = at(2026, 5, 30, 12, 0, berlin),
+            timezone = "Europe/Berlin",
+            limit = 100,
+        )
+        // 27th, 28th, 29th, 30th at 09:00 = 4 occurrences; next is the 31st.
+        assertEquals(4, plan.occurrences)
+        assertEquals(at(2026, 5, 31, 9, 0, berlin), plan.nextTrigger)
+        assertEquals(false, plan.capped)
+    }
+
+    @Test
+    fun `catchUpPlan rejects a non-positive limit`() {
+        val ex = runCatching {
+            CronExpr.catchUpPlan("* * * * *", at(2026, 5, 27, 10, 0), at(2026, 5, 27, 10, 5), limit = 0)
+        }.exceptionOrNull()
+        assertTrue(ex is IllegalArgumentException, "limit<=0 must throw IAE, got $ex")
+    }
 }
