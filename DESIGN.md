@@ -2481,7 +2481,7 @@ class Mailer {
 
 ## 22. Operational features (pause / node-pinning / progress / metrics)
 
-### 22.1. Pause/disable job types из dashboard
+### 22.1. Pause/disable job types из dashboard — shipped
 
 "Feature flag" для типов: временно остановить обработку всех jobs определённого типа.
 
@@ -2509,7 +2509,7 @@ POST   /api/types/{type}/unpause            → 202; warning если depth > 10
 
 **UI:** новая страница `/types` со списком всех `payload_type` (включая function-ref descriptors). Pause/unpause кнопки + modal для reason.
 
-### 22.2. Node-pinning и tag-based routing
+### 22.2. Node-pinning и tag-based routing — shipped
 
 Use cases: GPU-нода для ML, sticky processing (нода держит кэш), debug ("перезапустить fail на конкретной ноде").
 
@@ -2552,7 +2552,7 @@ scheduler.recurring("nightly-gpu", "0 3 * * *", BatchTrain(), targetTag = "gpu")
 
 **Edge case:** target_node/target_tag не существует среди alive workers → job висит в queue вечно. **Alert** в WorkerList: "5 jobs waiting for offline node 'gpu-worker-1'" с кнопкой re-route на доступную ноду.
 
-### 22.3. Progress reporting
+### 22.3. Progress reporting — shipped
 
 Handler через `JobContext.updateProgress(progress, msg)` обновляет состояние, UI рисует прогресс-бар.
 
@@ -2592,7 +2592,7 @@ Schema columns добавлены в `job` (см. секцию 6): `progress REA
 - JobDetail: большой progress bar + текущий `progress_msg`
 - Timeline получает события `{t: "job_progress", id, progress: 0.5, msg: "..."}` через WS firehose, обновляет live
 
-### 22.4. Per-type stats в UI (avg/min/max/p95)
+### 22.4. Per-type stats в UI (avg/min/max/p95) — shipped (Phase 3)
 
 В дополнение к Prometheus — простая агрегация в БД для быстрого взгляда без Grafana.
 
@@ -2637,7 +2637,7 @@ GROUP BY payload_type, queue;
 
 **UI:** страница `/types` (та же что для pause) — таблица с этими колонками, range selector (1h / 24h / 7d / 30d), sort by avg/p95/failure_rate.
 
-### 22.5. Prometheus metrics endpoint (для Grafana)
+### 22.5. Prometheus metrics endpoint (для Grafana) — shipped (Phase 3)
 
 Micrometer + Prometheus registry, `/metrics` endpoint в scheduler-infra:
 
@@ -2734,7 +2734,14 @@ schedulerWorkerModule {
 
 **DAG impact:** cancelled job обрабатывает dependents так же как failed (по `on_failure`: PROPAGATE_FAILURE → cancel cascade, CANCEL_CHILD → cancel, IGNORE → continue с decrement).
 
-### 22.9. Payload schema evolution
+### 22.9. Payload schema evolution — частично
+
+> **Статус аудита (2026-05-28):** forward-compat реализован — `SchedulerCoreConfig.json`
+> ставит `ignoreUnknownKeys = true`, так что добавление полей не ломает старые payload'ы.
+> **GAP:** удаление/переименование *обязательного* поля по-прежнему падает на decode →
+> `WorkerPool.decodePayload` возвращает null → FAILED, но как обычная ошибка (может
+> уйти в retry). Не реализовано: классификация schema-ошибки как терминальной
+> (no-retry) с понятным сообщением + опциональный "park" state. См. пример ниже.
 
 Реальная prod-проблема: в очереди тысячи jobs со старой схемой `SendEmail(userId, template)`, деплой с новой `SendEmail(userId, template, fromAddress)` — старые jobs не парсятся.
 
@@ -2786,7 +2793,15 @@ try {
 
 **Phase 2:** payload schema hash + сравнение для алертов при mismatch.
 
-### 22.10. DAG cycle prevention
+### 22.10. DAG cycle prevention — частично (структура ✅, дедуп ✗)
+
+> **Статус аудита (2026-05-28):** циклы структурно невозможны (нет retroactive
+> `addDependency`) — эта часть в силе. **GAP:** дедупликация дубль-parents НЕ реализована.
+> `enqueueAfter(job, waitFor: List<Uuid>, …)` не делает `.distinct()`, а
+> `JobDependencyRepository.insert` — обычный `insert` (не `insertIgnore`) при композитном
+> PK `(parent_id, child_id)`. Поэтому `after(a, a)` даёт `pendingDeps = 2` и нарушение PK
+> на второй вставке (enqueue падает). Фикс из дизайна ниже (`.distinct()` + ON CONFLICT)
+> не применён.
 
 В текущем API циклы **структурно невозможны:**
 - Dependencies задаются при enqueue child-а
@@ -2815,7 +2830,7 @@ Naive INSERT даст `pending_deps_count = 2` → B никогда не ста�
 
 **Что НЕ делаем:** cycle detection algorithm (нечего детектить), retroactive addDependency API (открыло бы дверь циклам), depth/fan-out validation limits (Phase 2 если будет нужно).
 
-### 22.11. Context propagation (MDC + OpenTelemetry)
+### 22.11. Context propagation (MDC + OpenTelemetry) — shipped
 
 **Проблема:** HTTP handler с `MDC.put("user_id", "123")` enqueue-ит job → через 5 минут на worker-ноде логи handler-а не содержат `user_id`. Невозможно correlate.
 
