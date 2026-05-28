@@ -47,6 +47,10 @@ include(":core:frontend")
 include(":storage-postgres")
 include(":transport-rabbit")
 
+// Optional archival backend — S3-compatible cold storage for the retention loop
+// (DESIGN.md 18.7). Opt-in: pulls the AWS SDK only when a deployment needs it.
+include(":archival-s3")
+
 // Engine — режется по deployment role
 include(":engine-worker")  // ТОЛЬКО в user-app
 include(":engine-infra")   // ТОЛЬКО в scheduler-infra container

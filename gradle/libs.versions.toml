@@ -34,6 +34,10 @@ flyway = "12.6.2"
 # Transport
 amqpClient = "5.30.0"
 
+# Archival — AWS SDK v2 for the optional S3-compatible cold-storage sink (:archival-s3).
+# Works against AWS S3, MinIO, Cloudflare R2, GCS (S3 API) via endpoint override.
+awsSdk = "2.31.78"
+
 # Domain libs
 cronUtils = "9.2.1"
 konform = "0.11.1"
@@ -119,6 +123,12 @@ flywayPostgres = { module = "org.flywaydb:flyway-database-postgresql", version.r
 
 # --- Transport ---
 amqpClient = { module = "com.rabbitmq:amqp-client", version.ref = "amqpClient" }
+
+# --- Archival (S3-compatible sink, :archival-s3) ---
+# BOM pins the version; s3 + url-connection-client are version-less and resolved by it.
+awsBom = { module = "software.amazon.awssdk:bom", version.ref = "awsSdk" }
+awsS3 = { module = "software.amazon.awssdk:s3" }
+awsUrlConnectionClient = { module = "software.amazon.awssdk:url-connection-client" }
 
 # --- Domain libs ---
 cronUtils = { module = "com.cronutils:cron-utils", version.ref = "cronUtils" }
