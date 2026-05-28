@@ -253,6 +253,12 @@ public class DefaultScheduler(
         require(waitFor.isNotEmpty()) {
             "enqueueAfter requires at least one parent — use enqueue() for no-dep jobs"
         }
+        // Dedup parents up front (DESIGN.md 22.10). `after(a, a)` must count as ONE
+        // dependency: a naive `pending_deps = waitFor.size` would leave the child stuck
+        // at 2 while only one parent ever finalises, and the second edge INSERT would hit
+        // the composite PK. `.distinct()` keeps both the counter and the edge set honest;
+        // insertIgnore in the repo is the belt-and-suspenders backstop.
+        val parents = waitFor.distinct()
         // Priority inheritance (DESIGN.md 19.7 Phase 3). When explicit `options.priority`
         // is null AND `inheritPriorityFromParents = true`, look up parents and take the
         // max priority. Skipped if parents have been retention-cleaned by the time we
@@ -261,7 +267,7 @@ public class DefaultScheduler(
         val effectiveOptions = if (options.priority == null && options.inheritPriorityFromParents) {
             val parentMaxPriority = withContext(Dispatchers.IO) {
                 suspendTransaction(db = database) {
-                    waitFor.maxOf { parentId ->
+                    parents.maxOf { parentId ->
                         storage.jobs.findById(parentId)?.priority?.value ?: 0
                     }
                 }
@@ -271,15 +277,15 @@ public class DefaultScheduler(
             options
         }
         val params = buildParams(job, effectiveOptions)
-        // pending_deps starts at waitFor.size; the child sits AWAITING_DEPS with no outbox
-        // row until parents finish and FinalizeJobUseCase promotes it to ENQUEUED.
+        // pending_deps starts at the DISTINCT parent count; the child sits AWAITING_DEPS
+        // with no outbox row until parents finish and FinalizeJobUseCase promotes it.
         val row = newJobRow(params, state = JobState.AWAITING_DEPS, scheduledAt = null)
-            .copy(pendingDeps = waitFor.size)
+            .copy(pendingDeps = parents.size)
 
         withContext(Dispatchers.IO) {
             suspendTransaction(db = database) {
                 storage.jobs.insert(row)
-                for (parentId in waitFor) {
+                for (parentId in parents) {
                     storage.jobDependencies.insert(
                         parentId = parentId,
                         childId = params.jobId,

@@ -2793,15 +2793,13 @@ try {
 
 **Phase 2:** payload schema hash + сравнение для алертов при mismatch.
 
-### 22.10. DAG cycle prevention — частично (структура ✅, дедуп ✗)
+### 22.10. DAG cycle prevention — shipped
 
-> **Статус аудита (2026-05-28):** циклы структурно невозможны (нет retroactive
-> `addDependency`) — эта часть в силе. **GAP:** дедупликация дубль-parents НЕ реализована.
-> `enqueueAfter(job, waitFor: List<Uuid>, …)` не делает `.distinct()`, а
-> `JobDependencyRepository.insert` — обычный `insert` (не `insertIgnore`) при композитном
-> PK `(parent_id, child_id)`. Поэтому `after(a, a)` даёт `pendingDeps = 2` и нарушение PK
-> на второй вставке (enqueue падает). Фикс из дизайна ниже (`.distinct()` + ON CONFLICT)
-> не применён.
+> **Статус (2026-05-28):** циклы структурно невозможны (нет retroactive `addDependency`).
+> Дедуп дубль-parents реализован двумя слоями, как в дизайне: `enqueueAfter` делает
+> `waitFor.distinct()` (и `pendingDeps = distinct.size`), а `JobDependencyRepository.insert`
+> использует `insertIgnore` (ON CONFLICT DO NOTHING) на композитном PK `(parent_id, child_id)`.
+> `after(a, a)` теперь = одна зависимость. Покрыто `DagDedupIntegrationTest`.
 
 В текущем API циклы **структурно невозможны:**
 - Dependencies задаются при enqueue child-а

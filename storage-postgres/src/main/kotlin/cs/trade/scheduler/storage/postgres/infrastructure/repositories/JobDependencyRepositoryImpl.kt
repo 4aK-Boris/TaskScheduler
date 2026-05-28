@@ -11,7 +11,7 @@ import kotlinx.coroutines.withContext
 import org.jetbrains.exposed.v1.core.ResultRow
 import org.jetbrains.exposed.v1.core.eq
 import org.jetbrains.exposed.v1.jdbc.Database
-import org.jetbrains.exposed.v1.jdbc.insert
+import org.jetbrains.exposed.v1.jdbc.insertIgnore
 import org.jetbrains.exposed.v1.jdbc.selectAll
 import org.jetbrains.exposed.v1.jdbc.transactions.suspendTransaction
 import kotlin.uuid.Uuid
@@ -23,7 +23,11 @@ public class JobDependencyRepositoryImpl(
     override suspend fun insert(parentId: Uuid, childId: Uuid, onFailure: OnFailure): Unit =
         withContext(Dispatchers.IO) {
             suspendTransaction(db = database) {
-                JobDependencyTable.insert {
+                // insertIgnore (ON CONFLICT DO NOTHING) on the composite PK (parent_id,
+                // child_id): a duplicate parent for the same child is a no-op rather than a
+                // PK-violation crash (DESIGN.md 22.10). The caller also `.distinct()`s the
+                // parent list, so this is defence-in-depth for the dedup contract.
+                JobDependencyTable.insertIgnore {
                     it[this.parentId] = parentId
                     it[this.childId] = childId
                     it[this.onFailure] = onFailure.name
