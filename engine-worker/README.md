@@ -112,7 +112,6 @@ src/main/kotlin/cs/trade/scheduler/engine/worker/
     models/
       WorkerLease.kt                  — domain value for pickup() result
     usecases/
-      PickupJobUseCase.kt             — CAS pickup, returns JobRow or null
       ScheduleRetryUseCase.kt         — markForRetry + outbox INSERT(delay_ms = backoff)
       FinalizeJobUseCase.kt           — terminal state transitions + DAG fan-out
       PropagateRollupProgressUseCase  — rollup parent updates when a leaf finishes

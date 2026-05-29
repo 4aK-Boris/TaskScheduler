@@ -11,7 +11,7 @@
 - **Что НЕ JobRunr:**
   - RabbitMQ для push-дисптача (JobRunr только polling DB)
   - Compose Multiplatform Web вместо стандартного HTML/JS dashboard
-  - Sealed-class API вместо lambda-magic (lambda через KSP — Phase 2)
+  - Sealed-class API вместо lambda-magic (lambda capture — shipped через K2 compiler plugin, см. 21.9)
   - DAG-зависимости (chains + barriers) встроены в core, не Pro-only
 
 ---
@@ -29,7 +29,7 @@
 | Сериализация payload | kotlinx-serialization JSON | |
 | Cron-парсер | cron-utils (Java) | проверенная либа |
 | DI | Koin | лёгкий, Kotlin-нативный |
-| Lambda capture (Phase 2) | KSP compiler plugin | стабильнее ASM, compile-time, без runtime-магии |
+| Lambda capture — shipped | K2 compiler plugin (IR rewrite) | стабильнее ASM, compile-time, без runtime-магии |
 | Dashboard backend | KTOR (REST + WebSocket) | стандарт для Kotlin web |
 | Dashboard frontend | Compose Multiplatform Web (Wasm) + Decompose навигация | общий `:core:shared` с бэком, type safety через границу |
 | Тесты | Testcontainers | реальный PG + Rabbit для интеграции |
@@ -214,7 +214,7 @@ scheduler.enqueue(mailer::send, 123L, "welcome")
 // target (mailer) — Koin singleton, resolved by Koin при выполнении
 ```
 
-**Phase 2:** полный lambda capture через KSP-плагин. На этапе компиляции `enqueue { mailer.send(123, "welcome") }` транслируется в сгенерированный handler класс. Стабильнее JobRunr'овского ASM-подхода.
+**Shipped (см. 21.9):** полный lambda capture — но через **K2 compiler plugin** (IR-переписывание call-site), не KSP (KSP не умеет переписывать call-site). `enqueueLambda { mailer.send(123, "welcome") }` на этапе компиляции транслируется в эквивалент function-ref enqueue. Стабильнее JobRunr'овского ASM-подхода.
 
 ### 4.4. Compose Multiplatform Web (Wasm) для UI
 
@@ -1246,7 +1246,7 @@ scheduler-infra — **single replica** в MVP. Обоснование:
 - Dashboard недоступен
 - Orphan recovery приостановлена (но lock-и 90с → запас есть)
 
-Всё некритично. Если нужен HA — Phase 2: multi-replica с advisory-lock leader election (код уже готов архитектурно).
+Всё некритично. HA через multi-replica + advisory-lock leader election — shipped (`LeaderElection`, см. историю 2026-05-26): gating для OutboxPublisher/RecurringScheduler/FastForwardTask/RetentionCleanup, release в shutdown.
 
 ### 14.4. Flyway migrations — infra container = "владелец схемы"
 
@@ -2249,7 +2249,7 @@ GROUP BY queue;
 
 **Auto-scaling** — внешняя infra-задача (k8s HPA на основе queue depth метрик), не наша.
 
-**Circuit breaker per queue** — Phase 2, когда будет реальный кейс.
+**Circuit breaker per queue** — shipped (см. 20.8).
 
 ### 20.6. Реалистичные стратегии для пользователя
 
@@ -2258,7 +2258,7 @@ GROUP BY queue;
 | Кейс | Решение |
 |---|---|
 | Predictable burst (90% работы ночью) | Static scaling — больше workers в нужное время |
-| Random spike | k8s HPA на queue depth + Prometheus (Phase 2 для metrics export) |
+| Random spike | k8s HPA на queue depth + Prometheus (`/metrics` — shipped, см. 20.9) |
 | Downstream slow (HTTP API задыхается) | Decrease `concurrency` queue → меньше параллельных вызовов |
 | Producer слишком быстрый | Producer-side rate limiter (semaphore / token bucket) |
 | Permanent overload | Архитектура — больше железа или меньше работы |
@@ -2344,9 +2344,7 @@ koin.get<WorkerMetricsBinder>()  // force eager binding so gauges register at st
 
 ### 20.10. Phase 3+ остатки
 
-| Фича | Зачем |
-|---|---|
-| Backpressure visual indicator в Compose dashboard | "queue under load" badge |
+Не осталось — **backpressure visual indicator shipped**: `QueueHealthBadge` рисует ELEVATED/OVERLOADED pill на JobList по queue depth (см. 20.4).
 
 ---
 
@@ -3003,10 +3001,10 @@ NULL = пересылаем всё (default — для local dev). Production do
 
 (Будет дополняться по мере обсуждения.)
 
-- [ ] **Custom dispatcher per queue (Phase 2):** `queue("cpu", concurrency=4, dispatcher=Dispatchers.Default)` — добавить когда понадобится.
+- [x] **Custom dispatcher per queue — shipped:** `queue("cpu", concurrency=4, dispatcher=Dispatchers.Default)` (см. 13.3, `CustomDispatcherIntegrationTest`).
 - [x] **ArchivalSink — shipped:** file (`FileArchivalSink`) + S3-совместимый (`:archival-s3`, покрывает AWS S3 / MinIO / R2 / GCS-S3-API) бэкенды для архива удаляемых jobs перед DELETE (см. 18.7). Архив `job_event`/`outbox` — по-прежнему через custom sink.
 - [ ] **Priority inheritance в DAG (Phase 2):** `EnqueueOptions(inheritPriorityFromParents = true)` если будет реальный кейс.
-- [ ] **Adaptive prefetch + circuit breaker (Phase 2):** автоматическая адаптация под нагрузку.
+- [x] **Adaptive prefetch + circuit breaker — shipped:** автоматическая адаптация под нагрузку (см. 20.7 / 20.8).
 - [x] **Lambda capture — shipped:** K2 compiler plugin для `enqueueLambda { mailer.send(123) }` (см. 21.9; не KSP — KSP не переписывает call-site).
 
 ---
