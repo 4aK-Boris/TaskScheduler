@@ -20,6 +20,7 @@ import cs.trade.scheduler.storage.postgres.infrastructure.repositories.OutboxRep
 import cs.trade.scheduler.storage.postgres.infrastructure.repositories.RecurringJobRepositoryImpl
 import cs.trade.scheduler.storage.postgres.infrastructure.repositories.WorkerRepositoryImpl
 import cs.trade.scheduler.storage.postgres.infrastructure.scheduler.DefaultScheduler
+import cs.trade.scheduler.storage.postgres.infrastructure.tables.OutboxTable
 import cs.trade.scheduler.transport.rabbit.domain.ConsumerHandle
 import cs.trade.scheduler.transport.rabbit.domain.JobTransport
 import kotlinx.coroutines.CoroutineScope
@@ -28,15 +29,20 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.Serializable
 import org.flywaydb.core.Flyway
+import org.jetbrains.exposed.v1.core.eq
 import org.jetbrains.exposed.v1.jdbc.Database
+import org.jetbrains.exposed.v1.jdbc.selectAll
+import org.jetbrains.exposed.v1.jdbc.transactions.suspendTransaction
 import org.junit.jupiter.api.AfterAll
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeAll
+import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestInstance
 import org.testcontainers.containers.PostgreSQLContainer
@@ -127,6 +133,20 @@ class OutboxPublisherLeaderGateTest {
         runCatching { postgres?.stop() }
     }
 
+    /**
+     * Start each test from an empty outbox. The "still unpublished" / "drains the row"
+     * assertions read `findUnpublished(limit = 1000)`; on a shared EXTERNAL_PG, hundreds of
+     * leftover unpublished rows from other suites can push our row past the limit window (or
+     * a leaked publisher could drain it), so we isolate by truncating first. `job CASCADE`
+     * also clears the outbox. Mirrors `SafetyNetIntegrationTest.cleanTables`.
+     */
+    @BeforeEach
+    fun cleanTables() {
+        dataSource.connection.use { conn ->
+            conn.createStatement().use { it.execute("TRUNCATE job RESTART IDENTITY CASCADE") }
+        }
+    }
+
     private fun newPublisher(transport: JobTransport) =
         OutboxPublisher(
             publishBatch = PublishOutboxBatchUseCase(
@@ -143,6 +163,17 @@ class OutboxPublisherLeaderGateTest {
             coreConfig = SchedulerCoreConfig().apply { nodeId = "test-leader-gate" },
         )
 
+    // Direct per-row check of OUR outbox row, by jobId — immune to other suites' leftover
+    // rows and to the `findUnpublished(limit)` window (on a shared EXTERNAL_PG the limited
+    // list can omit our row when many others exist). null = no row; true = exists &
+    // unpublished; false = exists & published.
+    private suspend fun ourRowUnpublished(jobId: Uuid): Boolean? = withContext(Dispatchers.IO) {
+        suspendTransaction(db = database) {
+            OutboxTable.selectAll().where { OutboxTable.jobId eq jobId }
+                .firstOrNull()?.let { it[OutboxTable.publishedAt] == null }
+        }
+    }
+
     @Test
     fun `gated publisher — follower no-op, then flip to leader drains the row`() = runBlocking {
         // Combined single-test scenario so the two phases share one scope and one
@@ -156,9 +187,9 @@ class OutboxPublisherLeaderGateTest {
         try {
             val jobId = scheduler.enqueue(Noop(System.currentTimeMillis()))
             // Sanity: our row IS in the unpublished set right after enqueue.
-            assertTrue(
-                outbox.findUnpublished(limit = 1000).any { it.jobId == jobId },
-                "Our enqueued job's outbox row must be in unpublished set immediately after enqueue",
+            assertEquals(
+                true, ourRowUnpublished(jobId),
+                "Our enqueued job's outbox row must exist and be unpublished immediately after enqueue",
             )
 
             pub.start(scope, intervalMillis = 50L, isLeader = { isLeader.get() })
@@ -168,8 +199,8 @@ class OutboxPublisherLeaderGateTest {
             // unrelated rows left behind by other tests don't pollute the signal.
             delay(600.milliseconds)
             assertEquals(0, transport.publishCount.get(), "transport.publish must not be invoked on follower")
-            assertTrue(
-                outbox.findUnpublished(limit = 1000).any { it.jobId == jobId },
+            assertEquals(
+                true, ourRowUnpublished(jobId),
                 "Our row must still be unpublished while isLeader=false",
             )
 
@@ -178,7 +209,7 @@ class OutboxPublisherLeaderGateTest {
 
             val ok = withTimeoutOrNull(3.seconds) {
                 while (true) {
-                    val stillThere = outbox.findUnpublished(limit = 1000).any { it.jobId == jobId }
+                    val stillThere = ourRowUnpublished(jobId) == true
                     if (!stillThere && transport.publishCount.get() >= 1) break
                     delay(25.milliseconds)
                 }

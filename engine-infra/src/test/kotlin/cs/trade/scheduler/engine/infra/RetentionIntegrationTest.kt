@@ -35,6 +35,7 @@ import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeAll
+import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestInstance
 import org.testcontainers.containers.PostgreSQLContainer
@@ -135,6 +136,21 @@ class RetentionIntegrationTest {
         // postgres is null when EXTERNAL_PG_URL provisioned the DB (we don't own its
         // lifecycle). Only stop the container we actually started.
         runCatching { postgres?.stop() }
+    }
+
+    /**
+     * Clean the tables the retention use case scans, before EVERY test. The use case runs
+     * over the WHOLE table (all states / the full outbox), and several cases assert "only my
+     * rows were touched" — so leftover rows from earlier tests OR (on a shared EXTERNAL_PG)
+     * other modules' suites would skew the counts and even orphan outbox FKs. `job CASCADE`
+     * also clears outbox / job_event / job_dependency / job_rollup. Mirrors
+     * `SafetyNetIntegrationTest.cleanTables` / `QueuesHealthRoutingIntegrationTest`.
+     */
+    @BeforeEach
+    fun cleanTables() {
+        dataSource.connection.use { conn ->
+            conn.createStatement().use { it.execute("TRUNCATE job, idempotency_log RESTART IDENTITY CASCADE") }
+        }
     }
 
     @Test
