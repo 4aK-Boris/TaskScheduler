@@ -55,7 +55,7 @@ class PayloadSchemaRepositoryIntegrationTest {
             password = pass
             maximumPoolSize = 3
         })
-        Flyway.configure().dataSource(dataSource).load().migrate()
+        Flyway.configure().dataSource(dataSource).locations("classpath:scheduler/migration").load().migrate()
         repo = PayloadSchemaRepositoryImpl(Database.connect(dataSource))
     }
 

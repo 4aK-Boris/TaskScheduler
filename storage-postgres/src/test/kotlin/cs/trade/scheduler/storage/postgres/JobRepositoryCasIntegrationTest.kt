@@ -106,7 +106,7 @@ class JobRepositoryCasIntegrationTest {
             maximumPoolSize = 8
             addDataSourceProperty("stringtype", "unspecified")
         })
-        Flyway.configure().dataSource(dataSource).load().migrate()
+        Flyway.configure().dataSource(dataSource).locations("classpath:scheduler/migration").load().migrate()
         database = Database.connect(dataSource)
         jobEvents = JobEventRepositoryImpl(database)
         // Pass jobEvents in so MANUAL_REROUTE / MANUAL_RETRY rows actually get recorded;

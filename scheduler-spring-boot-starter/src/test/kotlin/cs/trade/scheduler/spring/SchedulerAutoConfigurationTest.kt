@@ -96,7 +96,7 @@ class SchedulerAutoConfigurationTest {
                 addDataSourceProperty("stringtype", "unspecified")
             })
             try {
-                Flyway.configure().dataSource(ds).load().migrate()
+                Flyway.configure().dataSource(ds).locations("classpath:scheduler/migration").load().migrate()
             } finally {
                 ds.close()
             }

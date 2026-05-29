@@ -102,7 +102,7 @@ class JobContextProgressIntegrationTest {
             addDataSourceProperty("stringtype", "unspecified")
         })
 
-        Flyway.configure().dataSource(dataSource).load().migrate()
+        Flyway.configure().dataSource(dataSource).locations("classpath:scheduler/migration").load().migrate()
 
         database = Database.connect(dataSource)
         jobs = JobRepositoryImpl(database)

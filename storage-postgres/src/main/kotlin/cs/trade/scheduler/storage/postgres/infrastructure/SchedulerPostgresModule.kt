@@ -77,6 +77,7 @@ public fun schedulerPostgresModule(configure: SchedulerPostgresConfig.() -> Unit
     if (config.runMigrations) {
         Flyway.configure()
             .dataSource(dataSource)
+            .locations(SCHEDULER_MIGRATION_LOCATION)
             .load()
             .migrate()
     } else if (config.failFastOnSchemaMismatch) {
@@ -85,7 +86,7 @@ public fun schedulerPostgresModule(configure: SchedulerPostgresConfig.() -> Unit
         // clear message rather than the cluster hitting a "column does not exist"
         // exception three days later when someone enqueues an unusual job. See
         // DESIGN.md 14.4.
-        val flyway = Flyway.configure().dataSource(dataSource).load()
+        val flyway = Flyway.configure().dataSource(dataSource).locations(SCHEDULER_MIGRATION_LOCATION).load()
         val info = flyway.info()
         val pending = info.pending()
         if (pending.isNotEmpty()) {

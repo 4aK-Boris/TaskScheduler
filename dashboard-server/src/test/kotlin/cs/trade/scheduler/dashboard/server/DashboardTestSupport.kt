@@ -75,7 +75,7 @@ internal object DashboardTestSupport {
         // = true }` alone because the module's failFastOnSchemaMismatch=true path triggers
         // when runMigrations=false against an out-of-date schema — we want migrations
         // applied unconditionally for tests.
-        Flyway.configure().dataSource(dataSource).load().migrate()
+        Flyway.configure().dataSource(dataSource).locations("classpath:scheduler/migration").load().migrate()
         return Storage(dataSource, container, jdbcUrl, user, pass)
     }
 
