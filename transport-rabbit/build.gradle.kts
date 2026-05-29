@@ -1,5 +1,6 @@
 plugins {
     id("buildsrc.convention.kotlin-jvm")
+    id("buildsrc.convention.publish")
     alias(libs.plugins.kotlinPluginSerialization)
     alias(libs.plugins.koinCompiler)
 }
