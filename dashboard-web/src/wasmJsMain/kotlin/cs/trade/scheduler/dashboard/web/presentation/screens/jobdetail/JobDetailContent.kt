@@ -84,6 +84,7 @@ public fun JobDetailContent(component: JobDetailComponent) {
                     cancelMessage = state.cancelResult?.name,
                     retrying = state.retrying,
                     onRetry = component::onRetryClicked,
+                    onRetryOnce = component::onRetryOnceClicked,
                     retryMessage = state.retryResult?.name,
                     deleting = state.deleting,
                     confirmingDelete = state.confirmingDelete,
@@ -117,6 +118,7 @@ private fun JobDetailBody(
     cancelMessage: String?,
     retrying: Boolean,
     onRetry: () -> Unit,
+    onRetryOnce: () -> Unit,
     retryMessage: String?,
     deleting: Boolean,
     confirmingDelete: Boolean,
@@ -228,11 +230,21 @@ private fun JobDetailBody(
             // deliberate end-states. Backend enforces this too (returns NOT_FAILED), but
             // hiding the button keeps the UI honest.
             if (job.state == JobState.FAILED) {
+                // "Retry": reset attempts to 0 → full fresh budget ("I fixed the cause").
                 Button(
                     onClick = onRetry,
                     enabled = !retrying && !cancelling && !deleting,
                 ) {
                     Text(if (retrying) "Retrying…" else "Retry")
+                }
+                // "Retry +1": exactly one more attempt without resetting the budget — for a
+                // suspected-transient failure where a full fresh budget would be overkill
+                // (DESIGN.md 9.5). Secondary styling so the primary "Retry" stays dominant.
+                OutlinedButton(
+                    onClick = onRetryOnce,
+                    enabled = !retrying && !cancelling && !deleting,
+                ) {
+                    Text(if (retrying) "Retrying…" else "Retry +1")
                 }
             }
             // Delete is terminal-only — backend rejects others with NOT_TERMINAL but UI

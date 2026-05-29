@@ -5,6 +5,7 @@ import kotlin.reflect.KFunction
 import cs.trade.scheduler.shared.CancelResult
 import cs.trade.scheduler.shared.DeleteResult
 import cs.trade.scheduler.shared.RerouteResult
+import cs.trade.scheduler.shared.RetryMode
 import cs.trade.scheduler.shared.RetryResult
 import kotlin.time.Instant
 import kotlin.time.Duration
@@ -67,15 +68,23 @@ public interface Scheduler {
     public suspend fun cancel(jobId: Uuid, by: String? = null): CancelResult
 
     /**
-     * Operator-initiated MANUAL_RETRY (DESIGN.md 18.6). Only FAILED rows are retryable —
-     * see [RetryResult] for the full outcome semantics. Resets `attempts` to 0 and
-     * re-enqueues with a fresh outbox row (Rabbit picks it up the same way as a normal
-     * enqueue). DAG dependents that already cascaded to FAILED on the original failure
-     * are NOT auto-revived — operator must retry each branch they want re-run.
+     * Operator-initiated MANUAL_RETRY (DESIGN.md 18.6 / 9.5). Only FAILED rows are retryable —
+     * see [RetryResult] for the full outcome semantics. Re-enqueues with a fresh outbox row
+     * (Rabbit picks it up the same way as a normal enqueue). DAG dependents that already
+     * cascaded to FAILED on the original failure are NOT auto-revived — operator must retry
+     * each branch they want re-run.
+     *
+     * [mode] picks the attempt-budget policy ([RetryMode.FRESH_BUDGET] resets `attempts` to 0,
+     * [RetryMode.ONCE] grants exactly one more execution); the dashboard exposes both as the
+     * "Retry" and "Retry +1" buttons.
      *
      * @param by free-form identifier (user id, system name) recorded on the row for audit.
      */
-    public suspend fun retry(jobId: Uuid, by: String? = null): RetryResult
+    public suspend fun retry(
+        jobId: Uuid,
+        by: String? = null,
+        mode: RetryMode = RetryMode.FRESH_BUDGET,
+    ): RetryResult
 
     /**
      * Operator-initiated MANUAL_DELETE (DESIGN.md 18.6). Terminal-only — in-flight rows

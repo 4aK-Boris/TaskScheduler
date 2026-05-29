@@ -6,6 +6,7 @@ import cs.trade.scheduler.core.backend.events.EventBus
 import cs.trade.scheduler.shared.JobPriority
 import cs.trade.scheduler.shared.JobState
 import cs.trade.scheduler.shared.OnFailure
+import cs.trade.scheduler.shared.RetryMode
 import cs.trade.scheduler.shared.events.WebSocketEvent
 import cs.trade.scheduler.storage.postgres.domain.models.Job
 import cs.trade.scheduler.storage.postgres.domain.models.JobListFilter
@@ -400,19 +401,39 @@ public class JobRepositoryImpl(
         jobId: Uuid,
         expectedVersion: Int,
         actor: String?,
+        mode: RetryMode,
     ): Boolean = withContext(Dispatchers.IO) {
         suspendTransaction(db = database) {
             val now = Clock.System.now().toOffsetDateTimeUtc()
-            // CAS on (id, version, state=FAILED). Reset attempts to 0 so the retry gets
-            // a fresh budget — an exhausted job would otherwise immediately re-fail.
-            // Defensive lock/cancel clears keep future-proof if the state machine evolves.
+            // The attempt budget depends on [mode]:
+            //  - FRESH_BUDGET resets to 0 so the retry gets a full fresh budget (an
+            //    exhausted job would otherwise immediately re-fail).
+            //  - ONCE parks attempts one below max_attempts: pickup bumps it to
+            //    max_attempts, so the worker's `attempts < maxAttempts` gate fails the
+            //    moment this run does — exactly one more execution, then back to FAILED,
+            //    no auto-retry storm. max_attempts is immutable post-enqueue, so reading
+            //    it here and CAS-updating below is race-free (a stale row just fails the
+            //    state/version guard and returns false).
+            val newAttempts = when (mode) {
+                RetryMode.FRESH_BUDGET -> 0
+                RetryMode.ONCE -> {
+                    val max = JobTable.selectAll()
+                        .where { JobTable.id eq jobId }
+                        .firstOrNull()
+                        ?.get(JobTable.maxAttempts)
+                        ?: return@suspendTransaction false
+                    (max - 1).coerceAtLeast(0)
+                }
+            }
+            // CAS on (id, version, state=FAILED). Defensive lock/cancel clears keep this
+            // future-proof if the state machine evolves.
             val rows = JobTable.update({
                 (JobTable.id eq jobId) and
                     (JobTable.version eq expectedVersion) and
                     (JobTable.state eq JobState.FAILED.name)
             }) {
                 it[state] = JobState.ENQUEUED.name
-                it[attempts] = 0
+                it[attempts] = newAttempts
                 it[lockedBy] = null
                 it[lockedUntil] = null
                 it[cancelRequestedAt] = null
@@ -424,7 +445,7 @@ public class JobRepositoryImpl(
             if (retried) {
                 recordEvent(
                     jobId,
-                    "MANUAL_RETRY",
+                    if (mode == RetryMode.ONCE) "MANUAL_RETRY_ONCE" else "MANUAL_RETRY",
                     prev = JobState.FAILED,
                     new = JobState.ENQUEUED,
                     actor = actor,

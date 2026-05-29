@@ -1,6 +1,7 @@
 package cs.trade.scheduler.storage.postgres.domain.repositories
 
 import cs.trade.scheduler.shared.JobState
+import cs.trade.scheduler.shared.RetryMode
 import cs.trade.scheduler.storage.postgres.domain.models.Job
 import cs.trade.scheduler.storage.postgres.domain.models.JobListFilter
 import cs.trade.scheduler.storage.postgres.domain.models.PagedResult
@@ -291,15 +292,22 @@ public interface JobRepository {
     ): Boolean
 
     /**
-     * Operator-initiated MANUAL_RETRY (DESIGN.md 18.6). FAILED → ENQUEUED in one CAS
-     * UPDATE: `attempts = 0`, clear lock fields, clear `cancel_requested_*` defensively,
-     * bump version. Records a `MANUAL_RETRY` event with [actor].
+     * Operator-initiated MANUAL_RETRY (DESIGN.md 18.6 / 9.5). FAILED → ENQUEUED in one CAS
+     * UPDATE: clear lock fields, clear `cancel_requested_*` defensively, bump version, and
+     * set `attempts` per [mode] — 0 for [RetryMode.FRESH_BUDGET] (full fresh budget) or
+     * `max_attempts - 1` for [RetryMode.ONCE] (exactly one more run, then back to FAILED).
+     * Records a `MANUAL_RETRY` (FRESH_BUDGET) or `MANUAL_RETRY_ONCE` (ONCE) event with [actor].
      *
      * State-scoped to FAILED — other states return false (caller decides via [RetryResult]).
      * Returns true on success; false on either version mismatch or non-FAILED state.
      * Caller (Scheduler.retry) tells the two apart by re-reading the row.
      */
-    public suspend fun manualRetry(jobId: Uuid, expectedVersion: Int, actor: String?): Boolean
+    public suspend fun manualRetry(
+        jobId: Uuid,
+        expectedVersion: Int,
+        actor: String?,
+        mode: RetryMode = RetryMode.FRESH_BUDGET,
+    ): Boolean
 
     /**
      * Persist a derived rollup-progress sample (DAG variant 3). Unlike [setProgress], this

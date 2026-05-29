@@ -19,6 +19,7 @@ import cs.trade.scheduler.dashboard.server.domain.usecases.RetryJobUseCase
 import cs.trade.scheduler.shared.CancelResult
 import cs.trade.scheduler.shared.DeleteResult
 import cs.trade.scheduler.shared.RerouteResult
+import cs.trade.scheduler.shared.RetryMode
 import cs.trade.scheduler.shared.RetryResult
 import cs.trade.scheduler.shared.dto.BulkIdsRequest
 import cs.trade.scheduler.shared.dto.CancelJobResponse
@@ -169,7 +170,7 @@ public fun Route.configureJobsRouting() {
                 )
             }
 
-            // POST /api/jobs/{id}/retry?by=admin
+            // POST /api/jobs/{id}/retry?by=admin&mode=once
             post("/retry") {
                 val rawId = extractor.extractJobId(call)
                 val jobId = runCatching { Uuid.parse(rawId) }.getOrElse {
@@ -180,7 +181,14 @@ public fun Route.configureJobsRouting() {
                 // ("by" query param OR auth principal). Same audit semantics for both
                 // manual actions per DESIGN.md 18.6.
                 val by = call.request.queryParameters["by"]
-                retryJob(jobId, by).fold(
+                // ?mode=once → "Retry +1" (grant exactly one more attempt); anything else /
+                // absent keeps the default fresh-budget retry (DESIGN.md 9.5).
+                val mode = if (call.request.queryParameters["mode"].equals("once", ignoreCase = true)) {
+                    RetryMode.ONCE
+                } else {
+                    RetryMode.FRESH_BUDGET
+                }
+                retryJob(jobId, by, mode).fold(
                     onSuccess = { result ->
                         val status = when (result) {
                             RetryResult.RETRIED -> HttpStatusCode.OK

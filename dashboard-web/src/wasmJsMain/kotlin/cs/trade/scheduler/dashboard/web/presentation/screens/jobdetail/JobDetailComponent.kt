@@ -23,6 +23,8 @@ public interface JobDetailComponent {
     public fun onRefreshClicked()
     public fun onCancelClicked()
     public fun onRetryClicked()
+    /** "Retry +1" — re-run once more without resetting the attempt budget (DESIGN.md 9.5). */
+    public fun onRetryOnceClicked()
     public fun onDeleteClicked()
     public fun onDeleteConfirmCancelled()
     public fun onNeighbourClicked(jobId: String)

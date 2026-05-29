@@ -14,6 +14,7 @@ import cs.trade.scheduler.dashboard.web.domain.usecases.RerouteJobUseCase
 import cs.trade.scheduler.dashboard.web.domain.usecases.RetryJobUseCase
 import cs.trade.scheduler.shared.DeleteResult
 import cs.trade.scheduler.shared.RerouteResult
+import cs.trade.scheduler.shared.RetryMode
 import cs.trade.scheduler.shared.events.WebSocketEvent
 import kotlinx.coroutines.launch
 
@@ -112,14 +113,18 @@ public class DefaultJobDetailComponent(
         }
     }
 
-    override fun onRetryClicked() {
+    override fun onRetryClicked(): Unit = doRetry(RetryMode.FRESH_BUDGET)
+
+    override fun onRetryOnceClicked(): Unit = doRetry(RetryMode.ONCE)
+
+    private fun doRetry(mode: RetryMode) {
         if (_model.value.retrying) return
         // Block double-clicks during cancel too — both actions touch the same row, ordering
         // gets weird if they interleave.
         if (_model.value.cancelling) return
         _model.update { it.copy(retrying = true, retryResult = null) }
         scope.launch {
-            retryJob(_model.value.jobId, by = null).fold(
+            retryJob(_model.value.jobId, by = null, mode = mode).fold(
                 onSuccess = { result ->
                     _model.update { it.copy(retrying = false, retryResult = result) }
                     refresh()

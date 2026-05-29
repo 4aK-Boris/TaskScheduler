@@ -7,8 +7,10 @@ import kotlinx.serialization.Serializable
  * MANUAL_RETRY action (DESIGN.md 18.6). Only FAILED rows are retryable. SUCCEEDED /
  * CANCELLED rows are deliberate end-states and shouldn't be revived.
  *
- *  - [RETRIED] — row was FAILED, flipped to ENQUEUED with `attempts = 0` and a fresh
- *    outbox row. Dashboard records a `MANUAL_RETRY` event with the actor.
+ *  - [RETRIED] — row was FAILED, flipped to ENQUEUED with a fresh outbox row. The
+ *    `attempts` reset depends on [RetryMode] (0 for a fresh budget, `max_attempts - 1` for
+ *    a single extra run). Dashboard records a `MANUAL_RETRY` / `MANUAL_RETRY_ONCE` event
+ *    with the actor.
  *  - [NOT_FAILED] — row exists but isn't in FAILED state (e.g. SUCCEEDED / CANCELLED /
  *    still in-flight). Caller should refresh and decide whether to act.
  *  - [NOT_FOUND] — no row with that id.

@@ -5,6 +5,7 @@ package cs.trade.scheduler.dashboard.server.domain.usecases
 import cs.trade.scheduler.core.backend.Scheduler
 import cs.trade.scheduler.core.backend.usecases.BaseUseCase
 import cs.trade.scheduler.core.backend.usecases.runCatchingWithLogging
+import cs.trade.scheduler.shared.RetryMode
 import cs.trade.scheduler.shared.RetryResult
 import org.koin.core.annotation.Single
 import kotlin.uuid.Uuid
@@ -23,8 +24,12 @@ public class RetryJobUseCase(
     private val scheduler: Scheduler,
 ) : BaseUseCase() {
 
-    public suspend operator fun invoke(jobId: Uuid, by: String?): Result<RetryResult> =
+    public suspend operator fun invoke(
+        jobId: Uuid,
+        by: String?,
+        mode: RetryMode = RetryMode.FRESH_BUDGET,
+    ): Result<RetryResult> =
         runCatchingWithLogging {
-            scheduler.retry(jobId, by)
+            scheduler.retry(jobId, by, mode)
         }
 }

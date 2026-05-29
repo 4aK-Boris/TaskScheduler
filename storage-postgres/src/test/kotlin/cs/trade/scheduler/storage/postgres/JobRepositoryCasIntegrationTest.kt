@@ -7,6 +7,7 @@ import com.zaxxer.hikari.HikariDataSource
 import cs.trade.scheduler.core.backend.SchedulerCoreConfig
 import cs.trade.scheduler.core.backend.handler.Job
 import cs.trade.scheduler.shared.JobState
+import cs.trade.scheduler.shared.RetryMode
 import cs.trade.scheduler.storage.postgres.infrastructure.PostgresStorageProvider
 import cs.trade.scheduler.storage.postgres.infrastructure.repositories.IdempotencyLogRepositoryImpl
 import cs.trade.scheduler.storage.postgres.infrastructure.repositories.JobDependencyRepositoryImpl
@@ -304,6 +305,37 @@ class JobRepositoryCasIntegrationTest {
         val v = jobs.findById(jobId)!!.version
         assertFalse(jobs.manualRetry(jobId, v, "alice"))
         assertEquals(JobState.ENQUEUED, jobs.findById(jobId)!!.state)
+    }
+
+    @Test
+    fun `manualRetry ONCE parks attempts one below maxAttempts and records MANUAL_RETRY_ONCE`() = runBlocking {
+        val jobId = scheduler.enqueue(Noop(23))   // default max_attempts = 3
+
+        val picked = jobs.pickup(jobId, "worker-a", 60_000)!!
+        assertTrue(jobs.markFailed(jobId, picked.version, "boom", "stack"))
+        val failed = jobs.findById(jobId)!!
+        assertEquals(JobState.FAILED, failed.state)
+
+        val ok = jobs.manualRetry(jobId, failed.version, actor = "alice", mode = RetryMode.ONCE)
+        assertTrue(ok)
+
+        val retried = jobs.findById(jobId)!!
+        assertEquals(JobState.ENQUEUED, retried.state)
+        // ONCE grants exactly one more run: attempts parked one below the ceiling, so the
+        // next pickup bumps it to max_attempts and the worker's `attempts < maxAttempts`
+        // gate fails the instant this run errors — straight back to FAILED, no auto-retry.
+        // Contrast the FRESH_BUDGET test above, which asserts attempts == 0.
+        assertEquals(retried.maxAttempts - 1, retried.attempts)
+        assertNull(retried.lockedBy)
+        assertNull(retried.lockedUntil)
+        assertEquals(failed.version + 1, retried.version)
+
+        // Distinct audit event so the timeline tells a one-shot retry apart from a
+        // fresh-budget MANUAL_RETRY.
+        val event = jobEvents.findByJobId(jobId).single { it.eventType == "MANUAL_RETRY_ONCE" }
+        assertEquals("alice", event.actor)
+        assertEquals(JobState.FAILED, event.prevState)
+        assertEquals(JobState.ENQUEUED, event.newState)
     }
 
     // --- releaseProcessingLock ----------------------------------------------------------

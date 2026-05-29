@@ -4,6 +4,7 @@ import cs.trade.scheduler.shared.CancelResult
 import cs.trade.scheduler.shared.DeleteResult
 import cs.trade.scheduler.shared.JobState
 import cs.trade.scheduler.shared.RerouteResult
+import cs.trade.scheduler.shared.RetryMode
 import cs.trade.scheduler.shared.RetryResult
 import cs.trade.scheduler.shared.dto.BulkActionResponse
 import cs.trade.scheduler.shared.dto.JobDetail
@@ -32,7 +33,11 @@ public interface JobsRepository {
 
     public suspend fun cancel(jobId: String, by: String? = null): CancelResult
 
-    public suspend fun retry(jobId: String, by: String? = null): RetryResult
+    public suspend fun retry(
+        jobId: String,
+        by: String? = null,
+        mode: RetryMode = RetryMode.FRESH_BUDGET,
+    ): RetryResult
 
     public suspend fun delete(jobId: String, by: String? = null): DeleteResult
 

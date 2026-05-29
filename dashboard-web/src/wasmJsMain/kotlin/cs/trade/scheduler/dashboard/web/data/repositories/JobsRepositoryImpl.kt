@@ -6,6 +6,7 @@ import cs.trade.scheduler.shared.CancelResult
 import cs.trade.scheduler.shared.DeleteResult
 import cs.trade.scheduler.shared.JobState
 import cs.trade.scheduler.shared.RerouteResult
+import cs.trade.scheduler.shared.RetryMode
 import cs.trade.scheduler.shared.RetryResult
 import cs.trade.scheduler.shared.dto.BulkActionResponse
 import cs.trade.scheduler.shared.dto.BulkIdsRequest
@@ -76,9 +77,12 @@ public class JobsRepositoryImpl : JobsRepository {
         }
     }
 
-    override suspend fun retry(jobId: String, by: String?): RetryResult {
+    override suspend fun retry(jobId: String, by: String?, mode: RetryMode): RetryResult {
         val resp = ApiClient.http.post("$JOBS_PATH/$jobId/retry") {
             by?.let { parameter("by", it) }
+            // Default fresh-budget retry sends no mode param (server defaults to it);
+            // "Retry +1" opts into the single-extra-attempt path (DESIGN.md 9.5).
+            if (mode == RetryMode.ONCE) parameter("mode", "once")
         }
         // Mirror cancel(): server packs the verdict into the body for all expected
         // statuses (200 / 404 / 409). We unpack uniformly and let the screen layer

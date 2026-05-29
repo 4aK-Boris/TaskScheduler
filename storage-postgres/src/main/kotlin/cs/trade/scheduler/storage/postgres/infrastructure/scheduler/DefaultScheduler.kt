@@ -18,6 +18,7 @@ import cs.trade.scheduler.shared.DeleteResult
 import cs.trade.scheduler.shared.JobPriority
 import cs.trade.scheduler.shared.JobState
 import cs.trade.scheduler.shared.RerouteResult
+import cs.trade.scheduler.shared.RetryMode
 import cs.trade.scheduler.shared.RetryResult
 import cs.trade.scheduler.shared.events.WebSocketEvent
 import cs.trade.scheduler.storage.postgres.domain.StorageProvider
@@ -554,7 +555,7 @@ public class DefaultScheduler(
         )
     }
 
-    override suspend fun retry(jobId: Uuid, by: String?): RetryResult {
+    override suspend fun retry(jobId: Uuid, by: String?, mode: RetryMode): RetryResult {
         // Bounded retry — if CAS keeps losing, the row is being concurrently mutated.
         // After CANCEL_ATTEMPTS we step back and report whatever final state we see.
         repeat(CANCEL_ATTEMPTS) {
@@ -565,7 +566,7 @@ public class DefaultScheduler(
             // ENQUEUED row with no Rabbit dispatch row (job stuck) or vice versa.
             val ok = withContext(Dispatchers.IO) {
                 suspendTransaction(db = database) {
-                    val updated = storage.jobs.manualRetry(jobId, current.version, by)
+                    val updated = storage.jobs.manualRetry(jobId, current.version, by, mode)
                     if (!updated) return@suspendTransaction false
                     val routingKey = when {
                         current.targetNode != null -> "node.${current.targetNode}"

@@ -10,6 +10,7 @@ import cs.trade.scheduler.core.backend.handler.Job
 import cs.trade.scheduler.shared.CancelResult
 import cs.trade.scheduler.shared.DeleteResult
 import cs.trade.scheduler.shared.RerouteResult
+import cs.trade.scheduler.shared.RetryMode
 import cs.trade.scheduler.shared.RetryResult
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
@@ -114,7 +115,7 @@ private class RecordingScheduler : Scheduler {
     override suspend fun enqueueAfter(job: Job, waitFor: List<Uuid>, options: EnqueueOptions): Uuid = unused()
     override suspend fun recurring(definition: RecurringDefinition) = unused()
     override suspend fun cancel(jobId: Uuid, by: String?): CancelResult = unused()
-    override suspend fun retry(jobId: Uuid, by: String?): RetryResult = unused()
+    override suspend fun retry(jobId: Uuid, by: String?, mode: RetryMode): RetryResult = unused()
     override suspend fun delete(jobId: Uuid, by: String?): DeleteResult = unused()
     override suspend fun reroute(jobId: Uuid, targetNode: String?, targetTag: String?, by: String?): RerouteResult = unused()
     override suspend fun enqueueFunctionRef(method: KFunction<*>, args: List<Any?>, options: EnqueueOptions): Uuid = unused()
