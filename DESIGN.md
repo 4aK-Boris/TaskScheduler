@@ -2144,7 +2144,7 @@ scheduler.chain(LoadCache(), ProcessData(), Notify(), priority = 9)
 
 Без helper-а — явный override в каждом enqueue.
 
-Phase 2 — можно добавить `EnqueueOptions(inheritPriorityFromParents = true)` если будет реальный кейс.
+**Shipped:** `EnqueueOptions(inheritPriorityFromParents = true)` на `enqueueAfter` — child получает `max(parent.priority)` (explicit `priority` в опциях выигрывает по override-chain; на не-DAG entry points — no-op, наследовать не от кого; удалённый retention-ом родитель считается за 0). Покрыто `DagIntegrationTest` (max-of-parents / explicit-wins / flag-off). Реализация — в `DefaultScheduler.enqueueAfter`, семантика — в KDoc `EnqueueOptions.inheritPriorityFromParents`.
 
 ### 19.8. Реализация в worker pickup
 
@@ -3003,7 +3003,7 @@ NULL = пересылаем всё (default — для local dev). Production do
 
 - [x] **Custom dispatcher per queue — shipped:** `queue("cpu", concurrency=4, dispatcher=Dispatchers.Default)` (см. 13.3, `CustomDispatcherIntegrationTest`).
 - [x] **ArchivalSink — shipped:** file (`FileArchivalSink`) + S3-совместимый (`:archival-s3`, покрывает AWS S3 / MinIO / R2 / GCS-S3-API) бэкенды для архива удаляемых jobs перед DELETE (см. 18.7). Архив `job_event`/`outbox` — по-прежнему через custom sink.
-- [ ] **Priority inheritance в DAG (Phase 2):** `EnqueueOptions(inheritPriorityFromParents = true)` если будет реальный кейс.
+- [x] **Priority inheritance в DAG — shipped:** `EnqueueOptions(inheritPriorityFromParents = true)` → `enqueueAfter` берёт `max(parent.priority)` (explicit priority выигрывает); покрыто `DagIntegrationTest` (см. 19.7).
 - [x] **Adaptive prefetch + circuit breaker — shipped:** автоматическая адаптация под нагрузку (см. 20.7 / 20.8).
 - [x] **Lambda capture — shipped:** K2 compiler plugin для `enqueueLambda { mailer.send(123) }` (см. 21.9; не KSP — KSP не переписывает call-site).
 
