@@ -109,6 +109,9 @@ public class WorkerPool(
     private val functionRefRunner: FunctionRefRunner,
     private val circuitBreakers: CircuitBreakerRegistry,
     private val cancelListener: JobCancelListener,
+    // Optional (nullable default) so the many tests that construct WorkerPool directly are
+    // unaffected; schedulerWorkerModule always wires the real one. See DESIGN.md 22.9.
+    private val schemaDriftCheck: SchemaDriftCheck? = null,
 ) {
 
     private val log = LoggerFactory.getLogger(javaClass)
@@ -133,6 +136,10 @@ public class WorkerPool(
                 "WorkerPool starting — node={}, queues={}, knownPayloadTypes={}",
                 workerConfig.nodeId, workerConfig.queues.map { it.name }, handlers.knownPayloadTypes,
             )
+            // Schema-drift check (DESIGN.md 22.9): compare each handled payload type's current
+            // serialization schema with the last-seen hash; WARN + alert on a change. Runs
+            // before we consume; best-effort internally — won't block startup on a DB hiccup.
+            schemaDriftCheck?.run()
             // Own the scope so user code doesn't need to manage it. Cancelled in stop().
             val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
             internalScope = scope

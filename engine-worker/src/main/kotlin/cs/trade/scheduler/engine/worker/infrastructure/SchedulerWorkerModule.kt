@@ -59,6 +59,14 @@ public class SchedulerWorkerConfig {
     public var shutdownTimeout: Duration = 30.seconds
     public var cancelGracePeriod: Duration = 30.seconds
 
+    /**
+     * Schema-drift alert (DESIGN.md 22.9). Invoked once at worker startup for each handled
+     * payload type whose serialization schema changed since the previous deploy —
+     * `(payloadType, previousHash, currentHash)`. `null` (default) = WARN log only; set it to
+     * page / Slack / bump a metric. The check is best-effort and never blocks startup.
+     */
+    public var onSchemaDriftAlert: ((payloadType: String, previousHash: String, currentHash: String) -> Unit)? = null
+
     internal val queues: MutableList<QueueConfig> = mutableListOf()
 
     /** Declared queue names in registration order — exposed for [WorkerMetricsBinder] etc. */
@@ -195,6 +203,12 @@ public fun schedulerWorkerModule(configure: SchedulerWorkerConfig.() -> Unit): M
     return module {
         single<SchedulerWorkerConfig> { config }
         single<HandlerRegistry> { HandlerRegistry(getAll<JobHandler<*>>()) }
+        // Schema-drift check (DESIGN.md 22.9) — run once in WorkerPool.start(). The alert hook
+        // comes from this config; null → WARN log only. PayloadSchemaRepository is bound by
+        // schedulerPostgresModule.
+        single<SchemaDriftCheck> {
+            SchemaDriftCheck(handlers = get(), payloadSchemas = get(), onDrift = config.onSchemaDriftAlert)
+        }
         singleOf(::WorkerInFlightCounter)
         singleOf(::PrefetchTuner)
         // CircuitBreakerRegistry has a `clock` constructor param with a default; `singleOf`
@@ -258,6 +272,7 @@ public fun schedulerWorkerModule(configure: SchedulerWorkerConfig.() -> Unit): M
                 functionRefRunner = get(),
                 circuitBreakers = get(),
                 cancelListener = get(),
+                schemaDriftCheck = get(),
             )
         }
     }

@@ -14,6 +14,7 @@ import cs.trade.scheduler.storage.postgres.domain.repositories.JobRepository
 import cs.trade.scheduler.storage.postgres.domain.repositories.JobRollupRepository
 import cs.trade.scheduler.storage.postgres.domain.repositories.JobTypePauseRepository
 import cs.trade.scheduler.storage.postgres.domain.repositories.OutboxRepository
+import cs.trade.scheduler.storage.postgres.domain.repositories.PayloadSchemaRepository
 import cs.trade.scheduler.storage.postgres.domain.repositories.RecurringJobRepository
 import cs.trade.scheduler.storage.postgres.domain.repositories.WorkerRepository
 import cs.trade.scheduler.storage.postgres.infrastructure.repositories.IdempotencyLogRepositoryImpl
@@ -23,6 +24,7 @@ import cs.trade.scheduler.storage.postgres.infrastructure.repositories.JobReposi
 import cs.trade.scheduler.storage.postgres.infrastructure.repositories.JobRollupRepositoryImpl
 import cs.trade.scheduler.storage.postgres.infrastructure.repositories.JobTypePauseRepositoryImpl
 import cs.trade.scheduler.storage.postgres.infrastructure.repositories.OutboxRepositoryImpl
+import cs.trade.scheduler.storage.postgres.infrastructure.repositories.PayloadSchemaRepositoryImpl
 import cs.trade.scheduler.storage.postgres.infrastructure.repositories.RecurringJobRepositoryImpl
 import cs.trade.scheduler.storage.postgres.infrastructure.repositories.WorkerRepositoryImpl
 import cs.trade.scheduler.storage.postgres.infrastructure.scheduler.DefaultScheduler
@@ -109,6 +111,7 @@ public fun schedulerPostgresModule(configure: SchedulerPostgresConfig.() -> Unit
         single<IdempotencyLogRepository> { IdempotencyLogRepositoryImpl(get()) }
         single<JobRollupRepository> { JobRollupRepositoryImpl(get()) }
         single<JobTypePauseRepository> { JobTypePauseRepositoryImpl(get()) }
+        single<PayloadSchemaRepository> { PayloadSchemaRepositoryImpl(get()) }
         // Handler-facing dedup primitive. User-apps that want to opt out can override
         // with `single<IdempotencyStore> { IdempotencyStore.Noop }` (Koin last-wins).
         single<IdempotencyStore> {
