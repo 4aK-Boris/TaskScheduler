@@ -43,4 +43,21 @@ publishing {
     publications.withType<MavenPublication>().configureEach {
         artifactId = artifactBase + artifactId.removePrefix(project.name)
     }
+
+    // GitHub Packages — чтобы CI потребителя (CsTradeService) резолвил либу по сети на обоих
+    // раннерах (ubuntu-latest + self-hosted). Пакеты публикуются ПОД репозиторий
+    // 4aK-Boris/CsTradeService, поэтому его CI читает их штатным GITHUB_TOKEN (same-repo) —
+    // без отдельного PAT-секрета. Для ЛОКАЛЬНОЙ публикации (`./gradlew publish`) нужен PAT с
+    // write:packages в ~/.gradle/gradle.properties → gpr.user=4aK-Boris  gpr.token=<PAT>.
+    // `publishToMavenLocal` для локальной разработки продолжает работать как прежде.
+    repositories {
+        maven {
+            name = "GitHubPackages"
+            url = uri("https://maven.pkg.github.com/4aK-Boris/CsTradeService")
+            credentials {
+                username = providers.gradleProperty("gpr.user").orNull ?: System.getenv("GITHUB_ACTOR")
+                password = providers.gradleProperty("gpr.token").orNull ?: System.getenv("GITHUB_TOKEN")
+            }
+        }
+    }
 }
