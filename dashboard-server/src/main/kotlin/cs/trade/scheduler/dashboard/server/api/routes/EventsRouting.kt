@@ -2,6 +2,7 @@ package cs.trade.scheduler.dashboard.server.api.routes
 
 import cs.trade.scheduler.core.backend.SchedulerCoreConfig
 import cs.trade.scheduler.core.backend.events.EventBus
+import cs.trade.scheduler.shared.events.EventFilter
 import cs.trade.scheduler.shared.events.WebSocketEvent
 import io.ktor.server.auth.UserIdPrincipal
 import io.ktor.server.auth.principal
@@ -47,10 +48,25 @@ public fun Route.configureEventsRouting() {
     webSocket("/api/ws/events") {
         val actor = call.principal<UserIdPrincipal>()?.name ?: "anonymous"
         val remote = call.request.local.remoteHost
-        log.info("WebSocket /api/ws/events connected — actor={}, remote={}", actor, remote)
+        // Subscribe-with-query (DESIGN.md 9.2): narrow the firehose server-side via repeatable
+        // query params (jobId / queue / type / eventType). An empty filter forwards everything
+        // — the original firehose behaviour, so a subscriber that sends no params is unaffected.
+        val params = call.request.queryParameters
+        val filter = EventFilter(
+            jobIds = params.getAll("jobId").orEmpty().toSet(),
+            queues = params.getAll("queue").orEmpty().toSet(),
+            payloadTypes = params.getAll("type").orEmpty().toSet(),
+            eventTypes = params.getAll("eventType").orEmpty().toSet(),
+        )
+        log.info(
+            "WebSocket /api/ws/events connected — actor={}, remote={}, filter={}",
+            actor, remote, if (filter.isEmpty) "none" else filter,
+        )
         try {
             eventBus.events.collect { event ->
-                send(Frame.Text(json.encodeToString(WebSocketEvent.serializer(), event)))
+                if (filter.matches(event)) {
+                    send(Frame.Text(json.encodeToString(WebSocketEvent.serializer(), event)))
+                }
             }
         } catch (t: Throwable) {
             log.debug("WebSocket /api/ws/events disconnected (actor={}): {}", actor, t.message)

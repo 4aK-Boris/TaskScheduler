@@ -1,16 +1,20 @@
 package cs.trade.scheduler.dashboard.web.data.connection
 
 import cs.trade.scheduler.core.frontend.api.ApiClient
+import cs.trade.scheduler.shared.events.EventFilter
 import cs.trade.scheduler.shared.events.WebSocketEvent
 import io.ktor.client.plugins.websocket.webSocket
+import io.ktor.client.request.HttpRequestBuilder
 import io.ktor.websocket.Frame
 import io.ktor.websocket.readText
 import kotlinx.browser.window
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlin.coroutines.coroutineContext
@@ -24,7 +28,13 @@ import kotlin.time.Duration.Companion.seconds
  *
  * Lives in the data layer (not in a Decompose component) because its lifetime is
  * the browser tab, not any one screen — JobList, Recurring, Workers etc. all see
- * the same hot [events] flow without each opening their own socket.
+ * the same hot [events] flow without each opening their own socket. That shared
+ * socket is intentionally UNFILTERED: JobList alone reacts to nearly every event
+ * type, so the union of screen interests is broad.
+ *
+ * For a narrow interest — JobDetail watching one job's progress — use [subscribe],
+ * which opens a SEPARATE, server-side-filtered socket (DESIGN.md 9.2) so the client
+ * never receives the cross-job progress flood it would otherwise discard locally.
  *
  * Two failure modes we recover from (same as the per-component loop this replaced):
  *  1. Server restart / network blip — collect throws, we wait `backoff` then retry.
@@ -46,6 +56,37 @@ public class EventStream(
         scope.launch { loop() }
     }
 
+    /**
+     * A server-side-filtered event stream. Collecting opens a dedicated WebSocket carrying
+     * [filter] as query params (DESIGN.md 9.2); the server forwards only matching events, so
+     * the client does no filtering of its own. The socket lives for the collection — cancel
+     * the collecting coroutine (e.g. let the owning component's scope close) and it closes.
+     *
+     * Reconnects with the same backoff as the shared socket, but does NOT touch
+     * [ConnectionStatusStore] — the shared socket owns the connection badge; an auxiliary
+     * per-screen subscription flapping shouldn't repaint it.
+     */
+    public fun subscribe(filter: EventFilter): Flow<WebSocketEvent> = flow {
+        var backoff = INITIAL_BACKOFF
+        while (coroutineContext.isActive) {
+            val outcome = runCatching {
+                streamFrames(
+                    request = {
+                        filter.jobIds.forEach { url.parameters.append("jobId", it) }
+                        filter.queues.forEach { url.parameters.append("queue", it) }
+                        filter.payloadTypes.forEach { url.parameters.append("type", it) }
+                        filter.eventTypes.forEach { url.parameters.append("eventType", it) }
+                    },
+                ) { event -> emit(event) }
+            }
+            outcome.exceptionOrNull()?.let { if (it is CancellationException) throw it }
+            if (!coroutineContext.isActive) break
+            delay(backoff)
+            backoff = (backoff * 2).coerceAtMost(BACKOFF_CAP)
+            if (outcome.isSuccess) backoff = INITIAL_BACKOFF
+        }
+    }
+
     private suspend fun loop() {
         var backoff = INITIAL_BACKOFF
         while (coroutineContext.isActive) {
@@ -65,20 +106,35 @@ public class EventStream(
     }
 
     private suspend fun collectOnce() {
+        // First frame is the proof we're really live (not a half-open socket that will time
+        // out in 60s). Flip to CONNECTED there, not before the webSocket {} call — a 401
+        // returns before any frame and we don't want a flicker through CONNECTED on failed auth.
+        streamFrames(onConnected = { statusStore.set(ConnectionStatus.CONNECTED) }) { event ->
+            _events.emit(event)
+        }
+    }
+
+    /**
+     * Open one socket to [endpoint] (optionally extended via [request], e.g. filter query
+     * params), decode each text frame as a [WebSocketEvent], and hand it to [onEvent].
+     * [onConnected] fires per decoded frame (idempotent — used to flip the connection badge).
+     * Returns when the socket closes; the caller owns retry/backoff.
+     */
+    private suspend fun streamFrames(
+        request: HttpRequestBuilder.() -> Unit = {},
+        onConnected: () -> Unit = {},
+        onEvent: suspend (WebSocketEvent) -> Unit,
+    ) {
         val scheme = if (window.location.protocol == "https:") "wss" else "ws"
         val url = "$scheme://${window.location.host}$endpoint"
-        ApiClient.http.webSocket(urlString = url) {
+        ApiClient.http.webSocket(urlString = url, request = request) {
             for (frame in incoming) {
                 if (frame !is Frame.Text) continue
                 val event = runCatching {
                     ApiClient.json.decodeFromString<WebSocketEvent>(frame.readText())
                 }.getOrNull() ?: continue
-                // First frame is the proof we're really live (not a half-open socket
-                // that will time out in 60s). Flip to CONNECTED here, not before the
-                // webSocket {} call — a 401 returns from there before any frame and
-                // we don't want a flicker through CONNECTED on a failed auth.
-                statusStore.set(ConnectionStatus.CONNECTED)
-                _events.emit(event)
+                onConnected()
+                onEvent(event)
             }
         }
     }

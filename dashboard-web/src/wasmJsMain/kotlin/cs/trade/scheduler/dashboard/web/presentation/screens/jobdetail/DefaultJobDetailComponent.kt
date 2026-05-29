@@ -15,6 +15,7 @@ import cs.trade.scheduler.dashboard.web.domain.usecases.RetryJobUseCase
 import cs.trade.scheduler.shared.DeleteResult
 import cs.trade.scheduler.shared.RerouteResult
 import cs.trade.scheduler.shared.RetryMode
+import cs.trade.scheduler.shared.events.EventFilter
 import cs.trade.scheduler.shared.events.WebSocketEvent
 import kotlinx.coroutines.launch
 
@@ -66,15 +67,17 @@ public class DefaultJobDetailComponent(
     }
 
     private fun subscribeToProgressEvents() {
+        // Server-side filtered subscription (DESIGN.md 9.2): a dedicated socket scoped to THIS
+        // job, so we receive only its events instead of the whole-firehose progress flood we
+        // used to sift client-side. The server-side filter does the `event.id == jobId` cut.
+        val jobId = _model.value.jobId
         scope.launch {
-            events.events.collect { event ->
+            events.subscribe(EventFilter(jobIds = setOf(jobId))).collect { event ->
                 if (event !is WebSocketEvent.JobProgress) return@collect
                 // In-place mutation, no REST refetch. Progress events fire up to once a
                 // second per job (handler-side throttle in JobContextImpl) — a full
                 // refresh would re-render the whole timeline and lose any in-flight UI
                 // interaction (e.g. an open reroute form).
-                val currentJobId = _model.value.jobId
-                if (event.id != currentJobId) return@collect
                 _model.update { m ->
                     val d = m.detail ?: return@update m
                     m.copy(
