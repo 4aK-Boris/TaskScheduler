@@ -160,8 +160,9 @@ public fun Route.configureJobsRouting() {
                                 mapper.toDetail(
                                     job = result.job,
                                     events = result.events,
-                                    parents = result.parents,
-                                    children = result.children,
+                                    graphNodes = result.graph.nodes,
+                                    graphEdges = result.graph.edges,
+                                    graphTruncated = result.graph.truncated,
                                 ),
                             ),
                         )

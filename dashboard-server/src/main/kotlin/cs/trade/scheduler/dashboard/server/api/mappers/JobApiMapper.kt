@@ -6,8 +6,11 @@ import cs.trade.scheduler.dashboard.server.api.dto.ListJobsQuery
 import cs.trade.scheduler.shared.JobState
 import cs.trade.scheduler.shared.dto.JobDetail
 import cs.trade.scheduler.shared.dto.JobEventDto
+import cs.trade.scheduler.shared.dto.JobGraph
+import cs.trade.scheduler.shared.dto.JobGraphEdge
 import cs.trade.scheduler.shared.dto.JobView
 import cs.trade.scheduler.storage.postgres.domain.models.Job
+import cs.trade.scheduler.storage.postgres.domain.models.JobDependency
 import cs.trade.scheduler.storage.postgres.domain.models.JobEventRow
 import cs.trade.scheduler.storage.postgres.domain.models.JobListFilter
 import org.koin.core.annotation.Single
@@ -58,18 +61,24 @@ public class JobApiMapper {
         occurredAt = event.occurredAt,
     )
 
-    // Full detail. Parents and children are direct DAG neighbours, supplied by
-    // GetJobDetailUseCase from JobDependencyRepository edges + findById hydration.
+    // Full detail. The dependency graph is the transitive DAG component supplied by
+    // GetJobDetailUseCase (BFS over JobDependencyRepository edges + findById hydration).
     public fun toDetail(
         job: Job,
         events: List<JobEventRow>,
-        parents: List<Job>,
-        children: List<Job>,
+        graphNodes: List<Job>,
+        graphEdges: List<JobDependency>,
+        graphTruncated: Boolean,
     ): JobDetail = JobDetail(
         job = toView(job),
         payloadJson = job.payloadJson,
         events = events.map(::toEventDto),
-        parents = parents.map(::toView),
-        children = children.map(::toView),
+        graph = JobGraph(
+            nodes = graphNodes.map(::toView),
+            edges = graphEdges.map {
+                JobGraphEdge(it.parentId.toString(), it.childId.toString(), it.onFailure)
+            },
+            truncated = graphTruncated,
+        ),
     )
 }

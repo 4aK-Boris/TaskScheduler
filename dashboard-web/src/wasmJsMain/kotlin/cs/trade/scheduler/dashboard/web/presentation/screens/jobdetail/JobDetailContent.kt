@@ -36,13 +36,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import com.arkivanov.decompose.extensions.compose.subscribeAsState
+import cs.trade.scheduler.dashboard.web.presentation.components.DependencyGraph
 import cs.trade.scheduler.dashboard.web.presentation.components.PausedBadge
 import cs.trade.scheduler.dashboard.web.presentation.components.StateChip
 import cs.trade.scheduler.dashboard.web.presentation.components.timeAgo
 import cs.trade.scheduler.shared.JobState
 import cs.trade.scheduler.shared.dto.JobDetail
 import cs.trade.scheduler.shared.dto.JobEventDto
-import cs.trade.scheduler.shared.dto.JobView
 import cs.trade.scheduler.shared.functionref.FunctionRefPayload
 import cs.trade.scheduler.shared.functionref.FunctionRefPayloadFormatter
 
@@ -195,9 +195,31 @@ private fun JobDetailBody(
             }
         }
 
-        if (detail.parents.isNotEmpty() || detail.children.isNotEmpty()) {
+        // Dependency graph — only when the job is actually part of a DAG (has at least one
+        // edge). A standalone job gets a single-node graph from the server, which isn't worth
+        // a diagram. Clicking any non-focal node navigates to its detail.
+        val graph = detail.graph
+        if (graph.edges.isNotEmpty()) {
             HorizontalDivider()
-            DagNeighbours(parents = detail.parents, children = detail.children, onNavigate = onNavigate)
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text("Dependency graph", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    text = "${graph.nodes.size} jobs",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            if (graph.truncated) {
+                Text(
+                    text = "Graph truncated to ${graph.nodes.size} nodes — some distant dependencies are not shown.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+            DependencyGraph(graph = graph, focalId = job.id, onNavigate = onNavigate)
         }
 
         HorizontalDivider()
@@ -434,55 +456,6 @@ private fun FunctionRefPayloadBlock(
                 )
             }
         }
-    }
-}
-
-@Composable
-private fun DagNeighbours(
-    parents: List<JobView>,
-    children: List<JobView>,
-    onNavigate: (String) -> Unit,
-) {
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        if (parents.isNotEmpty()) {
-            Text("Parents (${parents.size})", style = MaterialTheme.typography.titleMedium)
-            parents.forEach { p -> NeighbourRow(p, onNavigate) }
-        }
-        if (children.isNotEmpty()) {
-            Text("Children (${children.size})", style = MaterialTheme.typography.titleMedium)
-            children.forEach { c -> NeighbourRow(c, onNavigate) }
-        }
-    }
-}
-
-@Composable
-private fun NeighbourRow(job: JobView, onNavigate: (String) -> Unit) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable { onNavigate(job.id) }
-            .padding(vertical = 6.dp, horizontal = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Box(modifier = Modifier.width(140.dp)) { StateChip(job.state) }
-        Text(
-            text = job.payloadType.substringAfterLast('.'),
-            style = MaterialTheme.typography.bodyMedium,
-            modifier = Modifier.width(300.dp),
-        )
-        Text(
-            text = job.id.take(8),
-            style = MaterialTheme.typography.bodySmall.copy(
-                fontFamily = FontFamily.Monospace,
-                color = MaterialTheme.colorScheme.primary,
-            ),
-        )
-        Text(
-            text = timeAgo(job.updatedAt),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
     }
 }
 
