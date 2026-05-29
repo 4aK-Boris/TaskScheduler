@@ -232,14 +232,17 @@ public class DefaultScheduler(
         const val CANCEL_ATTEMPTS = 3
     }
 
-    override suspend fun chain(vararg jobs: Job): List<Uuid> {
+    override suspend fun chain(vararg jobs: Job, priority: Int?): List<Uuid> {
         require(jobs.isNotEmpty()) { "chain() requires at least one job" }
+        // A non-null `priority` pins every step; null falls through to the per-step
+        // handler/queue/global default (DESIGN.md 19.3) so the no-arg chain() is unchanged.
+        val options = if (priority != null) EnqueueOptions(priority = priority) else EnqueueOptions()
         val ids = mutableListOf<Uuid>()
         for ((index, j) in jobs.withIndex()) {
             val id = if (index == 0) {
-                enqueue(j)
+                enqueue(j, options)
             } else {
-                enqueueAfter(j, waitFor = listOf(ids.last()), options = EnqueueOptions())
+                enqueueAfter(j, waitFor = listOf(ids.last()), options = options)
             }
             ids.add(id)
         }

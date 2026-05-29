@@ -41,8 +41,15 @@ public interface Scheduler {
         options: EnqueueOptions = EnqueueOptions(),
     ): Uuid
 
-    /** Chain — each step depends on the previous (PROPAGATE_FAILURE). */
-    public suspend fun chain(vararg jobs: Job): List<Uuid>
+    /**
+     * Chain — each step depends on the previous (PROPAGATE_FAILURE), run sequentially.
+     *
+     * [priority] (a named arg — it follows the vararg) applies to EVERY step. `null` (default)
+     * leaves each step at its handler/queue/global default per the [EnqueueOptions.priority]
+     * override chain (DESIGN.md 19.3); a non-null value sets all steps to it — a convenience
+     * for an end-to-end urgent pipeline without repeating `EnqueueOptions(priority = N)`.
+     */
+    public suspend fun chain(vararg jobs: Job, priority: Int? = null): List<Uuid>
 
     /**
      * Barrier — enqueue [job] that waits for all [waitFor] parents to SUCCEED before becoming

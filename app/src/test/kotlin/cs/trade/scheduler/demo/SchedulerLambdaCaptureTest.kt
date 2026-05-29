@@ -111,7 +111,7 @@ private class RecordingScheduler : Scheduler {
     override suspend fun enqueue(job: Job, options: EnqueueOptions): Uuid = unused()
     override suspend fun scheduleAt(job: Job, at: Instant, options: EnqueueOptions): Uuid = unused()
     override suspend fun enqueueOnce(key: String, job: Job, options: EnqueueOptions): Uuid = unused()
-    override suspend fun chain(vararg jobs: Job): List<Uuid> = unused()
+    override suspend fun chain(vararg jobs: Job, priority: Int?): List<Uuid> = unused()
     override suspend fun enqueueAfter(job: Job, waitFor: List<Uuid>, options: EnqueueOptions): Uuid = unused()
     override suspend fun recurring(definition: RecurringDefinition) = unused()
     override suspend fun cancel(jobId: Uuid, by: String?): CancelResult = unused()

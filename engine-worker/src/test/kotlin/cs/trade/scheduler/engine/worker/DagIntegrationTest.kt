@@ -181,6 +181,26 @@ class DagIntegrationTest {
     }
 
     @Test
+    fun `chain with priority applies it to every step`() = runBlocking {
+        // The DESIGN.md 19.7 convenience helper — one priority for the whole pipeline.
+        val ids = scheduler.chain(StepA(50), StepB(50), StepC(50), priority = 7)
+        assertEquals(3, ids.size)
+        ids.forEach { id ->
+            assertEquals(7, jobs.findById(id)!!.priority.value, "every chain step must carry the chain priority")
+        }
+    }
+
+    @Test
+    fun `chain without priority leaves every step at the default`() = runBlocking {
+        // Guards the backward-compatible path: null must fall through to the per-step
+        // default (0 here), NOT pin an explicit 0 that would shadow a handler/queue default.
+        val ids = scheduler.chain(StepA(51), StepB(51), priority = null)
+        ids.forEach { id ->
+            assertEquals(0, jobs.findById(id)!!.priority.value, "no chain priority → per-step default")
+        }
+    }
+
+    @Test
     fun `enqueueAfter creates child in AWAITING_DEPS with pending_deps=1`() = runBlocking {
         val parentId = scheduler.enqueue(StepA(1))
         val childId = scheduler.enqueueAfter(
