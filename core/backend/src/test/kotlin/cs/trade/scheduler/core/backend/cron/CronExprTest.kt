@@ -10,8 +10,8 @@ import kotlin.time.Instant
 
 /**
  * Unit coverage for [CronExpr]. The implementation is a thin wrapper around `cron-utils`
- * (UNIX 5-field syntax); these tests pin down the contract we expose to the rest of the
- * scheduler:
+ * (5-field UNIX + 6-field seconds syntax); these tests pin down the contract we expose to
+ * the rest of the scheduler:
  *
  *  - Happy-path parse + nextExecution
  *  - Timezone correctness (DST included)
@@ -34,6 +34,13 @@ class CronExprTest {
             .toInstant()
             .toKotlinInstant()
 
+    /** Helper with seconds — for 6-field cron assertions. */
+    private fun atS(year: Int, month: Int, day: Int, hour: Int, minute: Int, second: Int, zone: ZoneId = utc): Instant =
+        java.time.LocalDateTime.of(year, month, day, hour, minute, second)
+            .atZone(zone)
+            .toInstant()
+            .toKotlinInstant()
+
     private fun java.time.Instant.toKotlinInstant(): Instant = Instant.fromEpochMilliseconds(toEpochMilli())
 
     @Test
@@ -47,10 +54,32 @@ class CronExprTest {
     }
 
     @Test
-    fun `parse rejects a 6-field expression — we only accept UNIX 5-field`() {
-        // Quartz-style with seconds field has 6 parts; cron-utils UNIX dialect must reject.
-        val ex = runCatching { CronExpr.parse("0 0 9 * * *") }.exceptionOrNull()
-        assertTrue(ex is IllegalArgumentException, "6-field cron must be rejected for UNIX dialect")
+    fun `parse accepts a 6-field seconds expression`() {
+        // 6-field 's m h dom mon dow' (Spring-5.3 dialect) — seconds granularity.
+        val cron = CronExpr.parse("0 0 9 * * *")
+        assertNotNull(cron)
+    }
+
+    @Test
+    fun `parse rejects an unsupported field count`() {
+        // 7-field (Quartz-with-year) and other counts are out of scope — only 5 or 6.
+        val ex = runCatching { CronExpr.parse("0 0 9 * * * 2026") }.exceptionOrNull()
+        assertTrue(ex is IllegalArgumentException, "7-field cron must be rejected, got $ex")
+    }
+
+    @Test
+    fun `every 10 seconds — 6-field next is ten seconds later`() {
+        val ref = atS(2026, 5, 27, 10, 0, 0)
+        val next = CronExpr.nextAfter("*/10 * * * * *", ref)
+        assertEquals(atS(2026, 5, 27, 10, 0, 10), next)
+    }
+
+    @Test
+    fun `6-field with weekday — seconds plus UNIX-style day-of-week`() {
+        // 09:00:30 on weekdays. 2026-05-29 = Friday; ref at 09:00:00 → same day at :30.
+        val ref = atS(2026, 5, 29, 9, 0, 0)
+        val next = CronExpr.nextAfter("30 0 9 * * MON-FRI", ref)
+        assertEquals(atS(2026, 5, 29, 9, 0, 30), next)
     }
 
     @Test

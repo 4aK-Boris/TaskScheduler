@@ -12,25 +12,44 @@ import java.time.ZoneId
 import java.time.ZoneOffset
 
 /**
- * Thin wrapper around cron-utils. UNIX 5-field expressions only for MVP —
- * `m h dom month dow` (e.g. `"0 9 * * MON-FRI"`).
+ * Thin wrapper around cron-utils. Supports two field counts, dispatched by token count:
+ *
+ *  - **5 fields** — classic UNIX `m h dom month dow` (e.g. `"0 9 * * MON-FRI"`). Minute
+ *    granularity. The long-standing default; semantics unchanged.
+ *  - **6 fields** — seconds-aware `s m h dom month dow` (e.g. `"0/10 * * * * *"` = every
+ *    10 seconds). Parsed with the Spring-5.3 dialect, NOT Quartz: day-of-week keeps UNIX
+ *    numbering (0/7 = SUN, names MON-SUN) and `*` is allowed in both day fields — so a
+ *    6-field expression is just "UNIX + a leading seconds field", no Quartz `?` quirk.
  *
  * Timezones are IANA IDs (`"Europe/Berlin"`, `"America/New_York"`); pass `null` for UTC.
  * Cron evaluation happens in the supplied zone, so DST shifts behave the way users expect
  * (a `"0 2 * * *"` job fires once per local day even across DST boundaries).
+ *
+ * NOTE: sub-minute schedules only fire as promptly as the recurring poll loop ticks — see
+ * `SchedulerInfraConfig.recurringPollInterval` (lower it below the cron period, else
+ * `CATCH_UP_ONE` coalesces missed sub-poll slots into a single firing).
  */
 public object CronExpr {
 
-    private val parser: CronParser = CronParser(
-        CronDefinitionBuilder.instanceDefinitionFor(CronType.UNIX),
-    )
+    // Pick the parser by whitespace-token count: 5 → UNIX (unchanged), 6 → seconds.
+    // SPRING53 (not QUARTZ) for the 6-field case keeps UNIX day-of-week numbering and
+    // allows `*` in both day fields, so 6-field is a clean superset of 5-field + seconds.
+    private val unixParser = CronParser(CronDefinitionBuilder.instanceDefinitionFor(CronType.UNIX))
+    private val secondsParser = CronParser(CronDefinitionBuilder.instanceDefinitionFor(CronType.SPRING53))
 
-    /** Parse + validate. Throws `IllegalArgumentException` on bad syntax. */
-    public fun parse(expression: String): Cron =
-        runCatching { parser.parse(expression).validate() }
-            .getOrElse { e ->
-                throw IllegalArgumentException("Invalid UNIX cron expression: '$expression'", e)
-            }
+    /** Parse + validate. Throws `IllegalArgumentException` on bad syntax or field count. */
+    public fun parse(expression: String): Cron {
+        val parser = when (val fields = expression.trim().split(Regex("\\s+")).count { it.isNotEmpty() }) {
+            5 -> unixParser
+            6 -> secondsParser
+            else -> throw IllegalArgumentException(
+                "Cron must have 5 fields ('m h dom mon dow') or 6 fields ('s m h dom mon dow'); " +
+                    "got $fields in '$expression'",
+            )
+        }
+        return runCatching { parser.parse(expression).validate() }
+            .getOrElse { e -> throw IllegalArgumentException("Invalid cron expression: '$expression'", e) }
+    }
 
     /**
      * Next execution strictly after [reference] in [timezone]. Throws if the cron has

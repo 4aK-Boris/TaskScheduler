@@ -25,7 +25,15 @@ import kotlin.time.Duration.Companion.minutes
  */
 public class SchedulerInfraConfig {
     public var outboxPollInterval: Duration = 100.milliseconds
-    public var recurringPollInterval: Duration = 30_000.milliseconds
+
+    /**
+     * How often [RecurringScheduler] scans `recurring_job` for due rows. 5s (was 30s) so
+     * 6-field sub-minute crons (`s m h dom mon dow`) fire on time. Keep it ≤ the smallest
+     * cron period you actually use — otherwise the default `CATCH_UP_ONE` misfire policy
+     * coalesces every slot missed between two polls into a single firing. Trade-off: smaller
+     * value = a tighter (leader-gated) SELECT cadence on the DB.
+     */
+    public var recurringPollInterval: Duration = 5_000.milliseconds
     /**
      * How often [FastForwardTask] scans for SCHEDULED jobs about to fall inside
      * `SchedulerCoreConfig.fastForwardWindow`. The window itself lives in core config —

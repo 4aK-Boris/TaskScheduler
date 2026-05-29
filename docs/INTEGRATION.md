@@ -371,7 +371,10 @@ class UserService(private val scheduler: Scheduler) {
     }
 }
 
-// recurring/cron (обычно регистрируется один раз на старте)
+// recurring/cron (обычно регистрируется один раз на старте).
+// cron — 5 полей (UNIX, мин. гранулярность = минута) ИЛИ 6 полей с секундами
+// ("s m h dom mon dow", напр. "*/10 * * * * *" = каждые 10 сек; DoW как в UNIX).
+// Для sub-minute расписаний держи recurringPollInterval ≤ периода (дефолт 5с).
 scheduler.recurring(RecurringDefinition(
     id = "nightly-report", cron = "0 3 * * *", job = NightlyReport(), timezone = "Europe/Moscow",
 ))

@@ -11,7 +11,7 @@ import org.slf4j.LoggerFactory
 
 /**
  * Periodic cron-driven scheduler. Every [SchedulerInfraConfig.recurringPollInterval]
- * (default 30s), invoke [FireDueRecurringJobsUseCase] to fire all `recurring_job` rows
+ * (default 5s), invoke [FireDueRecurringJobsUseCase] to fire all `recurring_job` rows
  * whose `next_trigger_at` has fallen past `now`. See DESIGN.md 7.5.
  *
  * Errors are logged and swallowed — the next tick retries. A persistent DB outage will
