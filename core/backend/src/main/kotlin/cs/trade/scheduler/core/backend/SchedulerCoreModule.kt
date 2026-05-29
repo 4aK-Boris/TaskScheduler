@@ -44,6 +44,19 @@ public class SchedulerCoreConfig {
     public val contextPropagation: ContextPropagationConfig = ContextPropagationConfig()
 
     /**
+     * DAG guardrails (DESIGN.md 22.10). Fail-fast `IllegalArgumentException` at enqueue —
+     * before any DB write — when one `enqueueAfter(...)` waits on more than [maxDagFanIn]
+     * distinct parents, or `chain(...)` is given more than [maxChainLength] steps. These cap
+     * accidental / runaway shapes (a barrier on 100k parents, a 100k-step chain); real DAGs are
+     * nowhere near, so the defaults never bite. Raise either to effectively disable that check.
+     *
+     * NOTE: transitive DAG *depth* and per-parent *fan-out* are intentionally NOT bounded —
+     * they'd cost a graph walk / an extra COUNT query per enqueue, disproportionate for a guard.
+     */
+    public var maxDagFanIn: Int = 1_000
+    public var maxChainLength: Int = 1_000
+
+    /**
      * Cutoff for routing `scheduleAt` calls. Jobs scheduled `now + fastForwardWindow` or
      * sooner go straight into `ENQUEUED + outbox(delay)` so Rabbit's delayed exchange
      * handles the wait. Jobs further out sit in `SCHEDULED` and get promoted by

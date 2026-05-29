@@ -27,6 +27,7 @@ import org.junit.jupiter.api.AfterAll
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
+import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeAll
 import org.junit.jupiter.api.Test
@@ -59,6 +60,7 @@ class DagIntegrationTest {
     private lateinit var outbox: OutboxRepositoryImpl
     private lateinit var deps: JobDependencyRepositoryImpl
     private lateinit var rollups: JobRollupRepositoryImpl
+    private lateinit var storage: PostgresStorageProvider
     private lateinit var scheduler: DefaultScheduler
     private lateinit var finalize: FinalizeJobUseCase
     private lateinit var propagateRollup: PropagateRollupProgressUseCase
@@ -100,18 +102,19 @@ class DagIntegrationTest {
         val jobEventsRepo = cs.trade.scheduler.storage.postgres.infrastructure.repositories.JobEventRepositoryImpl(database)
         val workersRepo = cs.trade.scheduler.storage.postgres.infrastructure.repositories.WorkerRepositoryImpl(database)
         rollups = JobRollupRepositoryImpl(database)
+        storage = PostgresStorageProvider(
+            jobs = jobs,
+            outbox = outbox,
+            jobDependencies = deps,
+            recurringJobs = recurring,
+            jobEvents = jobEventsRepo,
+            workers = workersRepo,
+            idempotencyLog = cs.trade.scheduler.storage.postgres.infrastructure.repositories.IdempotencyLogRepositoryImpl(database),
+            jobRollups = rollups,
+            jobTypePauses = cs.trade.scheduler.storage.postgres.infrastructure.repositories.JobTypePauseRepositoryImpl(database),
+        )
         scheduler = DefaultScheduler(
-            storage = PostgresStorageProvider(
-                jobs = jobs,
-                outbox = outbox,
-                jobDependencies = deps,
-                recurringJobs = recurring,
-                jobEvents = jobEventsRepo,
-                workers = workersRepo,
-                idempotencyLog = cs.trade.scheduler.storage.postgres.infrastructure.repositories.IdempotencyLogRepositoryImpl(database),
-                jobRollups = rollups,
-                jobTypePauses = cs.trade.scheduler.storage.postgres.infrastructure.repositories.JobTypePauseRepositoryImpl(database),
-            ),
+            storage = storage,
             database = database,
             config = SchedulerCoreConfig().apply { nodeId = "test-dag" },
         )
@@ -198,6 +201,45 @@ class DagIntegrationTest {
         ids.forEach { id ->
             assertEquals(0, jobs.findById(id)!!.priority.value, "no chain priority → per-step default")
         }
+    }
+
+    @Test
+    fun `enqueueAfter rejects fan-in above maxDagFanIn`() = runBlocking {
+        // A scheduler with a deliberately tiny fan-in cap, sharing the same storage (22.10).
+        val limited = DefaultScheduler(
+            storage = storage,
+            database = database,
+            config = SchedulerCoreConfig().apply { nodeId = "test-dag-fanin"; maxDagFanIn = 2 },
+        )
+        val p1 = limited.enqueue(StepA(60))
+        val p2 = limited.enqueue(StepA(61))
+        val p3 = limited.enqueue(StepA(62))
+
+        // Distinct fan-in == cap → allowed, child row created.
+        val okChild = limited.enqueueAfter(StepB(60), waitFor = listOf(p1, p2))
+        assertNotNull(jobs.findById(okChild), "fan-in at the cap must be allowed")
+
+        // Over the cap → fail-fast IllegalArgumentException, nothing written.
+        val ex = assertThrows(IllegalArgumentException::class.java) {
+            runBlocking { limited.enqueueAfter(StepB(61), waitFor = listOf(p1, p2, p3)) }
+        }
+        assertTrue(ex.message!!.contains("maxDagFanIn"), ex.message)
+    }
+
+    @Test
+    fun `chain rejects length above maxChainLength`() = runBlocking {
+        val limited = DefaultScheduler(
+            storage = storage,
+            database = database,
+            config = SchedulerCoreConfig().apply { nodeId = "test-dag-chainlen"; maxChainLength = 2 },
+        )
+        // Length == cap → allowed.
+        assertEquals(2, limited.chain(StepA(70), StepB(70)).size)
+        // Over the cap → fail-fast, nothing enqueued.
+        val ex = assertThrows(IllegalArgumentException::class.java) {
+            runBlocking { limited.chain(StepA(71), StepB(71), StepC(71)) }
+        }
+        assertTrue(ex.message!!.contains("maxChainLength"), ex.message)
     }
 
     @Test

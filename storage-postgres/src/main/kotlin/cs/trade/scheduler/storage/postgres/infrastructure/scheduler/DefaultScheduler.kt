@@ -234,6 +234,11 @@ public class DefaultScheduler(
 
     override suspend fun chain(vararg jobs: Job, priority: Int?): List<Uuid> {
         require(jobs.isNotEmpty()) { "chain() requires at least one job" }
+        // Length guardrail (DESIGN.md 22.10) — caps a runaway chain before any DB write.
+        require(jobs.size <= config.maxChainLength) {
+            "chain length ${jobs.size} exceeds maxChainLength=${config.maxChainLength} — " +
+                "raise SchedulerCoreConfig.maxChainLength if it's intentional"
+        }
         // A non-null `priority` pins every step; null falls through to the per-step
         // handler/queue/global default (DESIGN.md 19.3) so the no-arg chain() is unchanged.
         val options = if (priority != null) EnqueueOptions(priority = priority) else EnqueueOptions()
@@ -263,6 +268,14 @@ public class DefaultScheduler(
         // the composite PK. `.distinct()` keeps both the counter and the edge set honest;
         // insertIgnore in the repo is the belt-and-suspenders backstop.
         val parents = waitFor.distinct()
+        // Fan-in guardrail (DESIGN.md 22.10): cap how many DISTINCT parents one job waits on.
+        // Checked after distinct() (so `after(a, a)` counts as one) and before any DB write,
+        // so an over-wide barrier fails fast with no partial graph left behind.
+        require(parents.size <= config.maxDagFanIn) {
+            "enqueueAfter fan-in ${parents.size} exceeds maxDagFanIn=${config.maxDagFanIn} — " +
+                "a barrier on this many parents is almost always a bug; raise " +
+                "SchedulerCoreConfig.maxDagFanIn if it's intentional"
+        }
         // Priority inheritance (DESIGN.md 19.7 Phase 3). When explicit `options.priority`
         // is null AND `inheritPriorityFromParents = true`, look up parents and take the
         // max priority. Skipped if parents have been retention-cleaned by the time we
