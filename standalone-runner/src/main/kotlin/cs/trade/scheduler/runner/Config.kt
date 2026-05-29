@@ -38,6 +38,20 @@ public data class RunnerConfig(
     val dashboardJwtSecret: String?,
     val dashboardJwtIssuer: String?,
     val dashboardJwtAudience: String?,
+    /**
+     * Optional OIDC / JWKS bearer auth (e.g. Keycloak). When [dashboardOidcIssuer] is set an
+     * additional JWT provider validates **RS256** tokens against the issuer's JWKS endpoint —
+     * unlike [dashboardJwtSecret], which is symmetric HMAC256 and CANNOT verify Keycloak
+     * tokens. Coexists with Basic / HMAC-JWT: a request presenting ANY configured method passes.
+     *
+     *  - [dashboardOidcIssuer]   — expected `iss`, e.g. `https://kc.example.com/realms/myrealm`.
+     *  - [dashboardOidcJwksUrl]  — JWKS endpoint. Null → derived Keycloak-style as
+     *    `<issuer>/protocol/openid-connect/certs`. Set explicitly for non-Keycloak IdPs.
+     *  - [dashboardOidcAudience] — expected `aud` (your client id). Null → audience not checked.
+     */
+    val dashboardOidcIssuer: String?,
+    val dashboardOidcJwksUrl: String?,
+    val dashboardOidcAudience: String?,
     val nodeId: String,
     val runMigrations: Boolean,
     /**
@@ -140,6 +154,18 @@ public data class RunnerConfig(
             }
         }
 
+        // OIDC issuer / JWKS URL must be absolute http(s) URLs — JwkProviderBuilder needs a
+        // real URL, and a bare host fails opaquely on the first token validation rather than
+        // at startup. Audience is free-form (a client id), so no shape check there.
+        val oidcIssuer = dashboardOidcIssuer
+        if (oidcIssuer != null && !oidcIssuer.startsWith("http://") && !oidcIssuer.startsWith("https://")) {
+            failures += "DASHBOARD_OIDC_ISSUER must start with http:// or https:// (got: $oidcIssuer)"
+        }
+        val oidcJwks = dashboardOidcJwksUrl
+        if (oidcJwks != null && !oidcJwks.startsWith("http://") && !oidcJwks.startsWith("https://")) {
+            failures += "DASHBOARD_OIDC_JWKS_URL must start with http:// or https:// (got: $oidcJwks)"
+        }
+
         // S3 archival, if enabled. A custom endpoint must carry an http(s):// scheme (the
         // AWS SDK's URI.create silently accepts a bare host and then fails opaquely on first
         // PutObject). Credentials are all-or-nothing — one half set without the other almost
@@ -189,6 +215,9 @@ public data class RunnerConfig(
             dashboardJwtSecret = System.getenv("DASHBOARD_JWT_SECRET"),
             dashboardJwtIssuer = System.getenv("DASHBOARD_JWT_ISSUER"),
             dashboardJwtAudience = System.getenv("DASHBOARD_JWT_AUDIENCE"),
+            dashboardOidcIssuer = System.getenv("DASHBOARD_OIDC_ISSUER"),
+            dashboardOidcJwksUrl = System.getenv("DASHBOARD_OIDC_JWKS_URL"),
+            dashboardOidcAudience = System.getenv("DASHBOARD_OIDC_AUDIENCE"),
             nodeId = optEnv("NODE_ID", "infra-${java.net.InetAddress.getLocalHost().hostName}"),
             runMigrations = optEnv("RUN_MIGRATIONS", "true").toBoolean(),
             archiveS3 = ArchiveS3Config.fromEnv(System::getenv),

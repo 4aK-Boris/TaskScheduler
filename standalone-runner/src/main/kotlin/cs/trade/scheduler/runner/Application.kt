@@ -27,6 +27,7 @@ import cs.trade.scheduler.transport.rabbit.infrastructure.schedulerRabbitModule
 import io.ktor.serialization.kotlinx.json.json
 import io.ktor.server.application.Application
 import io.ktor.server.application.install
+import com.auth0.jwk.JwkProviderBuilder
 import com.auth0.jwt.JWT
 import com.auth0.jwt.algorithms.Algorithm
 import io.ktor.server.auth.Authentication
@@ -64,6 +65,8 @@ import org.koin.dsl.module
 import org.koin.ktor.plugin.Koin
 import org.koin.logger.slf4jLogger
 import org.slf4j.LoggerFactory
+import java.net.URI
+import java.util.concurrent.TimeUnit
 import javax.sql.DataSource
 
 private val log = LoggerFactory.getLogger("cs.trade.scheduler.runner.Application")
@@ -188,6 +191,9 @@ public fun main() {
             jwtSecret = config.dashboardJwtSecret,
             jwtIssuer = config.dashboardJwtIssuer,
             jwtAudience = config.dashboardJwtAudience,
+            oidcIssuer = config.dashboardOidcIssuer,
+            oidcJwksUrl = config.dashboardOidcJwksUrl,
+            oidcAudience = config.dashboardOidcAudience,
             dataSource = dataSource,
             rabbitFactory = rabbitFactory,
             metricsRegistry = metricsRegistry,
@@ -223,6 +229,9 @@ private fun Application.configureKtor(
     jwtSecret: String?,
     jwtIssuer: String?,
     jwtAudience: String?,
+    oidcIssuer: String?,
+    oidcJwksUrl: String?,
+    oidcAudience: String?,
     dataSource: DataSource,
     rabbitFactory: ConnectionFactory,
     metricsRegistry: PrometheusMeterRegistry,
@@ -249,7 +258,7 @@ private fun Application.configureKtor(
         modules(koinModules)
     }
     val authMethods = mutableListOf<String>()
-    if (authPassword != null || jwtSecret != null) {
+    if (authPassword != null || jwtSecret != null || oidcIssuer != null) {
         install(Authentication) {
             // BasicAuth — same shape as before; opt-in via DASHBOARD_AUTH_PASSWORD.
             if (authPassword != null) {
@@ -284,6 +293,32 @@ private fun Application.configureKtor(
                     }
                 }
                 authMethods += "jwt"
+            }
+            // OIDC / JWKS — asymmetric RS256 validated against the IdP's JWKS endpoint
+            // (e.g. Keycloak). THIS is the path that accepts real Keycloak tokens; the
+            // HMAC256 block above can't (symmetric secret). The JWKS is fetched + cached so
+            // we don't hit the IdP on every request; token `sub` becomes the audit principal.
+            if (oidcIssuer != null) {
+                jwt("oidc") {
+                    realm = "TaskScheduler dashboard"
+                    // Default to the Keycloak JWKS path; override via DASHBOARD_OIDC_JWKS_URL
+                    // for IdPs that publish keys elsewhere.
+                    val jwksUrl = oidcJwksUrl
+                        ?: "${oidcIssuer.trimEnd('/')}/protocol/openid-connect/certs"
+                    val jwkProvider = JwkProviderBuilder(URI.create(jwksUrl).toURL())
+                        .cached(10, 24, TimeUnit.HOURS)
+                        .rateLimited(10, 1, TimeUnit.MINUTES)
+                        .build()
+                    verifier(jwkProvider, oidcIssuer) {
+                        if (oidcAudience != null) withAudience(oidcAudience)
+                        acceptLeeway(3)
+                    }
+                    validate { creds ->
+                        val sub = creds.payload.subject
+                        if (sub.isNullOrBlank()) null else JWTPrincipal(creds.payload)
+                    }
+                }
+                authMethods += "oidc"
             }
         }
     }
