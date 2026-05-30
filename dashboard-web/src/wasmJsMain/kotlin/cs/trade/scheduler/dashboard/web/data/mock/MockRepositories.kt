@@ -20,7 +20,11 @@ import cs.trade.scheduler.shared.RerouteResult
 import cs.trade.scheduler.shared.RetryMode
 import cs.trade.scheduler.shared.RetryResult
 import cs.trade.scheduler.shared.dto.BulkActionResponse
+import cs.trade.scheduler.shared.OnFailure
 import cs.trade.scheduler.shared.dto.JobDetail
+import cs.trade.scheduler.shared.dto.JobEventDto
+import cs.trade.scheduler.shared.dto.JobGraph
+import cs.trade.scheduler.shared.dto.JobGraphEdge
 import cs.trade.scheduler.shared.dto.JobView
 import cs.trade.scheduler.shared.dto.ListJobsResponse
 import cs.trade.scheduler.shared.dto.QueueHealthDto
@@ -30,6 +34,8 @@ import cs.trade.scheduler.shared.dto.TypePauseDto
 import cs.trade.scheduler.shared.dto.TypeStatsDto
 import cs.trade.scheduler.shared.dto.TypeStatsResponse
 import kotlin.time.Clock
+import kotlin.time.Duration
+import kotlin.time.Instant
 import kotlin.time.Duration.Companion.days
 import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.minutes
@@ -122,7 +128,42 @@ public class MockJobsRepository : JobsRepository {
         return ListJobsResponse(items = rows.subList(from, to), total = total, page = page, size = size)
     }
 
-    override suspend fun detail(jobId: String): JobDetail? = null
+    // Synthesises a full detail (timeline + diamond DAG) around whichever job was clicked, so the
+    // JobDetail screen renders populated under ?mock. Unknown ids (e.g. a DAG neighbour click)
+    // fall back to the first sample job re-stamped with that id.
+    override suspend fun detail(jobId: String): JobDetail {
+        val now = Clock.System.now()
+        val focal = MOCK_JOBS.firstOrNull { it.id == jobId } ?: MOCK_JOBS.first().copy(id = jobId)
+        val payloadJson =
+            "{\n  \"to\": \"user@acme.com\",\n  \"template\": \"welcome\",\n  \"locale\": \"en\",\n  \"attempt\": ${focal.attempts}\n}"
+
+        fun node(prefix: String, type: String, state: JobState): JobView = focal.copy(
+            id = "$prefix-2222-4222-8222-2222feedface",
+            state = state,
+            payloadType = type,
+            progress = null, progressMsg = null,
+            progressSucceeded = null, progressFailed = null, progressTotal = null,
+            lockedBy = null,
+        )
+        val rootA = node("aaaaaaaa", "com.acme.inventory.SyncInventory", JobState.SUCCEEDED)
+        val rootB = node("bbbbbbbb", "com.acme.media.ResizeImage", JobState.SUCCEEDED)
+        val leaf1 = node("cccccccc", "com.acme.report.GenerateReport", JobState.AWAITING_DEPS)
+        val leaf2 = node(
+            "dddddddd", "com.acme.webhook.DeliverWebhook",
+            if (focal.state == JobState.FAILED) JobState.CANCELLED else JobState.AWAITING_DEPS,
+        )
+        val graph = JobGraph(
+            nodes = listOf(rootA, rootB, focal, leaf1, leaf2),
+            edges = listOf(
+                JobGraphEdge(rootA.id, focal.id, OnFailure.PROPAGATE_FAILURE),
+                JobGraphEdge(rootB.id, focal.id, OnFailure.PROPAGATE_FAILURE),
+                JobGraphEdge(focal.id, leaf1.id, OnFailure.PROPAGATE_FAILURE),
+                JobGraphEdge(focal.id, leaf2.id, OnFailure.CANCEL_CHILD),
+            ),
+        )
+        return JobDetail(job = focal, payloadJson = payloadJson, events = mockEvents(focal, now), graph = graph)
+    }
+
     override suspend fun cancel(jobId: String, by: String?): CancelResult = error(READ_ONLY)
     override suspend fun retry(jobId: String, by: String?, mode: RetryMode): RetryResult = error(READ_ONLY)
     override suspend fun delete(jobId: String, by: String?): DeleteResult = error(READ_ONLY)
@@ -136,6 +177,60 @@ public class MockJobsRepository : JobsRepository {
         const val READ_ONLY = "Mock mode is read-only (?mock)"
     }
 }
+
+// A plausible timeline for the focal job's current state — enqueue, then the run / failure /
+// retry / cancel transitions a real job of that state would have logged.
+private fun mockEvents(job: JobView, now: Instant): List<JobEventDto> {
+    var id = 0L
+    val events = mutableListOf<JobEventDto>()
+    fun add(
+        type: String,
+        prev: JobState?,
+        new: JobState?,
+        ago: Duration,
+        actor: String? = null,
+        msg: String? = null,
+        stack: String? = null,
+    ) {
+        events += JobEventDto(id++, job.id, type, prev, new, actor, msg, stack, now - ago)
+    }
+    add("ENQUEUED", null, JobState.ENQUEUED, 30.minutes)
+    when (job.state) {
+        JobState.PROCESSING ->
+            add("STARTED", JobState.ENQUEUED, JobState.PROCESSING, 6.minutes, actor = job.lockedBy ?: "worker-1")
+        JobState.SUCCEEDED -> {
+            add("STARTED", JobState.ENQUEUED, JobState.PROCESSING, 12.minutes, actor = "worker-1")
+            add("SUCCEEDED", JobState.PROCESSING, JobState.SUCCEEDED, 11.minutes)
+        }
+        JobState.FAILED -> {
+            add("STARTED", JobState.ENQUEUED, JobState.PROCESSING, 12.minutes, actor = "worker-2")
+            add(
+                "FAILED", JobState.PROCESSING, JobState.FAILED, 11.minutes,
+                msg = "Connection reset by peer (smtp.acme.com:587)", stack = SAMPLE_STACK,
+            )
+        }
+        JobState.AWAITING_RETRY -> {
+            add("STARTED", JobState.ENQUEUED, JobState.PROCESSING, 12.minutes, actor = "worker-0")
+            add(
+                "FAILED", JobState.PROCESSING, JobState.AWAITING_RETRY, 11.minutes,
+                msg = "Timed out after 30000ms", stack = SAMPLE_STACK,
+            )
+            add("RETRY", JobState.AWAITING_RETRY, JobState.ENQUEUED, 9.minutes, actor = "scheduler")
+        }
+        JobState.CANCELLED ->
+            add("CANCELLED", JobState.ENQUEUED, JobState.CANCELLED, 5.minutes, actor = "ops@acme")
+        else -> {}
+    }
+    return events
+}
+
+private val SAMPLE_STACK = """
+    java.net.SocketException: Connection reset by peer
+        at java.base/sun.nio.ch.Net.translateToSocketException(Net.java:179)
+        at com.acme.mailer.SmtpClient.send(SmtpClient.kt:142)
+        at com.acme.email.SendEmailHandler.handle(SendEmailHandler.kt:38)
+        at cs.trade.scheduler.engine.worker.JobRunner.invoke(JobRunner.kt:91)
+""".trimIndent()
 
 public class MockTypesRepository : TypesRepository {
     override suspend fun listPaused(): List<TypePauseDto> = run {
