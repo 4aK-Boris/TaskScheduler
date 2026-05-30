@@ -13,6 +13,12 @@ import cs.trade.scheduler.dashboard.web.data.repositories.StatsRepositoryImpl
 import cs.trade.scheduler.dashboard.web.data.repositories.TypeStatsRepositoryImpl
 import cs.trade.scheduler.dashboard.web.data.repositories.TypesRepositoryImpl
 import cs.trade.scheduler.dashboard.web.data.repositories.WorkersRepositoryImpl
+import cs.trade.scheduler.dashboard.web.data.mock.MockJobsRepository
+import cs.trade.scheduler.dashboard.web.data.mock.MockQueueHealthRepository
+import cs.trade.scheduler.dashboard.web.data.mock.MockTypesRepository
+import cs.trade.scheduler.dashboard.web.domain.repositories.JobsRepository
+import cs.trade.scheduler.dashboard.web.domain.repositories.QueueHealthRepository
+import cs.trade.scheduler.dashboard.web.domain.repositories.TypesRepository
 import cs.trade.scheduler.dashboard.web.domain.usecases.BulkCancelJobsUseCase
 import cs.trade.scheduler.dashboard.web.domain.usecases.BulkDeleteJobsUseCase
 import cs.trade.scheduler.dashboard.web.domain.usecases.BulkRetryJobsUseCase
@@ -36,6 +42,7 @@ import cs.trade.scheduler.dashboard.web.domain.usecases.UnpauseTypeUseCase
 import cs.trade.scheduler.dashboard.web.presentation.root.DefaultRootComponent
 import cs.trade.scheduler.dashboard.web.presentation.root.RootContent
 import kotlinx.browser.document
+import kotlinx.browser.window
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -47,13 +54,16 @@ import kotlinx.coroutines.SupervisorJob
 fun main() {
     val lifecycle = LifecycleRegistry()
 
-    val jobsRepository = JobsRepositoryImpl()
+    // `?mock` swaps the REST-backed repos for in-memory sample data so the dashboard renders
+    // populated screens with no backend (local UI work). Production URLs never carry it.
+    val mock = window.location.search.contains("mock")
+    val jobsRepository: JobsRepository = if (mock) MockJobsRepository() else JobsRepositoryImpl()
     val recurringRepository = RecurringRepositoryImpl()
     val statsRepository = StatsRepositoryImpl()
     val workersRepository = WorkersRepositoryImpl()
-    val typesRepository = TypesRepositoryImpl()
+    val typesRepository: TypesRepository = if (mock) MockTypesRepository() else TypesRepositoryImpl()
     val typeStatsRepository = TypeStatsRepositoryImpl()
-    val queueHealthRepository = QueueHealthRepositoryImpl()
+    val queueHealthRepository: QueueHealthRepository = if (mock) MockQueueHealthRepository() else QueueHealthRepositoryImpl()
 
     // Shared WS subscription for the tab's lifetime — owns the reconnect loop and
     // feeds the connection-status badge. SupervisorJob so a hiccup inside the loop
