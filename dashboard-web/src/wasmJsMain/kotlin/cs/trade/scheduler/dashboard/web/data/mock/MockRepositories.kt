@@ -6,8 +6,10 @@ import cs.trade.scheduler.dashboard.web.domain.repositories.JobsRepository
 import cs.trade.scheduler.dashboard.web.domain.repositories.QueueHealthRepository
 import cs.trade.scheduler.dashboard.web.domain.repositories.RecurringRepository
 import cs.trade.scheduler.dashboard.web.domain.repositories.TypesRepository
+import cs.trade.scheduler.dashboard.web.domain.repositories.WorkersRepository
 import cs.trade.scheduler.shared.MisfirePolicy
 import cs.trade.scheduler.shared.dto.RecurringJobDto
+import cs.trade.scheduler.shared.dto.WorkerDto
 import cs.trade.scheduler.shared.CancelResult
 import cs.trade.scheduler.shared.DeleteResult
 import cs.trade.scheduler.shared.JobPriority
@@ -196,4 +198,38 @@ public class MockRecurringRepository : RecurringRepository {
         enabledOverride[id] = false
         return true
     }
+}
+
+private val MOCK_WORKERS: List<WorkerDto> = run {
+    val now = Clock.System.now()
+    fun w(
+        nodeId: String,
+        host: String,
+        tags: List<String>,
+        startedAgoMin: Int,
+        hbAgoSec: Int,
+        inFlight: Int,
+        byQueue: Map<String, Int>,
+        alive: Boolean,
+    ) = WorkerDto(
+        nodeId = nodeId,
+        host = host,
+        tags = tags,
+        startedAt = now - startedAgoMin.minutes,
+        lastHeartbeat = now - hbAgoSec.seconds,
+        inFlightCount = inFlight,
+        inFlightByQueue = byQueue,
+        alive = alive,
+    )
+    listOf(
+        w("worker-api-1", "ip-10-0-1-12", listOf("api", "fast"), 320, 4, 7, mapOf("default" to 4, "email" to 3), true),
+        w("worker-api-2", "ip-10-0-1-13", listOf("api", "fast"), 320, 9, 3, mapOf("default" to 3), true),
+        w("worker-heavy-1", "ip-10-0-2-7", listOf("heavy"), 1_440, 12, 2, mapOf("heavy" to 2), true),
+        w("worker-reports-1", "ip-10-0-3-21", listOf("reports", "cron"), 60, 2, 0, emptyMap(), true),
+        w("worker-legacy-9", "ip-10-0-9-99", emptyList(), 5_760, 180, 0, emptyMap(), false),
+    )
+}
+
+public class MockWorkersRepository : WorkersRepository {
+    override suspend fun list(): List<WorkerDto> = MOCK_WORKERS
 }

@@ -17,10 +17,12 @@ import cs.trade.scheduler.dashboard.web.data.mock.MockJobsRepository
 import cs.trade.scheduler.dashboard.web.data.mock.MockQueueHealthRepository
 import cs.trade.scheduler.dashboard.web.data.mock.MockRecurringRepository
 import cs.trade.scheduler.dashboard.web.data.mock.MockTypesRepository
+import cs.trade.scheduler.dashboard.web.data.mock.MockWorkersRepository
 import cs.trade.scheduler.dashboard.web.domain.repositories.JobsRepository
 import cs.trade.scheduler.dashboard.web.domain.repositories.QueueHealthRepository
 import cs.trade.scheduler.dashboard.web.domain.repositories.RecurringRepository
 import cs.trade.scheduler.dashboard.web.domain.repositories.TypesRepository
+import cs.trade.scheduler.dashboard.web.domain.repositories.WorkersRepository
 import cs.trade.scheduler.dashboard.web.domain.usecases.BulkCancelJobsUseCase
 import cs.trade.scheduler.dashboard.web.domain.usecases.BulkDeleteJobsUseCase
 import cs.trade.scheduler.dashboard.web.domain.usecases.BulkRetryJobsUseCase
@@ -62,7 +64,7 @@ fun main() {
     val jobsRepository: JobsRepository = if (mock) MockJobsRepository() else JobsRepositoryImpl()
     val recurringRepository: RecurringRepository = if (mock) MockRecurringRepository() else RecurringRepositoryImpl()
     val statsRepository = StatsRepositoryImpl()
-    val workersRepository = WorkersRepositoryImpl()
+    val workersRepository: WorkersRepository = if (mock) MockWorkersRepository() else WorkersRepositoryImpl()
     val typesRepository: TypesRepository = if (mock) MockTypesRepository() else TypesRepositoryImpl()
     val typeStatsRepository = TypeStatsRepositoryImpl()
     val queueHealthRepository: QueueHealthRepository = if (mock) MockQueueHealthRepository() else QueueHealthRepositoryImpl()
