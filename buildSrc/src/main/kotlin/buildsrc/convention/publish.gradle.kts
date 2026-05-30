@@ -14,9 +14,11 @@ plugins {
 }
 
 group = "cs.trade.scheduler"
-// SNAPSHOT so a re-publish during local iteration is picked up without the consumer
-// needing --refresh-dependencies (Gradle re-checks SNAPSHOTs; release versions are cached).
-version = "0.1.0-SNAPSHOT"
+// Fixed release version (no -SNAPSHOT): Gradle caches release artifacts, so a consumer picks
+// up changes only when this number bumps — cut a new version per release rather than re-pushing
+// the same coordinates. 0.2.0: dashboard Graphite redesign across all screens, sub-minute cron,
+// migrations relocated to `scheduler/migration` (consumer Flyway collision fix).
+version = "0.2.0"
 
 // JVM modules (kotlin("jvm")) get no publication for free — create one from the `java`
 // component. KMP modules (kotlin("multiplatform")) auto-register a publication per target
