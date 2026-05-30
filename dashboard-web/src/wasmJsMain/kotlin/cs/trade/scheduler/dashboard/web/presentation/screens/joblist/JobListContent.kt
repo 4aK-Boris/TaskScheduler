@@ -54,16 +54,18 @@ import cs.trade.scheduler.dashboard.web.presentation.components.PausedBadge
 import cs.trade.scheduler.dashboard.web.presentation.components.QueueHealthBadge
 import cs.trade.scheduler.dashboard.web.presentation.components.StateChip
 import cs.trade.scheduler.dashboard.web.presentation.components.timeAgo
+import cs.trade.scheduler.dashboard.web.presentation.components.DashboardPanel
+import cs.trade.scheduler.dashboard.web.presentation.components.PageHeader
+import cs.trade.scheduler.dashboard.web.presentation.components.SettingsMenu
+import cs.trade.scheduler.dashboard.web.presentation.components.SkeletonBar
 import cs.trade.scheduler.shared.JobState
 import cs.trade.scheduler.shared.dto.BulkActionResponse
 import cs.trade.scheduler.shared.dto.JobView
 import cs.trade.scheduler.shared.dto.QueueHealthDto
 import cs.trade.scheduler.shared.dto.QueueHealthStatus
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.hoverable
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.ui.graphics.Color
@@ -74,7 +76,6 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.size
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.material3.DropdownMenu
 import cs.trade.scheduler.dashboard.web.presentation.components.formatClock
 
 // Sum of column widths (checkbox 44 + state 140 + queue 120 + payload 320 + attempts 80
@@ -91,41 +92,20 @@ public fun JobListContent(component: JobListComponent) {
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background),
     ) {
-        // Page header on the canvas — title + live count + refresh.
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, top = 18.dp, bottom = 14.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text(
-                    text = "Jobs",
-                    style = MaterialTheme.typography.headlineSmall,
-                    color = MaterialTheme.colorScheme.onBackground,
-                )
-                CountPill(state.total)
-            }
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                SettingsMenu(
-                    autoRefreshSeconds = state.autoRefreshSeconds,
-                    ageAbsolute = state.ageAbsolute,
-                    onAutoRefreshChanged = component::onAutoRefreshChanged,
-                    onAgeModeChanged = component::onAgeModeChanged,
-                )
-                OutlinedButton(onClick = component::onRefreshClicked, shape = MaterialTheme.shapes.small) {
-                    Text("Refresh")
-                }
+        PageHeader(title = "Jobs", count = state.total) {
+            SettingsMenu(
+                autoRefreshSeconds = state.autoRefreshSeconds,
+                onAutoRefreshChanged = component::onAutoRefreshChanged,
+                timeSectionLabel = "Age column",
+                relativeLabel = "Relative (3m ago)",
+                timeAbsolute = state.ageAbsolute,
+                onTimeModeChanged = component::onAgeModeChanged,
+            )
+            OutlinedButton(onClick = component::onRefreshClicked, shape = MaterialTheme.shapes.small) {
+                Text("Refresh")
             }
         }
-        // Content panel — a white card floating on the cool-grey canvas.
-        Surface(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(start = 16.dp, end = 16.dp, bottom = 16.dp),
-            color = MaterialTheme.colorScheme.surface,
-            shape = MaterialTheme.shapes.medium,
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-        ) {
+        DashboardPanel {
             Column(modifier = Modifier.fillMaxSize()) {
                 StateFilterRow(
                     selected = state.stateFilter,
@@ -227,18 +207,6 @@ public fun JobListContent(component: JobListComponent) {
     }
 }
 
-@Composable
-private fun CountPill(total: Long) {
-    Text(
-        text = total.toString(),
-        style = MaterialTheme.typography.labelMedium.copy(fontFamily = FontFamily.Monospace),
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier
-            .background(MaterialTheme.colorScheme.surfaceContainerHigh, MaterialTheme.shapes.small)
-            .padding(horizontal = 8.dp, vertical = 3.dp),
-    )
-}
-
 // Placeholder rows while the first page loads — calmer than a bare spinner.
 @Composable
 private fun JobListSkeleton(modifier: Modifier = Modifier) {
@@ -260,16 +228,6 @@ private fun JobListSkeleton(modifier: Modifier = Modifier) {
             }
         }
     }
-}
-
-@Composable
-private fun SkeletonBar(width: Dp) {
-    Box(
-        modifier = Modifier
-            .width(width)
-            .height(12.dp)
-            .background(MaterialTheme.colorScheme.surfaceContainerHigh, MaterialTheme.shapes.extraSmall),
-    )
 }
 
 @Composable
@@ -347,93 +305,6 @@ private fun NavBtn(left: Boolean, enabled: Boolean, onClick: () -> Unit) {
     }
 }
 
-// ---- Settings menu (auto-refresh + age display) -----------------------------------------
-
-@Composable
-private fun SettingsMenu(
-    autoRefreshSeconds: Int?,
-    ageAbsolute: Boolean,
-    onAutoRefreshChanged: (Int?) -> Unit,
-    onAgeModeChanged: (Boolean) -> Unit,
-) {
-    var open by remember { mutableStateOf(false) }
-    Box {
-        Box(
-            modifier = Modifier
-                .size(36.dp)
-                .border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.small)
-                .clickable { open = true },
-            contentAlignment = Alignment.Center,
-        ) {
-            // Glyph goes cobalt when auto-refresh is on, so the active state reads at a glance.
-            GearGlyph(
-                if (autoRefreshSeconds != null) MaterialTheme.colorScheme.primary
-                else MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-            MenuSectionLabel("Auto-refresh")
-            listOf<Pair<String, Int?>>(
-                "Off" to null, "5 seconds" to 5, "10 seconds" to 10, "30 seconds" to 30, "1 minute" to 60,
-            ).forEach { (label, secs) ->
-                DropdownMenuItem(
-                    text = { Text(label, style = MaterialTheme.typography.bodyMedium) },
-                    onClick = { onAutoRefreshChanged(secs); open = false },
-                    leadingIcon = { CheckMark(selected = autoRefreshSeconds == secs) },
-                )
-            }
-            HorizontalDivider()
-            MenuSectionLabel("Age column")
-            DropdownMenuItem(
-                text = { Text("Relative (3m ago)", style = MaterialTheme.typography.bodyMedium) },
-                onClick = { onAgeModeChanged(false); open = false },
-                leadingIcon = { CheckMark(selected = !ageAbsolute) },
-            )
-            DropdownMenuItem(
-                text = { Text("Absolute (14:30:05)", style = MaterialTheme.typography.bodyMedium) },
-                onClick = { onAgeModeChanged(true); open = false },
-                leadingIcon = { CheckMark(selected = ageAbsolute) },
-            )
-        }
-    }
-}
-
-@Composable
-private fun MenuSectionLabel(label: String) {
-    Text(
-        text = label.uppercase(),
-        style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 0.6.sp),
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-    )
-}
-
-@Composable
-private fun CheckMark(selected: Boolean) {
-    val color = MaterialTheme.colorScheme.primary
-    Canvas(modifier = Modifier.size(16.dp)) {
-        if (!selected) return@Canvas
-        val w = size.width
-        val h = size.height
-        val sw = w * 0.14f
-        drawLine(color, Offset(w * 0.18f, h * 0.55f), Offset(w * 0.42f, h * 0.78f), sw, cap = StrokeCap.Round)
-        drawLine(color, Offset(w * 0.42f, h * 0.78f), Offset(w * 0.82f, h * 0.28f), sw, cap = StrokeCap.Round)
-    }
-}
-
-// "Tune" sliders glyph for the settings button (no icon dependency).
-@Composable
-private fun GearGlyph(color: Color) {
-    Canvas(modifier = Modifier.size(16.dp)) {
-        val w = size.width
-        val sw = w * 0.085f
-        listOf(0.28f to 0.66f, 0.5f to 0.36f, 0.72f to 0.6f).forEach { (yf, knobX) ->
-            val y = size.height * yf
-            drawLine(color, Offset(w * 0.15f, y), Offset(w * 0.85f, y), strokeWidth = sw, cap = StrokeCap.Round)
-            drawCircle(color, radius = w * 0.09f, center = Offset(w * knobX, y))
-        }
-    }
-}
 
 @Composable
 private fun ExtraFiltersRow(
