@@ -1,11 +1,17 @@
 package cs.trade.scheduler.dashboard.web.presentation.screens.jobdetail
 
+import androidx.compose.animation.animateContentSize
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
@@ -14,21 +20,15 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -37,579 +37,373 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.arkivanov.decompose.extensions.compose.subscribeAsState
+import cs.trade.scheduler.core.frontend.theme.schedulerColors
 import cs.trade.scheduler.dashboard.web.presentation.components.DependencyGraph
 import cs.trade.scheduler.dashboard.web.presentation.components.PausedBadge
+import cs.trade.scheduler.dashboard.web.presentation.components.SettingsMenu
+import cs.trade.scheduler.dashboard.web.presentation.components.SkeletonBar
 import cs.trade.scheduler.dashboard.web.presentation.components.StateChip
+import cs.trade.scheduler.dashboard.web.presentation.components.formatDateTime
 import cs.trade.scheduler.dashboard.web.presentation.components.timeAgo
 import cs.trade.scheduler.shared.JobState
 import cs.trade.scheduler.shared.dto.JobDetail
 import cs.trade.scheduler.shared.dto.JobEventDto
+import cs.trade.scheduler.shared.dto.JobView
 import cs.trade.scheduler.shared.functionref.FunctionRefPayload
 import cs.trade.scheduler.shared.functionref.FunctionRefPayloadFormatter
+import kotlin.time.Instant
 
-@OptIn(ExperimentalMaterial3Api::class)
+// Below this the two-column layout (content + action sidebar) collapses to a single stack.
+private val TWO_COLUMN_MIN = 980.dp
+
 @Composable
 public fun JobDetailContent(component: JobDetailComponent) {
     val state by component.model.subscribeAsState()
-
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = {
-                    Text(
-                        text = "Job ${state.jobId.take(8)}",
-                        fontFamily = FontFamily.Monospace,
-                    )
-                },
-                actions = {
-                    OutlinedButton(onClick = component::onRefreshClicked) { Text("Refresh") }
-                },
-            )
-        },
-    ) { padding ->
-        Box(modifier = Modifier.fillMaxSize().padding(padding)) {
+    Column(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+        JobHeader(
+            jobId = state.jobId,
+            detail = state.detail,
+            paused = state.detail?.let { it.job.payloadType in state.pausedTypes } ?: false,
+            autoRefreshSeconds = state.autoRefreshSeconds,
+            onAutoRefreshChanged = component::onAutoRefreshChanged,
+            timeAbsolute = state.timeAbsolute,
+            onTimeModeChanged = component::onTimeModeChanged,
+            onBack = component::onBackClicked,
+            onRefresh = component::onRefreshClicked,
+        )
+        Box(modifier = Modifier.fillMaxSize()) {
             when {
-                state.loading && state.detail == null -> CircularProgressIndicator(
-                    modifier = Modifier.align(Alignment.Center),
-                )
+                state.loading && state.detail == null ->
+                    JobDetailSkeleton(modifier = Modifier.align(Alignment.TopStart))
                 state.error != null && state.detail == null -> Text(
                     text = state.error ?: "",
                     color = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.align(Alignment.Center).padding(16.dp),
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.align(Alignment.Center).padding(24.dp),
                 )
-                state.detail != null -> JobDetailBody(
-                    detail = state.detail!!,
-                    paused = state.detail!!.job.payloadType in state.pausedTypes,
-                    cancelling = state.cancelling,
-                    onCancel = component::onCancelClicked,
-                    cancelMessage = state.cancelResult?.name,
-                    retrying = state.retrying,
-                    onRetry = component::onRetryClicked,
-                    onRetryOnce = component::onRetryOnceClicked,
-                    retryMessage = state.retryResult?.name,
-                    deleting = state.deleting,
-                    confirmingDelete = state.confirmingDelete,
-                    onDelete = component::onDeleteClicked,
-                    onDeleteCancel = component::onDeleteConfirmCancelled,
-                    deleteMessage = state.deleteResult?.name,
-                    rerouting = state.rerouting,
-                    rerouteFormOpen = state.rerouteFormOpen,
-                    rerouteNode = state.rerouteNode,
-                    rerouteTag = state.rerouteTag,
-                    rerouteMessage = state.rerouteResult?.name,
-                    onRerouteToggle = component::onRerouteFormToggled,
-                    onRerouteNodeChange = component::onRerouteNodeChanged,
-                    onRerouteTagChange = component::onRerouteTagChanged,
-                    onRerouteSubmit = component::onRerouteSubmit,
-                    onBack = component::onBackClicked,
-                    onNavigate = component::onNeighbourClicked,
-                )
+                state.detail != null -> JobDetailBody(component, state, state.detail!!)
             }
         }
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun JobDetailBody(
-    detail: JobDetail,
+private fun JobHeader(
+    jobId: String,
+    detail: JobDetail?,
     paused: Boolean,
-    cancelling: Boolean,
-    onCancel: () -> Unit,
-    cancelMessage: String?,
-    retrying: Boolean,
-    onRetry: () -> Unit,
-    onRetryOnce: () -> Unit,
-    retryMessage: String?,
-    deleting: Boolean,
-    confirmingDelete: Boolean,
-    onDelete: () -> Unit,
-    onDeleteCancel: () -> Unit,
-    deleteMessage: String?,
-    rerouting: Boolean,
-    rerouteFormOpen: Boolean,
-    rerouteNode: String,
-    rerouteTag: String,
-    rerouteMessage: String?,
-    onRerouteToggle: () -> Unit,
-    onRerouteNodeChange: (String) -> Unit,
-    onRerouteTagChange: (String) -> Unit,
-    onRerouteSubmit: () -> Unit,
+    autoRefreshSeconds: Int?,
+    onAutoRefreshChanged: (Int?) -> Unit,
+    timeAbsolute: Boolean,
+    onTimeModeChanged: (Boolean) -> Unit,
     onBack: () -> Unit,
-    onNavigate: (String) -> Unit,
+    onRefresh: () -> Unit,
 ) {
-    val job = detail.job
-    val payloadJson = detail.payloadJson
-    Column(
-        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, top = 18.dp, bottom = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            StateChip(job.state)
-            Text(text = job.payloadType, style = MaterialTheme.typography.titleMedium)
+            detail?.let { StateChip(it.job.state) }
+            Text(
+                text = "Job ${jobId.take(8)}",
+                style = MaterialTheme.typography.headlineSmall.copy(fontFamily = FontFamily.Monospace),
+                color = MaterialTheme.colorScheme.onBackground,
+            )
+            detail?.let {
+                Text(
+                    text = it.job.payloadType.substringAfterLast('.'),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             if (paused) PausedBadge()
         }
-
-        FactGrid(
-            "ID" to job.id,
-            "Queue" to job.queue,
-            "Priority" to job.priority.value.toString(),
-            "Attempts" to "${job.attempts}/${job.maxAttempts}",
-            "Created" to "${timeAgo(job.createdAt)} (${job.createdAt})",
-            "Updated" to "${timeAgo(job.updatedAt)} (${job.updatedAt})",
-            "Scheduled" to (job.scheduledAt?.toString() ?: "—"),
-            "Duration" to (job.durationMs?.let { "${it}ms" } ?: "—"),
-            "Locked by" to (job.lockedBy ?: "—"),
-        )
-
-        // Live progress bar: only when the handler has reported at least once. We keep
-        // it visible after terminal too — the last reported value is useful audit info
-        // (e.g. "made it to 0.9 before failing"). Updates arrive via WS firehose
-        // (DESIGN.md 22.3); the bar mutates without a REST refresh.
-        job.progress?.let { p ->
-            ProgressBlock(
-                progress = p,
-                msg = job.progressMsg,
-                succeeded = job.progressSucceeded,
-                failed = job.progressFailed,
-                total = job.progressTotal,
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            SettingsMenu(
+                autoRefreshSeconds = autoRefreshSeconds,
+                onAutoRefreshChanged = onAutoRefreshChanged,
+                timeSectionLabel = "Timestamps",
+                relativeLabel = "Relative (3m ago)",
+                timeAbsolute = timeAbsolute,
+                onTimeModeChanged = onTimeModeChanged,
+                absoluteLabel = "Absolute (2026-05-30 14:30)",
             )
+            OutlinedButton(onClick = onBack, shape = MaterialTheme.shapes.small) { Text("Back") }
+            OutlinedButton(onClick = onRefresh, shape = MaterialTheme.shapes.small) { Text("Refresh") }
         }
+    }
+}
 
-        HorizontalDivider()
+@Composable
+private fun JobDetailBody(component: JobDetailComponent, m: JobDetailComponent.Model, detail: JobDetail) {
+    Column(
+        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())
+            .padding(start = 16.dp, end = 16.dp, bottom = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        BoxWithConstraints {
+            val wide = maxWidth >= TWO_COLUMN_MIN
+            if (wide) {
+                Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                    Column(modifier = Modifier.weight(1.7f), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                        OverviewPanel(detail.job, m.timeAbsolute)
+                        PayloadPanel(detail.job, detail.payloadJson)
+                        TimelinePanel(detail.events, m.timeAbsolute)
+                    }
+                    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                        ActionsPanel(component, m, detail.job)
+                    }
+                }
+            } else {
+                Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                    ActionsPanel(component, m, detail.job)
+                    OverviewPanel(detail.job, m.timeAbsolute)
+                    PayloadPanel(detail.job, detail.payloadJson)
+                    TimelinePanel(detail.events, m.timeAbsolute)
+                }
+            }
+        }
+        // Dependency graph spans the full width — it pans horizontally and can get wide.
+        if (detail.graph.edges.isNotEmpty()) {
+            GraphPanel(detail, focalId = detail.job.id, onNavigate = component::onNeighbourClicked)
+        }
+    }
+}
 
-        Text("Payload", style = MaterialTheme.typography.titleMedium)
-        // Function-ref jobs carry a structured payload — show it as `Mailer.send(123,
-        // "welcome")` instead of dumping raw JSON. Falls back to raw JSON if the payload
-        // doesn't parse (operator pasted a borked row, schema drift, etc.).
+// ---- reusable card -------------------------------------------------------------------------
+
+@Composable
+private fun Panel(title: String, modifier: Modifier = Modifier, content: @Composable () -> Unit) {
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surface,
+        shape = MaterialTheme.shapes.medium,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+    ) {
+        Column(modifier = Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            SectionLabel(title)
+            content()
+        }
+    }
+}
+
+@Composable
+private fun SectionLabel(text: String) {
+    Text(
+        text = text.uppercase(),
+        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Medium, letterSpacing = 0.6.sp),
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+}
+
+// ---- overview ------------------------------------------------------------------------------
+
+@Composable
+private fun OverviewPanel(job: JobView, timeAbsolute: Boolean) {
+    Panel("Overview") {
+        FactCell(Modifier.fillMaxWidth(), "Job ID", job.id, mono = true)
+        FactCell(Modifier.fillMaxWidth(), "Payload type", job.payloadType, mono = true)
+        FactRow {
+            FactCell(Modifier.weight(1f), "Queue", job.queue)
+            FactCell(Modifier.weight(1f), "Priority", job.priority.value.toString())
+        }
+        FactRow {
+            FactCell(Modifier.weight(1f), "Attempts", "${job.attempts} / ${job.maxAttempts}")
+            FactCell(Modifier.weight(1f), "Duration", job.durationMs?.let { "$it ms" } ?: "—")
+        }
+        FactRow {
+            FactCell(Modifier.weight(1f), "Locked by", job.lockedBy ?: "—", mono = job.lockedBy != null)
+            FactCell(Modifier.weight(1f), "Scheduled", job.scheduledAt?.let { fmtTime(it, timeAbsolute) } ?: "—")
+        }
+        FactRow {
+            FactCell(Modifier.weight(1f), "Created", fmtTime(job.createdAt, timeAbsolute))
+            FactCell(Modifier.weight(1f), "Updated", fmtTime(job.updatedAt, timeAbsolute))
+        }
+        job.progress?.let { p ->
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            ProgressBlock(p, job.progressMsg, job.progressSucceeded, job.progressFailed, job.progressTotal)
+        }
+    }
+}
+
+@Composable
+private fun FactRow(content: @Composable RowScope.() -> Unit) {
+    Row(horizontalArrangement = Arrangement.spacedBy(24.dp), content = content)
+}
+
+@Composable
+private fun FactCell(modifier: Modifier, label: String, value: String, mono: Boolean = false) {
+    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(3.dp)) {
+        SectionLabel(label)
+        Text(
+            text = value,
+            style = MaterialTheme.typography.bodyMedium.let { if (mono) it.copy(fontFamily = FontFamily.Monospace) else it },
+            color = MaterialTheme.colorScheme.onSurface,
+        )
+    }
+}
+
+@Composable
+private fun ProgressBlock(progress: Float, msg: String?, succeeded: Long?, failed: Long?, total: Long?) {
+    val pct = (progress.coerceIn(0f, 1f) * 100).toInt()
+    val success = MaterialTheme.schedulerColors.success
+    val fail = MaterialTheme.colorScheme.error
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            SectionLabel("Progress")
+            Text("$pct%", style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace))
+        }
+        Box(
+            modifier = Modifier.fillMaxWidth().height(10.dp).clip(MaterialTheme.shapes.extraSmall)
+                .background(MaterialTheme.colorScheme.surfaceContainerHigh),
+        ) {
+            // Counting bar (JobContext.progressBar): green succeeded + red failed segments.
+            // Falls back to a single cobalt fill when the handler used plain updateProgress.
+            if (succeeded != null && failed != null && total != null && total > 0L) {
+                val succeededFrac = (succeeded.toFloat() / total).coerceIn(0f, 1f)
+                val failedFrac = (failed.toFloat() / total).coerceIn(0f, 1f - succeededFrac)
+                Row(Modifier.fillMaxSize()) {
+                    if (succeededFrac > 0f) Box(Modifier.fillMaxHeight().weight(succeededFrac).background(success))
+                    if (failedFrac > 0f) Box(Modifier.fillMaxHeight().weight(failedFrac).background(fail))
+                    val rest = (1f - succeededFrac - failedFrac).coerceIn(0f, 1f)
+                    if (rest > 0f) Box(Modifier.fillMaxHeight().weight(rest))
+                }
+            } else {
+                Box(
+                    Modifier.fillMaxHeight().fillMaxWidth(progress.coerceIn(0f, 1f))
+                        .background(MaterialTheme.colorScheme.primary),
+                )
+            }
+        }
+        if (succeeded != null && failed != null && total != null && total > 0L) {
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("✓ $succeeded", color = success, style = MaterialTheme.typography.bodySmall)
+                Text("✗ $failed", color = fail, style = MaterialTheme.typography.bodySmall)
+                Text("/ $total", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+            }
+        }
+        if (!msg.isNullOrBlank()) {
+            Text(msg, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+// ---- payload -------------------------------------------------------------------------------
+
+@Composable
+private fun PayloadPanel(job: JobView, payloadJson: String) {
+    Panel("Payload") {
+        // Function-ref jobs render as `Mailer.send(123, "welcome")`; everything else as raw JSON.
         val formatted = if (job.payloadType == FunctionRefPayload.FUNCTION_REF_PAYLOAD_TYPE) {
             FunctionRefPayloadFormatter.tryFormat(payloadJson)
         } else {
             null
         }
-        if (formatted != null) {
-            FunctionRefPayloadBlock(formatted = formatted, rawJson = payloadJson)
-        } else {
-            Surface(
-                color = MaterialTheme.colorScheme.surfaceVariant,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Text(
-                    text = payloadJson,
-                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
-                    modifier = Modifier.padding(12.dp),
-                )
-            }
-        }
-
-        // Dependency graph — only when the job is actually part of a DAG (has at least one
-        // edge). A standalone job gets a single-node graph from the server, which isn't worth
-        // a diagram. Clicking any non-focal node navigates to its detail.
-        val graph = detail.graph
-        if (graph.edges.isNotEmpty()) {
-            HorizontalDivider()
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Text("Dependency graph", style = MaterialTheme.typography.titleMedium)
-                Text(
-                    text = "${graph.nodes.size} jobs",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            if (graph.truncated) {
-                Text(
-                    text = "Graph truncated to ${graph.nodes.size} nodes — some distant dependencies are not shown.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
-                )
-            }
-            DependencyGraph(graph = graph, focalId = job.id, onNavigate = onNavigate)
-        }
-
-        HorizontalDivider()
-
-        Text("Timeline (${detail.events.size})", style = MaterialTheme.typography.titleMedium)
-        if (detail.events.isEmpty()) {
-            Text(
-                text = "No events recorded yet",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        } else {
-            EventTimeline(detail.events)
-        }
-
-        HorizontalDivider()
-
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            OutlinedButton(onClick = onBack) { Text("Back") }
-            if (!job.state.isTerminal) {
-                Button(
-                    onClick = onCancel,
-                    enabled = !cancelling && !retrying,
-                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
-                ) {
-                    Text(if (cancelling) "Cancelling…" else "Cancel job")
-                }
-            }
-            // Manual retry is only meaningful on FAILED — SUCCEEDED / CANCELLED are
-            // deliberate end-states. Backend enforces this too (returns NOT_FAILED), but
-            // hiding the button keeps the UI honest.
-            if (job.state == JobState.FAILED) {
-                // "Retry": reset attempts to 0 → full fresh budget ("I fixed the cause").
-                Button(
-                    onClick = onRetry,
-                    enabled = !retrying && !cancelling && !deleting,
-                ) {
-                    Text(if (retrying) "Retrying…" else "Retry")
-                }
-                // "Retry +1": exactly one more attempt without resetting the budget — for a
-                // suspected-transient failure where a full fresh budget would be overkill
-                // (DESIGN.md 9.5). Secondary styling so the primary "Retry" stays dominant.
-                OutlinedButton(
-                    onClick = onRetryOnce,
-                    enabled = !retrying && !cancelling && !deleting,
-                ) {
-                    Text(if (retrying) "Retrying…" else "Retry +1")
-                }
-            }
-            // Delete is terminal-only — backend rejects others with NOT_TERMINAL but UI
-            // mirrors. Two-step inline confirm: first click arms (label flips + a Cancel
-            // button appears), second commits. Pop back to list on success.
-            if (job.state.isTerminal) {
-                Button(
-                    onClick = onDelete,
-                    enabled = !deleting,
-                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
-                ) {
-                    val label = when {
-                        deleting -> "Deleting…"
-                        confirmingDelete -> "Click again to confirm"
-                        else -> "Delete"
-                    }
-                    Text(label)
-                }
-                if (confirmingDelete && !deleting) {
-                    OutlinedButton(onClick = onDeleteCancel) { Text("Cancel delete") }
-                }
-            }
-            // Reroute — non-terminal only. Useful when a job sits in q.node.X with X
-            // offline. Toggle expands an inline form; backend accepts node OR tag.
-            if (!job.state.isTerminal) {
-                OutlinedButton(onClick = onRerouteToggle, enabled = !rerouting) {
-                    Text(if (rerouteFormOpen) "Cancel reroute" else "Re-route")
-                }
-            }
-        }
-
-        if (rerouteFormOpen) {
-            Surface(color = MaterialTheme.colorScheme.surfaceVariant, modifier = Modifier.fillMaxWidth()) {
-                Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(
-                        "Re-route — fill node OR tag (or both empty to clear targets):",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    ) {
-                        OutlinedTextField(
-                            value = rerouteNode,
-                            onValueChange = onRerouteNodeChange,
-                            label = { Text("Target node") },
-                            singleLine = true,
-                            enabled = !rerouting,
-                            modifier = Modifier.width(220.dp),
-                            textStyle = MaterialTheme.typography.bodySmall,
-                        )
-                        OutlinedTextField(
-                            value = rerouteTag,
-                            onValueChange = onRerouteTagChange,
-                            label = { Text("Target tag") },
-                            singleLine = true,
-                            enabled = !rerouting,
-                            modifier = Modifier.width(220.dp),
-                            textStyle = MaterialTheme.typography.bodySmall,
-                        )
-                        Button(onClick = onRerouteSubmit, enabled = !rerouting) {
-                            Text(if (rerouting) "Applying…" else "Apply")
-                        }
-                    }
-                }
-            }
-        }
-
-        cancelMessage?.let {
-            Text(
-                text = "Cancel result: $it",
-                color = MaterialTheme.colorScheme.primary,
-                style = MaterialTheme.typography.bodyMedium,
-            )
-        }
-        retryMessage?.let {
-            Text(
-                text = "Retry result: $it",
-                color = MaterialTheme.colorScheme.primary,
-                style = MaterialTheme.typography.bodyMedium,
-            )
-        }
-        deleteMessage?.let {
-            Text(
-                text = "Delete result: $it",
-                color = MaterialTheme.colorScheme.primary,
-                style = MaterialTheme.typography.bodyMedium,
-            )
-        }
-        rerouteMessage?.let {
-            Text(
-                text = "Re-route result: $it",
-                color = MaterialTheme.colorScheme.primary,
-                style = MaterialTheme.typography.bodyMedium,
-            )
-        }
+        if (formatted != null) FunctionRefPayloadBlock(formatted, payloadJson) else CodeBlock(payloadJson)
     }
 }
 
 @Composable
-private fun ProgressBlock(
-    progress: Float,
-    msg: String?,
-    succeeded: Long?,
-    failed: Long?,
-    total: Long?,
-) {
-    val pct = (progress.coerceIn(0f, 1f) * 100).toInt()
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.fillMaxWidth()) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Progress", style = MaterialTheme.typography.titleSmall)
-            Text("$pct%", style = MaterialTheme.typography.bodyMedium)
-        }
-        // Counting progress bar (JobContext.progressBar): split the track into a green
-        // succeeded segment and a red failed segment. Falls back to the plain single bar
-        // when the handler used updateProgress (no counters reported).
-        if (succeeded != null && failed != null && total != null && total > 0L) {
-            val successColor = Color(0xFF2E7D32)
-            val failColor = MaterialTheme.colorScheme.error
-            val succeededFrac = (succeeded.toFloat() / total).coerceIn(0f, 1f)
-            val failedFrac = (failed.toFloat() / total).coerceIn(0f, 1f - succeededFrac)
-            val remainingFrac = (1f - succeededFrac - failedFrac).coerceIn(0f, 1f)
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(8.dp)
-                    .clip(RoundedCornerShape(4.dp))
-                    .background(MaterialTheme.colorScheme.surfaceVariant),
-            ) {
-                Row(Modifier.fillMaxSize()) {
-                    // Row weights are relative, so the three fractions (which sum to 1)
-                    // map straight to widths. Guard each against weight == 0, which throws.
-                    if (succeededFrac > 0f) {
-                        Box(Modifier.fillMaxHeight().weight(succeededFrac).background(successColor))
-                    }
-                    if (failedFrac > 0f) {
-                        Box(Modifier.fillMaxHeight().weight(failedFrac).background(failColor))
-                    }
-                    if (remainingFrac > 0f) {
-                        Box(Modifier.fillMaxHeight().weight(remainingFrac))
-                    }
-                }
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("✓ $succeeded", color = successColor, style = MaterialTheme.typography.bodySmall)
-                Text("✗ $failed", color = failColor, style = MaterialTheme.typography.bodySmall)
-                Text(
-                    text = "/ $total",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    style = MaterialTheme.typography.bodySmall,
-                )
-            }
-        } else {
-            LinearProgressIndicator(
-                progress = { progress.coerceIn(0f, 1f) },
-                modifier = Modifier.fillMaxWidth(),
-            )
-        }
-        if (!msg.isNullOrBlank()) {
-            Text(
-                text = msg,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
+private fun CodeBlock(text: String) {
+    Box(
+        modifier = Modifier.fillMaxWidth().clip(MaterialTheme.shapes.small)
+            .background(MaterialTheme.colorScheme.surfaceContainerLow)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.small)
+            .padding(12.dp),
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+            color = MaterialTheme.colorScheme.onSurface,
+        )
     }
 }
 
 @Composable
-private fun FunctionRefPayloadBlock(
-    formatted: FunctionRefPayloadFormatter.Formatted,
-    rawJson: String,
-) {
+private fun FunctionRefPayloadBlock(formatted: FunctionRefPayloadFormatter.Formatted, rawJson: String) {
     var showRaw by remember { mutableStateOf(false) }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-        // Headline: the Kotlin-call rendering. Monospace so `Mailer.send(123, "welcome")`
-        // reads like code, not paragraph text.
-        Surface(
-            color = MaterialTheme.colorScheme.surfaceVariant,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Text(
-                text = formatted.oneLine,
-                style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
-                modifier = Modifier.padding(12.dp),
-            )
-        }
-        // Detailed breakdown — typed args with their declared parameter type. Hidden when
-        // there are no args (zero-arg call already reads fully from the oneLine).
+        CodeBlock(formatted.oneLine)
         if (formatted.args.isNotEmpty()) {
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 formatted.args.forEachIndexed { idx, arg ->
                     Text(
-                        text = "  arg[$idx] (${arg.type}) = ${arg.valueRendered}",
+                        text = "arg[$idx] (${arg.type}) = ${arg.valueRendered}",
                         style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }
         }
-        // Qualifier hint when present — tells the operator which Koin binding will be used.
-        if (formatted.targetQualifier != null) {
-            Text(
-                text = "Koin qualifier: \"${formatted.targetQualifier}\"",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+        formatted.targetQualifier?.let {
+            Text("Koin qualifier: \"$it\"", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
-        // Full receiver FQN — useful for ops debugging when the simple name is ambiguous.
         Text(
-            text = "Receiver: ${formatted.receiverFqn}",
+            "Receiver: ${formatted.receiverFqn}",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        // Expandable raw JSON — for the rare case where the formatter dropped some detail
-        // (composite arg JSON shortened, escape handling) and the operator wants the
-        // ground truth. One click, one fewer click than copying out of a DB query.
         Text(
             text = if (showRaw) "Hide raw JSON" else "Show raw JSON",
-            style = MaterialTheme.typography.bodySmall,
+            style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.primary,
             modifier = Modifier.clickable { showRaw = !showRaw },
         )
-        if (showRaw) {
-            Surface(
-                color = MaterialTheme.colorScheme.surfaceVariant,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Text(
-                    text = rawJson,
-                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
-                    modifier = Modifier.padding(12.dp),
-                )
-            }
+        Box(modifier = Modifier.animateContentSize()) {
+            if (showRaw) CodeBlock(rawJson)
         }
     }
 }
 
-@Composable
-private fun EventTimeline(events: List<JobEventDto>) {
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        events.forEach { ev ->
-            EventRow(ev)
-        }
-    }
-}
+// ---- dependency graph ----------------------------------------------------------------------
 
 @Composable
-private fun EventRow(ev: JobEventDto) {
-    // Per-event expansion state. Keyed by event id so re-composes preserve the toggle.
-    var stackExpanded by remember(ev.id) { mutableStateOf(false) }
-
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.Top,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Text(
-            text = timeAgo(ev.occurredAt),
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.width(80.dp),
-        )
-        Text(
-            text = ev.eventType,
-            style = MaterialTheme.typography.labelMedium,
-            modifier = Modifier.width(140.dp),
-        )
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            modifier = Modifier.width(260.dp),
-        ) {
-            ev.prevState?.let { StateChip(it) }
-            if (ev.prevState != null && ev.newState != null) {
-                Text(
-                    "->",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            ev.newState?.let { StateChip(it) }
-        }
-        ev.actor?.let {
+private fun GraphPanel(detail: JobDetail, focalId: String, onNavigate: (String) -> Unit) {
+    val graph = detail.graph
+    Panel("Dependency graph") {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(
-                text = "by $it",
+                text = "${graph.nodes.size} jobs",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-        }
-    }
-    // Error message + collapsible stack trace (aligned under the row content, indented past
-    // the timestamp column so eye flow is "what failed" -> "the trace if I expand it").
-    if (ev.errorMsg != null || ev.errorStack != null) {
-        Column(
-            modifier = Modifier.padding(start = 92.dp).fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            ev.errorMsg?.let { msg ->
+            if (graph.truncated) {
                 Text(
-                    text = msg,
+                    text = "· truncated — some distant dependencies are not shown",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.error,
                 )
             }
-            ev.errorStack?.let { stack ->
-                val toggleLabel = if (stackExpanded) "▼ Hide stack trace" else "▶ Show stack trace"
-                Text(
-                    text = toggleLabel,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier
-                        .clickable { stackExpanded = !stackExpanded }
-                        .padding(vertical = 2.dp),
-                )
-                if (stackExpanded) {
-                    Surface(
-                        color = MaterialTheme.colorScheme.errorContainer,
-                        shape = RoundedCornerShape(4.dp),
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text(
-                            text = stack,
-                            style = MaterialTheme.typography.bodySmall.copy(
-                                fontFamily = FontFamily.Monospace,
-                            ),
-                            color = MaterialTheme.colorScheme.onErrorContainer,
-                            modifier = Modifier.padding(8.dp),
-                        )
-                    }
-                    Spacer(Modifier.padding(top = 2.dp))
+        }
+        DependencyGraph(graph = graph, focalId = focalId, onNavigate = onNavigate)
+    }
+}
+
+// ---- timeline ------------------------------------------------------------------------------
+
+@Composable
+private fun TimelinePanel(events: List<JobEventDto>, timeAbsolute: Boolean) {
+    Panel("Timeline · ${events.size}") {
+        if (events.isEmpty()) {
+            Text(
+                text = "No events recorded yet",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        } else {
+            Column {
+                events.forEachIndexed { i, ev ->
+                    TimelineRow(ev, isFirst = i == 0, isLast = i == events.lastIndex, timeAbsolute = timeAbsolute)
                 }
             }
         }
@@ -617,22 +411,243 @@ private fun EventRow(ev: JobEventDto) {
 }
 
 @Composable
-private fun FactGrid(vararg facts: Pair<String, String>) {
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        facts.forEach { (label, value) ->
-            Row(verticalAlignment = Alignment.Top) {
+private fun TimelineRow(ev: JobEventDto, isFirst: Boolean, isLast: Boolean, timeAbsolute: Boolean) {
+    var stackExpanded by remember(ev.id) { mutableStateOf(false) }
+    val dotColor = eventColor(ev.eventType)
+    val rail = MaterialTheme.colorScheme.outlineVariant
+
+    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+        // Rail gutter: a continuous vertical line with a dot per event (clipped at the ends).
+        Canvas(modifier = Modifier.width(16.dp).fillMaxHeight()) {
+            val cx = size.width / 2f
+            val dotY = 16.dp.toPx()
+            val r = 5.dp.toPx()
+            val stroke = 2.dp.toPx()
+            if (!isFirst) drawLine(rail, Offset(cx, 0f), Offset(cx, dotY), strokeWidth = stroke, cap = StrokeCap.Round)
+            if (!isLast) drawLine(rail, Offset(cx, dotY), Offset(cx, size.height), strokeWidth = stroke, cap = StrokeCap.Round)
+            drawCircle(dotColor, radius = r, center = Offset(cx, dotY))
+        }
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
-                    text = label,
-                    style = MaterialTheme.typography.labelMedium,
+                    text = ev.eventType,
+                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Medium),
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                ev.prevState?.let { StateChip(it) }
+                if (ev.prevState != null && ev.newState != null) {
+                    Text("→", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                ev.newState?.let { StateChip(it) }
+                Spacer(Modifier.weight(1f))
+                Text(
+                    text = fmtTime(ev.occurredAt, timeAbsolute),
+                    style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.width(120.dp),
                 )
+            }
+            ev.actor?.let {
+                Text("by $it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            ev.errorMsg?.let {
+                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+            }
+            ev.errorStack?.let { stack ->
                 Text(
-                    text = value,
-                    style = MaterialTheme.typography.bodyMedium,
+                    text = if (stackExpanded) "▼ Hide stack trace" else "▶ Show stack trace",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.clickable { stackExpanded = !stackExpanded },
                 )
+                Box(modifier = Modifier.animateContentSize()) {
+                    if (stackExpanded) {
+                        Surface(
+                            color = MaterialTheme.colorScheme.errorContainer,
+                            shape = MaterialTheme.shapes.small,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(
+                                text = stack,
+                                style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                                color = MaterialTheme.colorScheme.onErrorContainer,
+                                modifier = Modifier.padding(10.dp),
+                            )
+                        }
+                    }
+                }
             }
         }
     }
 }
 
+// One timestamp, not two — honours the header's relative/absolute toggle.
+private fun fmtTime(instant: Instant, absolute: Boolean): String =
+    if (absolute) formatDateTime(instant) else timeAgo(instant)
+
+private fun eventColor(type: String): Color = type.uppercase().let { t ->
+    when {
+        "FAIL" in t || "TIMEOUT" in t || "ERROR" in t -> Color(0xFFC8102E)
+        "SUCC" in t -> Color(0xFF0E9F6E)
+        "CANCEL" in t -> Color(0xFF8A9099)
+        "RETRY" in t -> Color(0xFFB45309)
+        else -> Color(0xFF2348E0)
+    }
+}
+
+// ---- actions sidebar -----------------------------------------------------------------------
+
+@Composable
+private fun ActionsPanel(component: JobDetailComponent, m: JobDetailComponent.Model, job: JobView) {
+    Panel("Actions") {
+        val busy = m.cancelling || m.retrying || m.deleting || m.rerouting
+        val errorColors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+
+        if (!job.state.isTerminal) {
+            Button(
+                onClick = component::onCancelClicked,
+                enabled = !busy,
+                shape = MaterialTheme.shapes.small,
+                colors = errorColors,
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text(if (m.cancelling) "Cancelling…" else "Cancel job") }
+        }
+
+        // Manual retry is FAILED-only — SUCCEEDED / CANCELLED are deliberate end-states.
+        if (job.state == JobState.FAILED) {
+            Button(
+                onClick = component::onRetryClicked,
+                enabled = !busy,
+                shape = MaterialTheme.shapes.small,
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text(if (m.retrying) "Retrying…" else "Retry (fresh budget)") }
+            OutlinedButton(
+                onClick = component::onRetryOnceClicked,
+                enabled = !busy,
+                shape = MaterialTheme.shapes.small,
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text(if (m.retrying) "Retrying…" else "Retry +1") }
+        }
+
+        // Re-route — non-terminal only. Toggle reveals an inline node/tag form.
+        if (!job.state.isTerminal) {
+            OutlinedButton(
+                onClick = component::onRerouteFormToggled,
+                enabled = !m.rerouting,
+                shape = MaterialTheme.shapes.small,
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text(if (m.rerouteFormOpen) "Cancel re-route" else "Re-route") }
+            Box(modifier = Modifier.animateContentSize()) {
+                if (m.rerouteFormOpen) RerouteForm(component, m)
+            }
+        }
+
+        // Delete — terminal-only, two-step inline confirm.
+        if (job.state.isTerminal) {
+            Button(
+                onClick = component::onDeleteClicked,
+                enabled = !m.deleting,
+                shape = MaterialTheme.shapes.small,
+                colors = errorColors,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(
+                    when {
+                        m.deleting -> "Deleting…"
+                        m.confirmingDelete -> "Click again to confirm"
+                        else -> "Delete"
+                    },
+                )
+            }
+            if (m.confirmingDelete && !m.deleting) {
+                OutlinedButton(
+                    onClick = component::onDeleteConfirmCancelled,
+                    shape = MaterialTheme.shapes.small,
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text("Cancel delete") }
+            }
+        }
+
+        m.cancelResult?.let { ResultBanner("Cancel", it.name) }
+        m.retryResult?.let { ResultBanner("Retry", it.name) }
+        m.deleteResult?.let { ResultBanner("Delete", it.name) }
+        m.rerouteResult?.let { ResultBanner("Re-route", it.name) }
+        m.error?.let { ResultBanner("Error", it, isError = true) }
+    }
+}
+
+@Composable
+private fun RerouteForm(component: JobDetailComponent, m: JobDetailComponent.Model) {
+    Column(
+        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(
+            "Fill node OR tag (both empty → default queue):",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        OutlinedTextField(
+            value = m.rerouteNode,
+            onValueChange = component::onRerouteNodeChanged,
+            label = { Text("Target node") },
+            singleLine = true,
+            enabled = !m.rerouting,
+            shape = MaterialTheme.shapes.small,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        OutlinedTextField(
+            value = m.rerouteTag,
+            onValueChange = component::onRerouteTagChanged,
+            label = { Text("Target tag") },
+            singleLine = true,
+            enabled = !m.rerouting,
+            shape = MaterialTheme.shapes.small,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Button(
+            onClick = component::onRerouteSubmit,
+            enabled = !m.rerouting,
+            shape = MaterialTheme.shapes.small,
+            modifier = Modifier.fillMaxWidth(),
+        ) { Text(if (m.rerouting) "Applying…" else "Apply re-route") }
+    }
+}
+
+@Composable
+private fun ResultBanner(label: String, value: String, isError: Boolean = false) {
+    val fg = if (isError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+    Surface(
+        color = if (isError) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.surfaceContainerLow,
+        shape = MaterialTheme.shapes.small,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Text(
+            text = "$label: $value",
+            style = MaterialTheme.typography.bodySmall,
+            color = if (isError) MaterialTheme.colorScheme.onErrorContainer else fg,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+        )
+    }
+}
+
+// ---- skeleton ------------------------------------------------------------------------------
+
+@Composable
+private fun JobDetailSkeleton(modifier: Modifier = Modifier) {
+    Column(
+        modifier = modifier.fillMaxWidth().padding(20.dp),
+        verticalArrangement = Arrangement.spacedBy(20.dp),
+    ) {
+        repeat(6) {
+            Row(horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                SkeletonBar(120.dp)
+                SkeletonBar(220.dp)
+                SkeletonBar(90.dp)
+            }
+        }
+    }
+}
