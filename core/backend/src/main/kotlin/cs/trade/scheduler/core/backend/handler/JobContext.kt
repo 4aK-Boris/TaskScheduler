@@ -26,6 +26,14 @@ public interface JobContext {
     public suspend fun updateProgress(progress: Float, msg: String? = null)
 
     /**
+     * JobRunr-style counting progress bar over [total] work items. Mark each item via
+     * [ProgressBar.succeeded] / [ProgressBar.failed]; the bar derives the fraction and
+     * persists it under the same throttle as [updateProgress]. Cheap to create (no I/O) —
+     * the first increment makes the first write. See [ProgressBar] for an example.
+     */
+    public fun progressBar(total: Long): ProgressBar
+
+    /**
      * `true` once someone has called [cs.trade.scheduler.core.backend.Scheduler.cancel] on
      * this job. Polled by handlers in long-running loops:
      * ```

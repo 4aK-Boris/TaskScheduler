@@ -2646,10 +2646,27 @@ class JobContextImpl(...) : JobContext {
 
 Schema columns добавлены в `job` (см. секцию 6): `progress REAL`, `progress_msg TEXT`, `progress_updated_at TIMESTAMPTZ`.
 
+**Счётчиковый прогресс-бар (JobRunr-style) — shipped.** Поверх `updateProgress` есть
+`JobContext.progressBar(total): ProgressBar` для кейса «обработать N элементов»:
+```kotlin
+val bar = ctx.progressBar(total = items.size.toLong())
+for (item in items) {
+    try { process(item); bar.succeeded() }   // +1 успешный
+    catch (e: Exception) { bar.failed() }     // +1 неуспешный
+}
+```
+- `progress` остаётся единственным источником доли = `(succeeded + failed) / total`; счётчики
+  `succeeded/failed/total` — дополнительная nullable-метаданность (миграция V6:
+  `progress_succeeded/failed/total BIGINT`). Для plain `updateProgress` они `null`.
+- Троттл общий с `updateProgress` (1/сек), но завершающий инкремент (`processed >= total`)
+  пишется в обход троттла (`force`), иначе бар застрял бы у 100%. Счётчики на `AtomicLong` —
+  потокобезопасно. Событие `job_progress` несёт `succeeded/failed/total` (nullable, wire-совместимо).
+
 **UI:**
 - JobList: progress bar в строке (если есть)
-- JobDetail: большой progress bar + текущий `progress_msg`
-- Timeline получает события `{t: "job_progress", id, progress: 0.5, msg: "..."}` через WS firehose, обновляет live
+- JobDetail: большой progress bar + текущий `progress_msg`. При наличии счётчиков —
+  двухцветная полоса (зелёный succeeded + красный failed на сером треке) + подпись `✓ X  ✗ Y  / N`.
+- Timeline получает события `{t: "job_progress", id, progress: 0.5, msg: "...", succeeded, failed, total}` через WS firehose, обновляет live
 
 ### 22.4. Per-type stats в UI (avg/min/max/p95) — shipped (Phase 3)
 

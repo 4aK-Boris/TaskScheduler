@@ -49,4 +49,13 @@ public data class Job(
     val contextJson: String?,                       // raw JSON {mdc, traceparent, tracestate}
     val createdAt: Instant,
     val updatedAt: Instant,
+    /**
+     * Counting-progress-bar metadata ([cs.trade.scheduler.core.backend.handler.JobContext.progressBar]).
+     * `null` when the handler used plain `updateProgress` (or never reported). `progress`
+     * remains the derived fraction `(succeeded + failed) / total`. Defaults so existing
+     * positional call-sites don't need to change.
+     */
+    val progressSucceeded: Long? = null,
+    val progressFailed: Long? = null,
+    val progressTotal: Long? = null,
 )

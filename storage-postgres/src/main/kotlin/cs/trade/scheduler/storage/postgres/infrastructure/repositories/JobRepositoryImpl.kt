@@ -177,6 +177,9 @@ public class JobRepositoryImpl(
                 row[progress] = job.progress
                 row[progressMsg] = job.progressMsg
                 row[progressUpdatedAt] = job.progressUpdatedAt?.toOffsetDateTimeUtc()
+                row[progressSucceeded] = job.progressSucceeded
+                row[progressFailed] = job.progressFailed
+                row[progressTotal] = job.progressTotal
                 row[startedAt] = job.startedAt?.toOffsetDateTimeUtc()
                 row[durationMs] = job.durationMs
                 row[cancelRequestedAt] = job.cancelRequestedAt?.toOffsetDateTimeUtc()
@@ -321,6 +324,9 @@ public class JobRepositoryImpl(
         progress: Float,
         msg: String?,
         at: Instant,
+        succeeded: Long?,
+        failed: Long?,
+        total: Long?,
     ): Boolean = withContext(Dispatchers.IO) {
         suspendTransaction(db = database) {
             val atOdt = at.toOffsetDateTimeUtc()
@@ -337,6 +343,12 @@ public class JobRepositoryImpl(
                 it[JobTable.progress] = clamped
                 it[JobTable.progressMsg] = msg
                 it[JobTable.progressUpdatedAt] = atOdt
+                // Counting-bar counters only when supplied — a plain updateProgress passes
+                // null for all three, and we must NOT null out counters a prior progressBar
+                // report already wrote.
+                if (succeeded != null) it[JobTable.progressSucceeded] = succeeded
+                if (failed != null) it[JobTable.progressFailed] = failed
+                if (total != null) it[JobTable.progressTotal] = total
             }
             rows == 1
         }
@@ -1044,6 +1056,9 @@ private fun ResultRow.toJob(): Job = Job(
     progress = this[JobTable.progress],
     progressMsg = this[JobTable.progressMsg],
     progressUpdatedAt = this[JobTable.progressUpdatedAt]?.toKotlinTime(),
+    progressSucceeded = this[JobTable.progressSucceeded],
+    progressFailed = this[JobTable.progressFailed],
+    progressTotal = this[JobTable.progressTotal],
     startedAt = this[JobTable.startedAt]?.toKotlinTime(),
     durationMs = this[JobTable.durationMs],
     cancelRequestedAt = this[JobTable.cancelRequestedAt]?.toKotlinTime(),

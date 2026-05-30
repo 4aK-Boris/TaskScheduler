@@ -324,6 +324,25 @@ class SendEmailHandler(
 `updateProgress(fraction, msg)` (троттлится до 1/сек) и `isCancellationRequested()`
 (для кооперативной отмены долгих циклов — кинь `JobCancellationException`).
 
+**Счётчиковый прогресс-бар (как в JobRunr).** Для типового «обработать N элементов» удобнее
+`progressBar(total)`, чем считать долю руками. Каждый элемент помечается успешным или
+неуспешным — бар сам выводит долю `(succeeded + failed) / total`, а дашборд рисует
+двухцветную полосу (зелёный успех / красный неудача) со счётчиками `✓ X  ✗ Y  / N`:
+```kotlin
+override suspend fun execute(ctx: JobContext, job: BulkExport) {
+    val items = load(job)
+    val bar = ctx.progressBar(total = items.size.toLong())
+    for (item in items) {
+        try { process(item); bar.succeeded() }
+        catch (e: Exception) { bar.failed() }
+    }
+}
+```
+Запись троттлится тем же лимитом 1/сек, что и `updateProgress`; финальный инкремент
+(`succeeded + failed == total`) пишется в обход троттла, поэтому бар не застревает у 100%.
+`succeeded()`/`failed()` принимают `count` (батч) и `msg` (подпись шага). Инкрементить можно
+из нескольких корутин одновременно.
+
 **Koin Annotations (compiler plugin, не KSP).** Чтобы handler'ы попали в граф, нужен
 модуль со сканом пакета:
 ```kotlin

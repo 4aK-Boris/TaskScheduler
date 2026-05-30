@@ -24,6 +24,11 @@ public data class JobView(
     val lockedBy: String?,
     val progress: Float? = null,
     val progressMsg: String? = null,
+    // Counting-progress-bar metadata (JobContext.progressBar). Null when the handler used
+    // plain updateProgress (or didn't report at all) — the UI falls back to a single bar.
+    val progressSucceeded: Long? = null,
+    val progressFailed: Long? = null,
+    val progressTotal: Long? = null,
     val durationMs: Long? = null,
     val createdAt: Instant,
     val updatedAt: Instant,

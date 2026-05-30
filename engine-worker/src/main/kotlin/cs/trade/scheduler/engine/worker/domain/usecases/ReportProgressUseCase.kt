@@ -34,9 +34,12 @@ public class ReportProgressUseCase(
         jobId: Uuid,
         progress: Float,
         msg: String?,
+        succeeded: Long? = null,
+        failed: Long? = null,
+        total: Long? = null,
     ): Result<Boolean> = runCatchingWithLogging {
         val now: Instant = Clock.System.now()
-        val updated = jobs.setProgress(jobId, progress, msg, now)
+        val updated = jobs.setProgress(jobId, progress, msg, now, succeeded, failed, total)
         if (updated) {
             eventBus.publish(
                 WebSocketEvent.JobProgress(
@@ -44,6 +47,9 @@ public class ReportProgressUseCase(
                     progress = progress.coerceIn(0f, 1f),
                     msg = msg,
                     at = now,
+                    succeeded = succeeded,
+                    failed = failed,
+                    total = total,
                 ),
             )
             // Variant 3: walk upward through rollup parents. Errors here are swallowed

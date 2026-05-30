@@ -85,6 +85,12 @@ public class DefaultJobDetailComponent(
                             job = d.job.copy(
                                 progress = event.progress,
                                 progressMsg = event.msg,
+                                // Counting-bar counters ride along on counting events; a plain
+                                // updateProgress event carries null for all three, so keep the
+                                // existing values rather than wiping the split bar.
+                                progressSucceeded = event.succeeded ?: d.job.progressSucceeded,
+                                progressFailed = event.failed ?: d.job.progressFailed,
+                                progressTotal = event.total ?: d.job.progressTotal,
                             ),
                         ),
                     )

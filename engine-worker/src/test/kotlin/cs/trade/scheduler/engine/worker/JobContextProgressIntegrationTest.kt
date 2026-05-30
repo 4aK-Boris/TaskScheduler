@@ -248,6 +248,86 @@ class JobContextProgressIntegrationTest {
         }
     }
 
+    @Test
+    fun `progressBar succeeded then failed writes counts, derives fraction, completing increment bypasses throttle`() = runBlocking {
+        val jobId = Uuid.random()
+        jobs.insert(processingJob(jobId))
+
+        // total=2 so the second increment completes the bar — it must flush through the
+        // 1s throttle (otherwise the bar would stick at 50% until the job goes terminal).
+        val collector = startCollector(expected = 2)
+        try {
+            val bar = makeCtx(jobId).progressBar(total = 2)
+            bar.succeeded()                       // 1/2 → first call, throttle window open
+            bar.failed()                          // 2/2 → completes → forced past throttle
+
+            val events = collector.await(3_000)
+            assertEquals(2, events.size, "Both the opening and the completing sample must emit")
+            val (first, second) = events.map { it as WebSocketEvent.JobProgress }
+            assertEquals(0.5f, first.progress)
+            assertEquals(1L, first.succeeded); assertEquals(0L, first.failed); assertEquals(2L, first.total)
+            assertEquals(1.0f, second.progress)
+            assertEquals(1L, second.succeeded); assertEquals(1L, second.failed); assertEquals(2L, second.total)
+
+            val row = jobs.findById(jobId)!!
+            assertEquals(1.0f, row.progress)
+            assertEquals(1L, row.progressSucceeded)
+            assertEquals(1L, row.progressFailed)
+            assertEquals(2L, row.progressTotal)
+        } finally {
+            collector.cancel()
+        }
+    }
+
+    @Test
+    fun `progressBar increments within the throttle window are dropped — DB keeps the first sample`() = runBlocking {
+        val jobId = Uuid.random()
+        jobs.insert(processingJob(jobId))
+
+        // total=4 so neither quick increment completes the bar — the second stays throttled.
+        val collector = startCollector(expected = 1)
+        try {
+            val bar = makeCtx(jobId).progressBar(total = 4)
+            bar.succeeded()                       // 1/4 → lands
+            bar.succeeded()                       // 2/4 → within 1s, not completing → dropped
+
+            val events = collector.await(2_000)
+            delay(150.milliseconds)
+            assertEquals(1, events.size, "Throttled second increment must not emit")
+
+            val row = jobs.findById(jobId)!!
+            assertEquals(0.25f, row.progress, "DB carries the first (1/4) sample, not the dropped 2/4")
+            assertEquals(1L, row.progressSucceeded)
+            assertEquals(0L, row.progressFailed)
+            assertEquals(4L, row.progressTotal)
+        } finally {
+            collector.cancel()
+        }
+    }
+
+    @Test
+    fun `progressBar on a terminal row is a no-op — no counters, no event`() = runBlocking {
+        val jobId = Uuid.random()
+        jobs.insert(processingJob(jobId).copy(state = JobState.SUCCEEDED))
+
+        val collector = startCollector(expected = 0)
+        try {
+            // First increment isn't throttled and (1<5) isn't a completing sample, so it
+            // reaches the repo — whose PROCESSING state-scope rejects it on the terminal row.
+            makeCtx(jobId).progressBar(total = 5).succeeded()
+
+            delay(300.milliseconds)
+            assertTrue(collector.snapshot().isEmpty(), "No event when the repo write was a no-op")
+
+            val row = jobs.findById(jobId)!!
+            assertNull(row.progress)
+            assertNull(row.progressSucceeded)
+            assertNull(row.progressTotal)
+        } finally {
+            collector.cancel()
+        }
+    }
+
     private fun makeCtx(jobId: Uuid) = JobContextImpl(
         jobId = jobId,
         attempt = 1,

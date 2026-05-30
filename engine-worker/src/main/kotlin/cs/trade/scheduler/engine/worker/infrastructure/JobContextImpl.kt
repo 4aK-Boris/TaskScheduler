@@ -3,6 +3,7 @@
 package cs.trade.scheduler.engine.worker.infrastructure
 
 import cs.trade.scheduler.core.backend.handler.JobContext
+import cs.trade.scheduler.core.backend.handler.ProgressBar
 import cs.trade.scheduler.engine.worker.domain.usecases.ReportProgressUseCase
 import cs.trade.scheduler.storage.postgres.domain.repositories.JobRepository
 import kotlin.time.Instant
@@ -39,10 +40,31 @@ public class JobContextImpl(
     @Volatile private var lastReportedMillis: Long = 0L
 
     override suspend fun updateProgress(progress: Float, msg: String?) {
+        report(progress, msg, succeeded = null, failed = null, total = null, force = false)
+    }
+
+    override fun progressBar(total: Long): ProgressBar =
+        ProgressBarImpl(total = total, reporter = ::report)
+
+    /**
+     * Single funnel for both [updateProgress] and the counting [ProgressBar]. Applies the
+     * shared per-invocation throttle (one DB write per [PROGRESS_MIN_INTERVAL_MS]) unless
+     * [force] is set — the bar forces the completing sample through so it never sticks just
+     * short of 100%. A forced write still advances [lastReportedMillis], so an immediately
+     * following throttled call is correctly suppressed.
+     */
+    private suspend fun report(
+        progress: Float,
+        msg: String?,
+        succeeded: Long?,
+        failed: Long?,
+        total: Long?,
+        force: Boolean,
+    ) {
         val now = System.currentTimeMillis()
-        if (now - lastReportedMillis < PROGRESS_MIN_INTERVAL_MS) return
+        if (!force && now - lastReportedMillis < PROGRESS_MIN_INTERVAL_MS) return
         lastReportedMillis = now
-        reportProgress(jobId, progress, msg)
+        reportProgress(jobId, progress, msg, succeeded, failed, total)
     }
 
     override suspend fun isCancellationRequested(): Boolean =

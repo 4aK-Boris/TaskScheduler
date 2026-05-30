@@ -39,6 +39,12 @@ public sealed interface WebSocketEvent {
         val progress: Float,
         val msg: String?,
         override val at: Instant,
+        // Counting-progress-bar metadata (JobContext.progressBar). Null for plain
+        // updateProgress reports and for rollup-derived samples — defaults keep the wire
+        // format backward-compatible with older clients/snapshots.
+        val succeeded: Long? = null,
+        val failed: Long? = null,
+        val total: Long? = null,
     ) : WebSocketEvent
 
     @Serializable

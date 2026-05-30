@@ -35,4 +35,7 @@ public fun Job.toArchivedRecord(): ArchivedJobRecord = ArchivedJobRecord(
     contextJson = contextJson,
     createdAt = createdAt,
     updatedAt = updatedAt,
+    progressSucceeded = progressSucceeded,
+    progressFailed = progressFailed,
+    progressTotal = progressTotal,
 )
