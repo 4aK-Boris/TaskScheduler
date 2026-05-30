@@ -4,7 +4,10 @@ package cs.trade.scheduler.dashboard.web.data.mock
 
 import cs.trade.scheduler.dashboard.web.domain.repositories.JobsRepository
 import cs.trade.scheduler.dashboard.web.domain.repositories.QueueHealthRepository
+import cs.trade.scheduler.dashboard.web.domain.repositories.RecurringRepository
 import cs.trade.scheduler.dashboard.web.domain.repositories.TypesRepository
+import cs.trade.scheduler.shared.MisfirePolicy
+import cs.trade.scheduler.shared.dto.RecurringJobDto
 import cs.trade.scheduler.shared.CancelResult
 import cs.trade.scheduler.shared.DeleteResult
 import cs.trade.scheduler.shared.JobPriority
@@ -138,4 +141,59 @@ public class MockTypesRepository : TypesRepository {
 
 public class MockQueueHealthRepository : QueueHealthRepository {
     override suspend fun list(): List<QueueHealthDto> = MOCK_QUEUE_HEALTH
+}
+
+private val MOCK_RECURRING: List<RecurringJobDto> = run {
+    val now = Clock.System.now()
+    fun row(
+        id: String,
+        cron: String,
+        queue: String,
+        payloadType: String,
+        timezone: String?,
+        enabled: Boolean,
+        lastAgoMin: Int?,
+        nextInMin: Int,
+        priority: Int,
+    ) = RecurringJobDto(
+        id = id,
+        cron = cron,
+        timezone = timezone,
+        misfirePolicy = MisfirePolicy.CATCH_UP_ONE,
+        queue = queue,
+        priority = JobPriority(priority),
+        targetNode = null,
+        targetTag = null,
+        payloadType = payloadType,
+        lastTriggeredAt = lastAgoMin?.let { now - it.minutes },
+        nextTriggerAt = now + nextInMin.minutes,
+        enabled = enabled,
+    )
+    listOf(
+        row("nightly-report", "0 3 * * *", "reports", "com.acme.report.GenerateReport", "Europe/Berlin", true, 600, 720, 5),
+        row("hourly-inventory-sync", "0 * * * *", "default", "com.acme.inventory.SyncInventory", null, true, 35, 25, 0),
+        row("healthcheck-10s", "*/10 * * * * *", "default", "com.acme.webhook.DeliverWebhook", null, true, 0, 0, 0),
+        row("weekly-billing", "0 6 * * MON", "billing", "com.acme.billing.ChargeCard", "America/New_York", true, 4320, 5760, 8),
+        row("daily-cleanup", "30 2 * * *", "heavy", "com.acme.imports.ImportCsv", null, false, 1440, 90, 2),
+        row("monthly-rollup", "0 0 1 * *", "reports", "com.acme.rollup.NightlyRollup", "UTC", true, null, 86400, 3),
+        row("email-digest", "0 9 * * 1-5", "email", "com.acme.email.SendEmail", "Europe/Berlin", false, 180, 240, 4),
+    )
+}
+
+public class MockRecurringRepository : RecurringRepository {
+    // Toggling actually flips the row in mock mode, so Enable/Disable is interactive.
+    private val enabledOverride = mutableMapOf<String, Boolean>()
+
+    override suspend fun list(): List<RecurringJobDto> =
+        MOCK_RECURRING.map { it.copy(enabled = enabledOverride[it.id] ?: it.enabled) }
+
+    override suspend fun enable(id: String): Boolean {
+        enabledOverride[id] = true
+        return true
+    }
+
+    override suspend fun disable(id: String): Boolean {
+        enabledOverride[id] = false
+        return true
+    }
 }

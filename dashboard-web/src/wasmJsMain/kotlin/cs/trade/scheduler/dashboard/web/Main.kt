@@ -15,9 +15,11 @@ import cs.trade.scheduler.dashboard.web.data.repositories.TypesRepositoryImpl
 import cs.trade.scheduler.dashboard.web.data.repositories.WorkersRepositoryImpl
 import cs.trade.scheduler.dashboard.web.data.mock.MockJobsRepository
 import cs.trade.scheduler.dashboard.web.data.mock.MockQueueHealthRepository
+import cs.trade.scheduler.dashboard.web.data.mock.MockRecurringRepository
 import cs.trade.scheduler.dashboard.web.data.mock.MockTypesRepository
 import cs.trade.scheduler.dashboard.web.domain.repositories.JobsRepository
 import cs.trade.scheduler.dashboard.web.domain.repositories.QueueHealthRepository
+import cs.trade.scheduler.dashboard.web.domain.repositories.RecurringRepository
 import cs.trade.scheduler.dashboard.web.domain.repositories.TypesRepository
 import cs.trade.scheduler.dashboard.web.domain.usecases.BulkCancelJobsUseCase
 import cs.trade.scheduler.dashboard.web.domain.usecases.BulkDeleteJobsUseCase
@@ -58,7 +60,7 @@ fun main() {
     // populated screens with no backend (local UI work). Production URLs never carry it.
     val mock = window.location.search.contains("mock")
     val jobsRepository: JobsRepository = if (mock) MockJobsRepository() else JobsRepositoryImpl()
-    val recurringRepository = RecurringRepositoryImpl()
+    val recurringRepository: RecurringRepository = if (mock) MockRecurringRepository() else RecurringRepositoryImpl()
     val statsRepository = StatsRepositoryImpl()
     val workersRepository = WorkersRepositoryImpl()
     val typesRepository: TypesRepository = if (mock) MockTypesRepository() else TypesRepositoryImpl()
