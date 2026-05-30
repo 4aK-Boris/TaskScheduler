@@ -31,6 +31,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import cs.trade.scheduler.core.frontend.theme.schedulerColors
 import cs.trade.scheduler.shared.OnFailure
 import cs.trade.scheduler.shared.dto.JobGraph
 import cs.trade.scheduler.shared.dto.JobGraphEdge
@@ -73,8 +74,8 @@ public fun DependencyGraph(
     val propagateColor = MaterialTheme.colorScheme.outline
     val edgeColors: Map<OnFailure, Color> = mapOf(
         OnFailure.PROPAGATE_FAILURE to propagateColor,
-        OnFailure.CANCEL_CHILD to Color(0xFFEF6C00),
-        OnFailure.IGNORE to Color(0xFF78909C),
+        OnFailure.CANCEL_CHILD to MaterialTheme.schedulerColors.warning,
+        OnFailure.IGNORE to MaterialTheme.colorScheme.onSurfaceVariant,
     )
 
     Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {

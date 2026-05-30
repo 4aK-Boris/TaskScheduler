@@ -487,13 +487,14 @@ private fun TimelineRow(ev: JobEventDto, isFirst: Boolean, isLast: Boolean, time
 private fun fmtTime(instant: Instant, absolute: Boolean): String =
     if (absolute) formatDateTime(instant) else timeAgo(instant)
 
+@Composable
 private fun eventColor(type: String): Color = type.uppercase().let { t ->
     when {
-        "FAIL" in t || "TIMEOUT" in t || "ERROR" in t -> Color(0xFFC8102E)
-        "SUCC" in t -> Color(0xFF0E9F6E)
-        "CANCEL" in t -> Color(0xFF8A9099)
-        "RETRY" in t -> Color(0xFFB45309)
-        else -> Color(0xFF2348E0)
+        "FAIL" in t || "TIMEOUT" in t || "ERROR" in t -> MaterialTheme.colorScheme.error
+        "SUCC" in t -> MaterialTheme.schedulerColors.success
+        "CANCEL" in t -> MaterialTheme.colorScheme.onSurfaceVariant
+        "RETRY" in t -> MaterialTheme.schedulerColors.warning
+        else -> MaterialTheme.colorScheme.primary
     }
 }
 
