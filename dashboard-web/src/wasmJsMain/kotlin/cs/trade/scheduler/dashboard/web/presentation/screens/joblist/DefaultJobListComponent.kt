@@ -21,6 +21,7 @@ import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -60,6 +61,7 @@ public class DefaultJobListComponent(
         observeRefreshSignal()
         observeFilterChangeSignal()
         pollQueueHealth()
+        restartAutoRefresh()
     }
 
     private fun refreshPausedTypes() {
@@ -104,6 +106,21 @@ public class DefaultJobListComponent(
         }
     }
 
+    // Auto-refresh: re-fetch the list every N seconds when enabled. Cancel + relaunch on a
+    // setting change. Skips a tick while a refresh is already in flight so ticks don't stack.
+    private var autoRefreshJob: Job? = null
+
+    private fun restartAutoRefresh() {
+        autoRefreshJob?.cancel()
+        val seconds = _model.value.autoRefreshSeconds ?: return
+        autoRefreshJob = scope.launch {
+            while (true) {
+                delay(seconds.seconds)
+                if (!_model.value.loading) refresh()
+            }
+        }
+    }
+
     override fun onRefreshClicked() {
         refresh()
     }
@@ -129,6 +146,17 @@ public class DefaultJobListComponent(
     override fun onPayloadTypeFilterChanged(payloadType: String) {
         _model.update { it.copy(payloadTypeFilter = payloadType, selectedIds = emptySet(), page = 0) }
         filterChangeSignal.tryEmit(Unit)
+    }
+
+    override fun onAutoRefreshChanged(seconds: Int?) {
+        _model.update { it.copy(autoRefreshSeconds = seconds) }
+        saveFilter()
+        restartAutoRefresh()
+    }
+
+    override fun onAgeModeChanged(absolute: Boolean) {
+        _model.update { it.copy(ageAbsolute = absolute) }
+        saveFilter()
     }
 
     override fun onPrevPageClicked() {
@@ -313,6 +341,8 @@ public class DefaultJobListComponent(
             payloadType = state.payloadTypeFilter,
             dlqOnly = state.dlqOnly,
             pageSize = state.pageSize,
+            autoRefreshSeconds = state.autoRefreshSeconds,
+            ageAbsolute = state.ageAbsolute,
         )
         BrowserStorage.save(FILTER_KEY, persistedJson.encodeToString(PersistedFilter.serializer(), snapshot))
     }
@@ -331,6 +361,8 @@ public class DefaultJobListComponent(
             payloadTypeFilter = parsed.payloadType,
             dlqOnly = parsed.dlqOnly,
             pageSize = parsed.pageSize.coerceIn(1, MAX_PAGE_SIZE),
+            autoRefreshSeconds = parsed.autoRefreshSeconds,
+            ageAbsolute = parsed.ageAbsolute,
             loading = true,
         )
     }
@@ -342,6 +374,9 @@ public class DefaultJobListComponent(
         val payloadType: String,
         val dlqOnly: Boolean,
         val pageSize: Int,
+        // Defaults so a filter snapshot persisted before these settings existed still parses.
+        val autoRefreshSeconds: Int? = null,
+        val ageAbsolute: Boolean = false,
     )
 
     private companion object {

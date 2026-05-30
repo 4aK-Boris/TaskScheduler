@@ -28,6 +28,12 @@ public interface JobListComponent {
     public fun onQueueFilterChanged(queue: String)
     public fun onPayloadTypeFilterChanged(payloadType: String)
 
+    /** Auto-refresh cadence — `null` = off (manual Refresh only), else poll every N seconds. */
+    public fun onAutoRefreshChanged(seconds: Int?)
+
+    /** Age column: `false` = relative ("3m ago"), `true` = absolute wall-clock ("14:30:05"). */
+    public fun onAgeModeChanged(absolute: Boolean)
+
     public fun onPrevPageClicked()
     public fun onNextPageClicked()
     public fun onPageSizeChanged(size: Int)
@@ -71,5 +77,9 @@ public interface JobListComponent {
         // and alongside the main list refresh. Queues with NORMAL status are still
         // included; the badge composable handles the no-render gating.
         val queueHealth: List<QueueHealthDto> = emptyList(),
+        // Auto-refresh interval in seconds; null = off (manual Refresh button only).
+        val autoRefreshSeconds: Int? = null,
+        // Age column display: false = relative ("3m ago"), true = absolute clock ("14:30:05").
+        val ageAbsolute: Boolean = false,
     )
 }
