@@ -5,6 +5,7 @@ package cs.trade.scheduler.dashboard.web.data.mock
 import cs.trade.scheduler.dashboard.web.domain.repositories.JobsRepository
 import cs.trade.scheduler.dashboard.web.domain.repositories.QueueHealthRepository
 import cs.trade.scheduler.dashboard.web.domain.repositories.RecurringRepository
+import cs.trade.scheduler.dashboard.web.domain.repositories.StatsRepository
 import cs.trade.scheduler.dashboard.web.domain.repositories.TypeStatsRepository
 import cs.trade.scheduler.dashboard.web.domain.repositories.TypesRepository
 import cs.trade.scheduler.dashboard.web.domain.repositories.WorkersRepository
@@ -24,6 +25,7 @@ import cs.trade.scheduler.shared.dto.JobView
 import cs.trade.scheduler.shared.dto.ListJobsResponse
 import cs.trade.scheduler.shared.dto.QueueHealthDto
 import cs.trade.scheduler.shared.dto.QueueHealthStatus
+import cs.trade.scheduler.shared.dto.StatsOverviewResponse
 import cs.trade.scheduler.shared.dto.TypePauseDto
 import cs.trade.scheduler.shared.dto.TypeStatsDto
 import cs.trade.scheduler.shared.dto.TypeStatsResponse
@@ -152,6 +154,22 @@ public class MockTypesRepository : TypesRepository {
 
 public class MockQueueHealthRepository : QueueHealthRepository {
     override suspend fun list(): List<QueueHealthDto> = MOCK_QUEUE_HEALTH
+}
+
+public class MockStatsRepository : StatsRepository {
+    // A healthy cluster: a deep-ish enqueued backlog, a handful in flight, and a ~99% success
+    // rate over the recent terminal rows — gives the donut a near-full green ring and the
+    // pipeline bars a clear "enqueued dominates" shape.
+    override suspend fun overview(): StatsOverviewResponse = StatsOverviewResponse(
+        enqueued = 1240,
+        processing = 42,
+        awaitingRetry = 18,
+        awaitingDeps = 64,
+        scheduled = 300,
+        succeeded = 184_500,
+        failed = 1_490,
+        cancelled = 860,
+    )
 }
 
 public class MockTypeStatsRepository : TypeStatsRepository {
