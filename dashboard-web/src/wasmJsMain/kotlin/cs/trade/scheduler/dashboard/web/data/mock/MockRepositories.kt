@@ -25,6 +25,7 @@ import cs.trade.scheduler.shared.dto.QueueHealthDto
 import cs.trade.scheduler.shared.dto.QueueHealthStatus
 import cs.trade.scheduler.shared.dto.TypePauseDto
 import kotlin.time.Clock
+import kotlin.time.Duration.Companion.days
 import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
@@ -132,9 +133,14 @@ public class MockJobsRepository : JobsRepository {
 }
 
 public class MockTypesRepository : TypesRepository {
-    override suspend fun listPaused(): List<TypePauseDto> = listOf(
-        TypePauseDto("com.acme.media.ResizeImage", Clock.System.now() - 2.hours, "ops@acme", "maintenance window"),
-    )
+    override suspend fun listPaused(): List<TypePauseDto> = run {
+        val now = Clock.System.now()
+        listOf(
+            TypePauseDto("com.acme.media.ResizeImage", now - 2.hours, "ops@acme", "maintenance window"),
+            TypePauseDto("com.acme.billing.ChargeCard", now - 35.minutes, "alice@acme", "payment gateway incident #4821"),
+            TypePauseDto("com.acme.webhook.DeliverWebhook", now - 3.days, "scheduler", null),
+        )
+    }
 
     override suspend fun listKnown(): List<String> = SAMPLE_TYPES.sorted()
     override suspend fun pause(payloadType: String, reason: String?): Boolean = true
