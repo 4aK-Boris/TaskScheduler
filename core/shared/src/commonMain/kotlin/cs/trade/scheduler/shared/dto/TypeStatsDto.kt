@@ -39,4 +39,13 @@ public data class TypeStatsResponse(
  * via the `range` query param — see `StatsRouting.kt`.
  */
 @Serializable
-public enum class TypeStatsRange { LAST_1_HOUR, LAST_24_HOURS, LAST_7_DAYS, LAST_30_DAYS }
+public enum class TypeStatsRange {
+    LAST_1_HOUR,
+    LAST_3_HOURS,
+    LAST_6_HOURS,
+    LAST_12_HOURS,
+    LAST_24_HOURS,
+    LAST_3_DAYS,
+    LAST_7_DAYS,
+    LAST_30_DAYS,
+}

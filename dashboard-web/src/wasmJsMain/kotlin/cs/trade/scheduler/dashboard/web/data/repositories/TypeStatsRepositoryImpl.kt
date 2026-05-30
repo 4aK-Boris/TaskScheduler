@@ -18,7 +18,11 @@ public class TypeStatsRepositoryImpl : TypeStatsRepository {
         // pre-defined buckets via TypeStatsRange.
         val range = when (rangeHours) {
             1 -> "1h"
+            3 -> "3h"
+            6 -> "6h"
+            12 -> "12h"
             24 -> "24h"
+            24 * 3 -> "3d"
             24 * 7 -> "7d"
             24 * 30 -> "30d"
             else -> "${rangeHours}h"
