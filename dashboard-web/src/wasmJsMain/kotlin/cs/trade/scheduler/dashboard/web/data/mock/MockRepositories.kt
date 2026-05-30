@@ -5,6 +5,7 @@ package cs.trade.scheduler.dashboard.web.data.mock
 import cs.trade.scheduler.dashboard.web.domain.repositories.JobsRepository
 import cs.trade.scheduler.dashboard.web.domain.repositories.QueueHealthRepository
 import cs.trade.scheduler.dashboard.web.domain.repositories.RecurringRepository
+import cs.trade.scheduler.dashboard.web.domain.repositories.TypeStatsRepository
 import cs.trade.scheduler.dashboard.web.domain.repositories.TypesRepository
 import cs.trade.scheduler.dashboard.web.domain.repositories.WorkersRepository
 import cs.trade.scheduler.shared.MisfirePolicy
@@ -24,6 +25,8 @@ import cs.trade.scheduler.shared.dto.ListJobsResponse
 import cs.trade.scheduler.shared.dto.QueueHealthDto
 import cs.trade.scheduler.shared.dto.QueueHealthStatus
 import cs.trade.scheduler.shared.dto.TypePauseDto
+import cs.trade.scheduler.shared.dto.TypeStatsDto
+import cs.trade.scheduler.shared.dto.TypeStatsResponse
 import kotlin.time.Clock
 import kotlin.time.Duration.Companion.days
 import kotlin.time.Duration.Companion.hours
@@ -150,6 +153,35 @@ public class MockTypesRepository : TypesRepository {
 public class MockQueueHealthRepository : QueueHealthRepository {
     override suspend fun list(): List<QueueHealthDto> = MOCK_QUEUE_HEALTH
 }
+
+public class MockTypeStatsRepository : TypeStatsRepository {
+    // Counts are baselined per-24h, then scaled linearly to the requested window so switching
+    // the range selector visibly changes the table. Durations are averages — they don't scale.
+    override suspend fun list(rangeHours: Int): TypeStatsResponse {
+        fun scale(per24h: Long): Long = (per24h.toDouble() * rangeHours / 24.0).toLong()
+        val items = MOCK_TYPE_STATS_24H.map { b ->
+            b.copy(
+                successCount = scale(b.successCount),
+                failedCount = scale(b.failedCount),
+                cancelledCount = scale(b.cancelledCount),
+                retryCount = scale(b.retryCount),
+            )
+        }
+        return TypeStatsResponse(items = items, rangeHours = rangeHours)
+    }
+}
+
+// Per-24h baseline rows: high-volume webhooks, a slow report type, a billing type with notable
+// failures, a clean all-success sync, and an import type with NULL durations (cancelled-heavy).
+private val MOCK_TYPE_STATS_24H: List<TypeStatsDto> = listOf(
+    TypeStatsDto("com.acme.webhook.DeliverWebhook", "webhooks", 15200, 430, 12, 890, 64, 8, 5000, 320),
+    TypeStatsDto("com.acme.email.SendEmail", "email", 4820, 12, 3, 45, 28, 5, 320, 95),
+    TypeStatsDto("com.acme.inventory.SyncInventory", "default", 2400, 0, 0, 0, 88, 12, 540, 210),
+    TypeStatsDto("com.acme.billing.ChargeCard", "billing", 980, 64, 5, 130, 540, 120, 9000, 2100),
+    TypeStatsDto("com.acme.media.ResizeImage", "heavy", 760, 21, 40, 60, 1500, 200, 22000, 8800),
+    TypeStatsDto("com.acme.report.GenerateReport", "reports", 142, 8, 1, 22, 4200, 1100, 38000, 21000),
+    TypeStatsDto("com.acme.imports.ImportCsv", "imports", 36, 4, 9, 14, null, null, null, null),
+)
 
 private val MOCK_RECURRING: List<RecurringJobDto> = run {
     val now = Clock.System.now()
