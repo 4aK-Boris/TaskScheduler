@@ -14,9 +14,9 @@ plugins {
 }
 
 group = "cs.trade.scheduler"
-// SNAPSHOT so a re-publish during local iteration is picked up without the consumer
-// needing --refresh-dependencies (Gradle re-checks SNAPSHOTs; release versions are cached).
-version = "0.1.0-SNAPSHOT"
+// The version number lives in gradle.properties (`schedulerVersion`) so the published library and
+// the Docker image tag share one source of truth; the SNAPSHOT rationale is documented there.
+version = providers.gradleProperty("schedulerVersion").get()
 
 // JVM modules (kotlin("jvm")) get no publication for free — create one from the `java`
 // component. KMP modules (kotlin("multiplatform")) auto-register a publication per target
