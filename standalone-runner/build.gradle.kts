@@ -2,6 +2,7 @@ import com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar
 
 plugins {
     id("buildsrc.convention.kotlin-jvm")
+    id("buildsrc.convention.docker-image")
     application
     alias(libs.plugins.kotlinPluginSerialization)
     alias(libs.plugins.koinCompiler)
@@ -59,6 +60,13 @@ tasks.named<ShadowJar>("shadowJar") {
     manifest {
         attributes["Main-Class"] = "cs.trade.scheduler.runner.ApplicationKt"
     }
+}
+
+// `./gradlew :standalone-runner:dockerImage` builds the scheduler-infra image straight from the
+// shadow JAR above (build context = build/libs). Same Dockerfile the CI workflow uses.
+dockerImage {
+    imageName = "taskscheduler-infra"
+    dockerfile = "docker/infra/Dockerfile"
 }
 
 
