@@ -347,6 +347,7 @@ public class DefaultScheduler(
                 lastTriggeredAt = null,         // upsert preserves existing if row already there
                 nextTriggerAt = nextTrigger,
                 enabled = true,                 // upsert preserves existing if row already there
+                timeoutSeconds = definition.timeout?.inWholeSeconds?.toInt(),
             ),
         )
     }

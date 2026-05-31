@@ -51,4 +51,12 @@ public data class RecurringDefinition(
     val priority: Int = 0,
     val targetNode: String? = null,
     val targetTag: String? = null,
+    /**
+     * Per-job execution timeout for every instance this definition fires. `null` (default)
+     * falls back to [SchedulerCoreConfig.defaultJobTimeout]. Stored as `recurring_job.timeout_seconds`
+     * and copied to each fired job's `timeout_seconds`; the worker enforces it via `withTimeout`.
+     * Lets fast recurring tasks get a tight bound (a hung downstream is killed in minutes) without
+     * lowering the global default that long jobs (e.g. ML training) rely on.
+     */
+    val timeout: Duration? = null,
 )

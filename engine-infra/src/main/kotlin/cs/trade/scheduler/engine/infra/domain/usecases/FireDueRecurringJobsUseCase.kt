@@ -147,7 +147,7 @@ public class FireDueRecurringJobsUseCase(
             scheduledAt = null,
             attempts = 0,
             maxAttempts = coreConfig.defaultMaxAttempts,
-            timeoutSeconds = null,
+            timeoutSeconds = row.timeoutSeconds,
             lockedBy = null,
             lockedUntil = null,
             pendingDeps = 0,
