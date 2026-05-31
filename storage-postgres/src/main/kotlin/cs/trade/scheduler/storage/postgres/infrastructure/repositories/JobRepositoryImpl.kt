@@ -936,6 +936,33 @@ public class JobRepositoryImpl(
             }
         }
 
+    override suspend fun findLeaderByIdempotencyKey(idempotencyKey: String, forUpdate: Boolean): Job? =
+        withContext(Dispatchers.IO) {
+            suspendTransaction(db = database) {
+                val q = JobTable.selectAll()
+                    .where {
+                        (JobTable.idempotencyKey eq idempotencyKey) and
+                            (JobTable.state inList LEADER_STATE_NAMES)
+                    }
+                    .limit(1)
+                (if (forUpdate) q.forUpdate() else q).firstOrNull()?.toJob()
+            }
+        }
+
+    override suspend fun findSuccessorByIdempotencyKey(idempotencyKey: String): Job? =
+        withContext(Dispatchers.IO) {
+            suspendTransaction(db = database) {
+                JobTable.selectAll()
+                    .where {
+                        (JobTable.idempotencyKey eq idempotencyKey) and
+                            (JobTable.state eq JobState.AWAITING_DEPS.name)
+                    }
+                    .limit(1)
+                    .firstOrNull()
+                    ?.toJob()
+            }
+        }
+
     override suspend fun findDistinctPayloadTypes(limit: Int): List<String> =
         withContext(Dispatchers.IO) {
             suspendTransaction(db = database) {
@@ -1031,6 +1058,15 @@ public class JobRepositoryImpl(
             .map { it.name }
         // Same set, separate name for read-site clarity in setRollupProgress.
         val NON_TERMINAL_STATE_NAMES: List<String> = ACTIVE_STATE_NAMES
+
+        // "Leader" slot — mirrors job_idem_leader_idx (V8). Excludes AWAITING_DEPS, which is
+        // the parked-successor slot (job_idem_successor_idx) used by ENQUEUE_AFTER / REPLACE.
+        val LEADER_STATE_NAMES: List<String> = listOf(
+            JobState.SCHEDULED,
+            JobState.ENQUEUED,
+            JobState.PROCESSING,
+            JobState.AWAITING_RETRY,
+        ).map { it.name }
     }
 }
 

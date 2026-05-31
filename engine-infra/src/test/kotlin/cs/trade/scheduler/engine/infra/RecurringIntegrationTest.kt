@@ -11,6 +11,7 @@ import cs.trade.scheduler.core.backend.handler.Job
 import cs.trade.scheduler.engine.infra.domain.usecases.FireDueRecurringJobsUseCase
 import cs.trade.scheduler.shared.JobState
 import cs.trade.scheduler.shared.MisfirePolicy
+import cs.trade.scheduler.shared.RecurringOverlap
 import cs.trade.scheduler.storage.postgres.infrastructure.PostgresStorageProvider
 import cs.trade.scheduler.storage.postgres.infrastructure.repositories.JobDependencyRepositoryImpl
 import cs.trade.scheduler.storage.postgres.infrastructure.repositories.JobRepositoryImpl
@@ -23,6 +24,7 @@ import org.flywaydb.core.Flyway
 import org.jetbrains.exposed.v1.jdbc.Database
 import org.junit.jupiter.api.AfterAll
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertNotEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -358,6 +360,49 @@ class RecurringIntegrationTest {
 
         val fired = firstFiredJob(tenant)
         assertNull(fired.timeoutSeconds, "fired job without a recurring timeout must stay null")
+    }
+
+    @Test
+    fun `recurring SKIP overlap does not fire while the previous instance is active`() = runBlocking {
+        val id = "ov-skip-${System.nanoTime()}"
+        val tenant = System.nanoTime()
+        scheduler.recurring(
+            RecurringDefinition(id = id, cron = "* * * * *", job = DailyReport(tenant), overlap = RecurringOverlap.SKIP),
+        )
+        forceDue(id); fireDue().getOrThrow()
+
+        val key = "recurring:$id"
+        val first = jobs.findLeaderByIdempotencyKey(key)
+        assertNotNull(first, "first fire created an active leader")
+        assertEquals(1, countCreatedJobs(tenant))
+
+        forceDue(id); fireDue().getOrThrow()        // previous still active → SKIP
+        assertEquals(first!!.id, jobs.findLeaderByIdempotencyKey(key)?.id, "no new instance — same leader")
+        assertEquals(1, countCreatedJobs(tenant), "SKIP must not create a second instance")
+    }
+
+    @Test
+    fun `recurring REPLACE overlap cancels the queued previous instance and fires a new one`() = runBlocking {
+        val id = "ov-replace-${System.nanoTime()}"
+        val tenant = System.nanoTime()
+        scheduler.recurring(
+            RecurringDefinition(id = id, cron = "* * * * *", job = DailyReport(tenant), overlap = RecurringOverlap.REPLACE),
+        )
+        forceDue(id); fireDue().getOrThrow()
+        val key = "recurring:$id"
+        val job1 = jobs.findLeaderByIdempotencyKey(key)!!.id
+
+        forceDue(id); fireDue().getOrThrow()        // previous still queued (ENQUEUED) → cancel + fire new
+        val job2 = jobs.findLeaderByIdempotencyKey(key)!!.id
+        assertNotEquals(job1, job2, "REPLACE fired a fresh instance")
+        assertEquals(JobState.CANCELLED, jobs.findById(job1)!!.state, "previous instance cancelled")
+        assertEquals(JobState.ENQUEUED, jobs.findById(job2)!!.state)
+    }
+
+    /** Force a recurring row "due" by backdating nextTriggerAt one minute (preserves lastTriggeredAt). */
+    private suspend fun forceDue(id: String) {
+        val row = recurring.findById(id)!!
+        recurring.upsert(row.copy(nextTriggerAt = kotlin.time.Clock.System.now() - kotlin.time.Duration.parse("PT1M")))
     }
 
     /** First ENQUEUED job carrying this recurring's unique payload marker, via the outbox. */

@@ -9,6 +9,7 @@ import cs.trade.scheduler.core.backend.usecases.runCatchingWithLogging
 import cs.trade.scheduler.shared.JobPriority
 import cs.trade.scheduler.shared.JobState
 import cs.trade.scheduler.shared.MisfirePolicy
+import cs.trade.scheduler.shared.RecurringOverlap
 import cs.trade.scheduler.storage.postgres.domain.models.NewOutboxEntry
 import cs.trade.scheduler.storage.postgres.domain.models.RecurringJobRow
 import cs.trade.scheduler.storage.postgres.domain.models.Job as JobRow
@@ -130,12 +131,50 @@ public class FireDueRecurringJobsUseCase(
                     log.debug("Recurring '{}' already fired by another replica — skipping", row.id)
                     return@suspendTransaction 0
                 }
-                repeat(plan.occurrences) { insertJobAndOutbox(row, now) }
-                plan.occurrences
+
+                // Overlap guard (DESIGN.md 8.5). ALLOW = today's behaviour (instances may overlap;
+                // CATCH_UP_ALL can fire many). SKIP/REPLACE enforce at most one live instance per
+                // recurring id via a derived idempotency key + the leader slot (V8) — so a guard
+                // collapses CATCH_UP_ALL's multiplicity to a single fire.
+                if (row.overlap == RecurringOverlap.ALLOW) {
+                    repeat(plan.occurrences) { insertJobAndOutbox(row, now, idempotencyKey = null) }
+                    return@suspendTransaction plan.occurrences
+                }
+
+                val key = "$RECURRING_KEY_PREFIX${row.id}"
+                // FOR UPDATE: serialise against a worker finalising the previous instance.
+                val leader = jobs.findLeaderByIdempotencyKey(key, forUpdate = true)
+                when {
+                    leader == null -> {
+                        insertJobAndOutbox(row, now, idempotencyKey = key)
+                        1
+                    }
+                    row.overlap == RecurringOverlap.SKIP -> {
+                        log.debug("Recurring '{}' SKIP — previous instance {} still active", row.id, leader.id)
+                        0
+                    }
+                    // REPLACE on a running instance: a handler can't be pre-empted synchronously, so
+                    // request cooperative cancel; the leader slot frees when it stops and the NEXT
+                    // tick fires fresh. (No parked successor for recurring — cron re-fires anyway.)
+                    leader.state == JobState.PROCESSING -> {
+                        jobs.requestCancellation(leader.id, by = REPLACED_BY, at = now)
+                        log.info(
+                            "Recurring '{}' REPLACE — requested cancel of running {}; next tick fires fresh",
+                            row.id, leader.id,
+                        )
+                        0
+                    }
+                    // REPLACE on a queued-but-not-started instance: cancel it now and fire the replacement.
+                    else -> {
+                        jobs.markCancelled(leader.id, leader.version, errorMsg = REPLACED_MSG, actor = REPLACED_BY)
+                        insertJobAndOutbox(row, now, idempotencyKey = key)
+                        1
+                    }
+                }
             }
         }
 
-    private suspend fun insertJobAndOutbox(row: RecurringJobRow, now: Instant) {
+    private suspend fun insertJobAndOutbox(row: RecurringJobRow, now: Instant, idempotencyKey: String?) {
         val jobId = Uuid.random()
         val jobRow = JobRow(
             id = jobId,
@@ -152,7 +191,7 @@ public class FireDueRecurringJobsUseCase(
             lockedUntil = null,
             pendingDeps = 0,
             version = 0,
-            idempotencyKey = null,
+            idempotencyKey = idempotencyKey,
             targetNode = row.targetNode,
             targetTag = row.targetTag,
             progress = null,
@@ -192,5 +231,12 @@ public class FireDueRecurringJobsUseCase(
          * remainder is not dropped — it fires on subsequent ticks (see [planFiring]).
          */
         public const val MAX_CATCH_UP_PER_TICK: Int = 500
+
+        // Derived idempotency key namespacing a recurring id into the leader slot (V8) when an
+        // overlap guard (SKIP/REPLACE) is active. Prefixed to avoid clashing with user enqueueOnce keys.
+        private const val RECURRING_KEY_PREFIX: String = "recurring:"
+        // Audit attribution / message for an instance superseded by a REPLACE overlap guard.
+        private const val REPLACED_BY: String = "recurring-overlap"
+        private const val REPLACED_MSG: String = "superseded by REPLACE overlap policy"
     }
 }

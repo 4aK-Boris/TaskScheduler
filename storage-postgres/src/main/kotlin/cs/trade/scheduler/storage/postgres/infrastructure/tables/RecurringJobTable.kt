@@ -26,6 +26,7 @@ public object RecurringJobTable : Table("recurring_job") {
     public val nextTriggerAt: Column<OffsetDateTime> = timestampWithTimeZone("next_trigger_at")
     public val enabled: Column<Boolean> = bool("enabled").default(true)
     public val timeoutSeconds: Column<Int?> = integer("timeout_seconds").nullable()
+    public val overlapPolicy: Column<String> = text("overlap_policy").default("ALLOW")
 
     override val primaryKey: PrimaryKey = PrimaryKey(id)
 }

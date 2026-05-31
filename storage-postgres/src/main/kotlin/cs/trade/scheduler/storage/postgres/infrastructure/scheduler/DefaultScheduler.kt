@@ -14,9 +14,11 @@ import cs.trade.scheduler.shared.functionref.FunctionRefPayload
 import cs.trade.scheduler.core.backend.handler.Job
 import kotlin.reflect.KFunction
 import cs.trade.scheduler.shared.CancelResult
+import cs.trade.scheduler.shared.ConcurrencyPolicy
 import cs.trade.scheduler.shared.DeleteResult
 import cs.trade.scheduler.shared.JobPriority
 import cs.trade.scheduler.shared.JobState
+import cs.trade.scheduler.shared.OnFailure
 import cs.trade.scheduler.shared.RerouteResult
 import cs.trade.scheduler.shared.RetryMode
 import cs.trade.scheduler.shared.RetryResult
@@ -27,6 +29,7 @@ import cs.trade.scheduler.storage.postgres.domain.models.NewOutboxEntry
 import cs.trade.scheduler.storage.postgres.domain.models.Job as JobRow
 import cs.trade.scheduler.storage.postgres.domain.models.RecurringJobRow
 import cs.trade.scheduler.storage.postgres.domain.repositories.JobEventRepository
+import cs.trade.scheduler.storage.postgres.domain.repositories.JobRepository
 import cs.trade.scheduler.storage.postgres.infrastructure.archival.toArchivedRecord
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -146,54 +149,146 @@ public class DefaultScheduler(
         return params.jobId
     }
 
-    override suspend fun enqueueOnce(key: String, job: Job, options: EnqueueOptions): Uuid {
-        // Fast path: check first. Saves the cost of a failed INSERT under hot keys
-        // (web app retrying an already-active operation). Doesn't close the race —
-        // the catch below handles the case where another caller wins between SELECT
-        // and INSERT.
-        storage.jobs.findActiveByIdempotencyKey(key)?.let { return it.id }
+    override suspend fun enqueueOnce(
+        key: String,
+        job: Job,
+        options: EnqueueOptions,
+        policy: ConcurrencyPolicy,
+    ): Uuid {
+        // Fast path for the default SKIP: a cheap pre-check avoids the locking transaction
+        // (and a guaranteed-failed INSERT) under a hot key a producer keeps retrying.
+        if (policy == ConcurrencyPolicy.SKIP) {
+            storage.jobs.findActiveByIdempotencyKey(key)?.let { return it.id }
+        }
 
         val params = buildParams(job, options)
-        val row = newJobRow(params, state = JobState.ENQUEUED, scheduledAt = null)
-            .copy(idempotencyKey = key)
+        // Each attempt is ONE transaction. A unique violation means we lost the leader-create
+        // race to a concurrent producer — roll back and re-read on the next attempt (same
+        // optimistic pattern the original enqueueOnce used, bounded like cancel()).
+        repeat(ENQUEUE_ONCE_ATTEMPTS) {
+            val attempt = runCatching {
+                withContext(Dispatchers.IO) {
+                    suspendTransaction(db = database) { resolveOnce(key, params, policy) }
+                }
+            }
+            attempt.fold(
+                onSuccess = { resolvedId ->
+                    // Emit JobCreated only for a row we actually inserted (id == the fresh one).
+                    if (resolvedId == params.jobId) emitCreated(params)
+                    return resolvedId
+                },
+                onFailure = { t -> if (!isUniqueViolation(t)) throw t /* else: retry */ },
+            )
+        }
+        // Pathological hot key — give up racing and return whoever owns it now.
+        storage.jobs.findActiveByIdempotencyKey(key)?.let { return it.id }
+        error("enqueueOnce(key=$key) lost the unique-key race $ENQUEUE_ONCE_ATTEMPTS times")
+    }
 
-        val attempt = runCatching {
-            withContext(Dispatchers.IO) {
-                suspendTransaction(db = database) {
-                    storage.jobs.insert(row)
-                    storage.outbox.insert(
-                        NewOutboxEntry(
-                            jobId = params.jobId,
-                            routingKey = params.routingKey,
-                            priority = params.priority,
-                            delayMs = 0,
-                        ),
-                    )
-                    recordCreated(params.jobId, newState = JobState.ENQUEUED)
+    /**
+     * One [enqueueOnce] attempt, inside a transaction. Locks the leader `FOR UPDATE` so the
+     * policy decision is race-free: if the worker is finalising the leader concurrently it
+     * blocks until we commit (our IGNORE successor edge becomes visible to its dep cascade);
+     * if it already finalised, we see no leader and simply become one. Returns the id of the
+     * job that owns [key] going forward (the existing one for SKIP / dedup, else the new one).
+     */
+    private suspend fun resolveOnce(key: String, params: EnqueueParams, policy: ConcurrencyPolicy): Uuid {
+        val leader = storage.jobs.findLeaderByIdempotencyKey(key, forUpdate = true)
+            ?: run {
+                insertLeaderRow(params, key)
+                return params.jobId
+            }
+        return when (policy) {
+            ConcurrencyPolicy.SKIP -> leader.id
+
+            ConcurrencyPolicy.ENQUEUE_AFTER -> {
+                // At most one parked successor per key — a repeat call just returns it.
+                storage.jobs.findSuccessorByIdempotencyKey(key)?.let { return it.id }
+                insertSuccessorRow(params, key, leaderId = leader.id)
+                params.jobId
+            }
+
+            ConcurrencyPolicy.REPLACE -> {
+                // Supersede any older parked successor — this newer REPLACE wins.
+                storage.jobs.findSuccessorByIdempotencyKey(key)?.let {
+                    storage.jobs.markCancelled(it.id, it.version, errorMsg = REPLACED_MSG, actor = REPLACED_BY)
+                }
+                if (leader.state == JobState.PROCESSING) {
+                    // Can't kill a running handler synchronously — request cooperative cancel and
+                    // park the new job behind it; it runs the moment the leader actually stops.
+                    storage.jobs.requestCancellation(leader.id, by = REPLACED_BY, at = Clock.System.now())
+                    insertSuccessorRow(params, key, leaderId = leader.id)
+                } else {
+                    // Not running yet → cancel immediately (frees the leader slot) and take over.
+                    storage.jobs.markCancelled(leader.id, leader.version, errorMsg = REPLACED_MSG, actor = REPLACED_BY)
+                    insertLeaderRow(params, key)
+                }
+                params.jobId
+            }
+        }
+    }
+
+    /** Insert a fresh leader (ENQUEUED + outbox), carrying [key]. Caller is inside a transaction. */
+    private suspend fun insertLeaderRow(params: EnqueueParams, key: String) {
+        val row = newJobRow(params, state = JobState.ENQUEUED, scheduledAt = null).copy(idempotencyKey = key)
+        storage.jobs.insert(row)
+        storage.outbox.insert(
+            NewOutboxEntry(
+                jobId = params.jobId,
+                routingKey = params.routingKey,
+                priority = params.priority,
+                delayMs = 0,
+            ),
+        )
+        recordCreated(params.jobId, newState = JobState.ENQUEUED)
+    }
+
+    /**
+     * Park a successor in AWAITING_DEPS behind [leaderId] via a single IGNORE dep edge. NO outbox
+     * row yet — [cs.trade.scheduler.engine.worker.domain.usecases.FinalizeJobUseCase] inserts it
+     * when the leader terminates (any outcome) and the IGNORE dep promotes this row to ENQUEUED.
+     * Caller is inside the FOR-UPDATE transaction, so the edge is committed before the worker's
+     * finalize can read the dep graph.
+     */
+    private suspend fun insertSuccessorRow(params: EnqueueParams, key: String, leaderId: Uuid) {
+        val row = newJobRow(params, state = JobState.AWAITING_DEPS, scheduledAt = null)
+            .copy(idempotencyKey = key, pendingDeps = 1)
+        storage.jobs.insert(row)
+        storage.jobDependencies.insert(parentId = leaderId, childId = params.jobId, onFailure = OnFailure.IGNORE)
+        recordCreated(params.jobId, newState = JobState.AWAITING_DEPS)
+    }
+
+    /**
+     * Promote any IGNORE successor parked behind [parentId] (decrement → ENQUEUED + outbox).
+     * Used by [cancel] for a non-PROCESSING leader, where finishTerminal doesn't run the dep
+     * cascade and cancelDescendantsAwaitingDeps skips IGNORE edges. One transaction so the
+     * decrement + outbox insert stay atomic (mirrors FinalizeJobUseCase).
+     */
+    private suspend fun promoteIgnoreSuccessors(parentId: Uuid) {
+        withContext(Dispatchers.IO) {
+            suspendTransaction(db = database) {
+                for (dep in storage.jobDependencies.findChildrenOfParent(parentId)) {
+                    if (dep.onFailure != OnFailure.IGNORE) continue
+                    if (storage.jobs.decrementPendingDeps(dep.childId) == JobRepository.DepDecrementResult.PROMOTED) {
+                        val child = storage.jobs.findById(dep.childId) ?: continue
+                        storage.outbox.insert(
+                            NewOutboxEntry(
+                                jobId = child.id,
+                                routingKey = routingKeyForJob(child),
+                                priority = child.priority.value,
+                                delayMs = 0,
+                            ),
+                        )
+                    }
                 }
             }
         }
+    }
 
-        return attempt.fold(
-            onSuccess = {
-                emitCreated(params)
-                params.jobId
-            },
-            onFailure = { t ->
-                if (isUniqueViolation(t)) {
-                    // Lost the race: someone else's INSERT got there first under the
-                    // partial unique index on (idempotency_key) WHERE state is active.
-                    // Re-read and return their id.
-                    storage.jobs.findActiveByIdempotencyKey(key)?.id
-                        ?: throw IllegalStateException(
-                            "Unique violation on idempotency_key=$key but no active row visible afterwards",
-                            t,
-                        )
-                } else {
-                    throw t
-                }
-            },
-        )
+    private fun routingKeyForJob(job: JobRow): String = when {
+        job.targetNode != null -> "node.${job.targetNode}"
+        job.targetTag != null -> "tag.${job.targetTag}"
+        else -> job.queue
     }
 
     private fun emitCreated(params: EnqueueParams) {
@@ -230,6 +325,11 @@ public class DefaultScheduler(
         // Postgres SQLSTATE for unique_violation — DESIGN.md 17.4 / pg docs.
         const val PG_UNIQUE_VIOLATION = "23505"
         const val CANCEL_ATTEMPTS = 3
+        // enqueueOnce leader-create races (concurrent producers) retry this many times.
+        const val ENQUEUE_ONCE_ATTEMPTS = 5
+        // Audit attribution / message stamped on rows superseded by a REPLACE enqueueOnce.
+        const val REPLACED_BY = "concurrency-policy"
+        const val REPLACED_MSG = "superseded by REPLACE enqueueOnce"
     }
 
     override suspend fun chain(vararg jobs: Job, priority: Int?): List<Uuid> {
@@ -348,6 +448,7 @@ public class DefaultScheduler(
                 nextTriggerAt = nextTrigger,
                 enabled = true,                 // upsert preserves existing if row already there
                 timeoutSeconds = definition.timeout?.inWholeSeconds?.toInt(),
+                overlap = definition.overlap,
             ),
         )
     }
@@ -383,6 +484,13 @@ public class DefaultScheduler(
                         System.err.println(
                             "cancelDescendantsAwaitingDeps failed for parent=$jobId by=$by: ${t.message}",
                         )
+                    }
+                    // An ENQUEUE_AFTER / REPLACE successor parked behind this row waits via an
+                    // IGNORE edge — cancelDescendantsAwaitingDeps skips IGNORE and finishTerminal
+                    // doesn't run the dep cascade, so promote it here or it would hang forever
+                    // (mirrors FinalizeJobUseCase's IGNORE-on-terminal handling for the worker path).
+                    runCatching { promoteIgnoreSuccessors(jobId) }.onFailure { t ->
+                        System.err.println("promoteIgnoreSuccessors failed for parent=$jobId: ${t.message}")
                     }
                     return CancelResult.CANCELLED
                 }
