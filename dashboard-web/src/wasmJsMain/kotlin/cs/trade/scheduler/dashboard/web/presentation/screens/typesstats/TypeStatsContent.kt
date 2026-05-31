@@ -1,9 +1,6 @@
 package cs.trade.scheduler.dashboard.web.presentation.screens.typesstats
 
-import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -45,6 +42,7 @@ import cs.trade.scheduler.core.frontend.theme.schedulerColors
 import cs.trade.scheduler.dashboard.web.presentation.components.CopyableText
 import cs.trade.scheduler.dashboard.web.presentation.components.DashboardPanel
 import cs.trade.scheduler.dashboard.web.presentation.components.PageHeader
+import cs.trade.scheduler.dashboard.web.presentation.components.RangeSegments
 import cs.trade.scheduler.dashboard.web.presentation.components.SkeletonBar
 import cs.trade.scheduler.shared.dto.TypeStatsDto
 import cs.trade.scheduler.shared.dto.TypeStatsRange
@@ -101,50 +99,6 @@ public fun TypeStatsContent(component: TypeStatsComponent) {
             }
         }
     }
-}
-
-/** Compact segmented time-window control — replaces the old dropdown, faster to scan and switch. */
-@Composable
-private fun RangeSegments(current: TypeStatsRange, onSelected: (TypeStatsRange) -> Unit) {
-    Row(
-        modifier = Modifier
-            .clip(MaterialTheme.shapes.small)
-            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.small),
-    ) {
-        TypeStatsRange.entries.forEach { range ->
-            val selected = range == current
-            val bg by animateColorAsState(
-                if (selected) MaterialTheme.colorScheme.primary else Color.Transparent,
-            )
-            val fg by animateColorAsState(
-                if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Box(
-                modifier = Modifier
-                    .background(bg)
-                    .clickable { onSelected(range) }
-                    .padding(horizontal = 14.dp, vertical = 8.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    text = range.shortLabel(),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = fg,
-                )
-            }
-        }
-    }
-}
-
-private fun TypeStatsRange.shortLabel(): String = when (this) {
-    TypeStatsRange.LAST_1_HOUR -> "1h"
-    TypeStatsRange.LAST_3_HOURS -> "3h"
-    TypeStatsRange.LAST_6_HOURS -> "6h"
-    TypeStatsRange.LAST_12_HOURS -> "12h"
-    TypeStatsRange.LAST_24_HOURS -> "24h"
-    TypeStatsRange.LAST_3_DAYS -> "3d"
-    TypeStatsRange.LAST_7_DAYS -> "7d"
-    TypeStatsRange.LAST_30_DAYS -> "30d"
 }
 
 @Composable

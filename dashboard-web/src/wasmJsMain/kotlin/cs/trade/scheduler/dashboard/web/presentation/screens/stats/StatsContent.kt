@@ -46,16 +46,24 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.arkivanov.decompose.extensions.compose.subscribeAsState
 import cs.trade.scheduler.core.frontend.theme.schedulerColors
+import cs.trade.scheduler.dashboard.web.presentation.components.RangeSegments
+import cs.trade.scheduler.dashboard.web.presentation.screens.typesstats.label
 import cs.trade.scheduler.dashboard.web.presentation.theme.JobStateColors
 import cs.trade.scheduler.shared.JobState
 import cs.trade.scheduler.shared.dto.StatsOverviewResponse
+import cs.trade.scheduler.shared.dto.TypeStatsRange
 import kotlin.math.roundToInt
 
 @Composable
 public fun StatsContent(component: StatsComponent) {
     val state by component.model.subscribeAsState()
     Column(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-        StatsHeader(onBack = component::onBackClicked, onRefresh = component::onRefreshClicked)
+        StatsHeader(
+            range = state.range,
+            onRangeChanged = component::onRangeChanged,
+            onBack = component::onBackClicked,
+            onRefresh = component::onRefreshClicked,
+        )
         Box(modifier = Modifier.fillMaxSize()) {
             when {
                 state.loading && state.overview == null ->
@@ -66,7 +74,7 @@ public fun StatsContent(component: StatsComponent) {
                     style = MaterialTheme.typography.bodyMedium,
                     modifier = Modifier.align(Alignment.Center).padding(24.dp),
                 )
-                state.overview != null -> Dashboard(state.overview!!)
+                state.overview != null -> Dashboard(state.overview!!, state.range)
             }
         }
     }
@@ -74,7 +82,12 @@ public fun StatsContent(component: StatsComponent) {
 
 /** Header matching the shared chrome's padding, minus the count chip — Stats has no single count. */
 @Composable
-private fun StatsHeader(onBack: () -> Unit, onRefresh: () -> Unit) {
+private fun StatsHeader(
+    range: TypeStatsRange,
+    onRangeChanged: (TypeStatsRange) -> Unit,
+    onBack: () -> Unit,
+    onRefresh: () -> Unit,
+) {
     Row(
         modifier = Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, top = 18.dp, bottom = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -82,6 +95,7 @@ private fun StatsHeader(onBack: () -> Unit, onRefresh: () -> Unit) {
     ) {
         Text("Stats", style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.onBackground)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            RangeSegments(current = range, onSelected = onRangeChanged)
             OutlinedButton(onClick = onBack, shape = MaterialTheme.shapes.small) { Text("Back") }
             OutlinedButton(onClick = onRefresh, shape = MaterialTheme.shapes.small) { Text("Refresh") }
         }
@@ -89,7 +103,8 @@ private fun StatsHeader(onBack: () -> Unit, onRefresh: () -> Unit) {
 }
 
 @Composable
-private fun Dashboard(o: StatsOverviewResponse) {
+private fun Dashboard(o: StatsOverviewResponse, range: TypeStatsRange) {
+    val window = range.label().lowercase() // e.g. "last 24h" — for the windowed outcome metrics
     // Grow charts in once when the screen first appears — distracting on every silent refresh, so
     // keyed to first composition only.
     var go by remember { mutableStateOf(false) }
@@ -111,15 +126,15 @@ private fun Dashboard(o: StatsOverviewResponse) {
         Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
             KpiTile(Modifier.weight(1f), "In flight", o.processing.grouped(), MaterialTheme.colorScheme.secondary, "running now")
             KpiTile(Modifier.weight(1f), "Backlog", backlog.grouped(), MaterialTheme.colorScheme.primary, "enqueued · scheduled · deps")
-            KpiTile(Modifier.weight(1f), "Succeeded", o.succeeded.grouped(), MaterialTheme.schedulerColors.success, "recent")
+            KpiTile(Modifier.weight(1f), "Succeeded", o.succeeded.grouped(), MaterialTheme.schedulerColors.success, window)
             KpiTile(
                 Modifier.weight(1f), "Failed", o.failed.grouped(),
-                if (o.failed > 0) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface, "recent",
+                if (o.failed > 0) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface, window,
             )
-            KpiTile(Modifier.weight(1f), "Success rate", rate.asPercent(), rateColor(rate), "succeeded / completed")
+            KpiTile(Modifier.weight(1f), "Success rate", rate.asPercent(), rateColor(rate), "completed · $window")
         }
         Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-            ChartPanel("Outcomes", Modifier.weight(1f)) {
+            ChartPanel("Outcomes · $window", Modifier.weight(1f)) {
                 OutcomeDonut(o.succeeded, o.failed, o.cancelled, rate, progress)
             }
             ChartPanel("Active pipeline", Modifier.weight(1.5f)) {
@@ -136,7 +151,7 @@ private fun Dashboard(o: StatsOverviewResponse) {
             }
         }
         Text(
-            text = "Live snapshot — updates over WebSocket",
+            text = "Outcomes counted over $window · live states are current · updates over WebSocket",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(start = 4.dp),

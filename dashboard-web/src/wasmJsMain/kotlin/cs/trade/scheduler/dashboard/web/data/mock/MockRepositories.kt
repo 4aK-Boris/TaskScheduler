@@ -252,19 +252,22 @@ public class MockQueueHealthRepository : QueueHealthRepository {
 }
 
 public class MockStatsRepository : StatsRepository {
-    // A healthy cluster: a deep-ish enqueued backlog, a handful in flight, and a ~99% success
-    // rate over the recent terminal rows — gives the donut a near-full green ring and the
-    // pipeline bars a clear "enqueued dominates" shape.
-    override suspend fun overview(): StatsOverviewResponse = StatsOverviewResponse(
-        enqueued = 1240,
-        processing = 42,
-        awaitingRetry = 18,
-        awaitingDeps = 64,
-        scheduled = 300,
-        succeeded = 184_500,
-        failed = 1_490,
-        cancelled = 860,
-    )
+    // A healthy cluster: a deep-ish enqueued backlog, a handful in flight, and a ~99% success rate.
+    // Live states are "now" (constant); terminal outcomes are baselined per-24h and scaled to the
+    // requested window so switching the range selector visibly changes the donut + outcome KPIs.
+    override suspend fun overview(rangeHours: Int): StatsOverviewResponse {
+        fun scale(per24h: Long): Long = (per24h.toDouble() * rangeHours / 24.0).toLong()
+        return StatsOverviewResponse(
+            enqueued = 1240,
+            processing = 42,
+            awaitingRetry = 18,
+            awaitingDeps = 64,
+            scheduled = 300,
+            succeeded = scale(184_500),
+            failed = scale(1_490),
+            cancelled = scale(860),
+        )
+    }
 }
 
 public class MockTypeStatsRepository : TypeStatsRepository {

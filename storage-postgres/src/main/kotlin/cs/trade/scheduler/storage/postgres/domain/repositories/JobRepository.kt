@@ -233,6 +233,14 @@ public interface JobRepository {
     public suspend fun countByState(): Map<JobState, Long>
 
     /**
+     * Per-terminal-state counts within a trailing window (`updated_at > now() - windowHours`).
+     * Backs the dashboard stats-overview range selector: live (non-terminal) states stay "now" via
+     * [countByState], only the terminal outcomes (SUCCEEDED / FAILED / CANCELLED) are windowed.
+     * States with zero rows are absent from the map. [windowHours] must be positive.
+     */
+    public suspend fun countTerminalByStateSince(windowHours: Int): Map<JobState, Long>
+
+    /**
      * "How loaded is each queue right now?" — counts non-terminal rows per queue. Used by
      * the dashboard backpressure indicator (DESIGN.md 20.10) to decide whether a queue is
      * normal / elevated / overloaded.

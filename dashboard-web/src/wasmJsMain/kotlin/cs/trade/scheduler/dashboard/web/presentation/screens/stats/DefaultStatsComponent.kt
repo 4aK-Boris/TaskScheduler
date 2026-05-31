@@ -7,6 +7,8 @@ import com.arkivanov.decompose.value.update
 import cs.trade.scheduler.core.frontend.BaseComponent
 import cs.trade.scheduler.dashboard.web.data.connection.EventStream
 import cs.trade.scheduler.dashboard.web.domain.usecases.GetStatsOverviewUseCase
+import cs.trade.scheduler.dashboard.web.presentation.screens.typesstats.toHours
+import cs.trade.scheduler.shared.dto.TypeStatsRange
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.debounce
@@ -34,10 +36,20 @@ public class DefaultStatsComponent(
 
     override fun onBackClicked() = onBack()
 
+    override fun onRangeChanged(range: TypeStatsRange) {
+        if (_model.value.range == range) return
+        _model.update { it.copy(range = range, loading = true, error = null) }
+        fetch()
+    }
+
     private fun refresh() {
         _model.update { it.copy(loading = true, error = null) }
+        fetch()
+    }
+
+    private fun fetch() {
         scope.launch {
-            getOverview().fold(
+            getOverview(_model.value.range.toHours()).fold(
                 onSuccess = { overview ->
                     _model.update { it.copy(overview = overview, loading = false, error = null) }
                 },
@@ -72,7 +84,7 @@ public class DefaultStatsComponent(
     // busy queue churns through jobs.
     private fun refreshSilently() {
         scope.launch {
-            getOverview().fold(
+            getOverview(_model.value.range.toHours()).fold(
                 onSuccess = { overview ->
                     _model.update { it.copy(overview = overview, error = null) }
                 },
