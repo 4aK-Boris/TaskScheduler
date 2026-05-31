@@ -37,6 +37,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.arkivanov.decompose.extensions.compose.subscribeAsState
 import cs.trade.scheduler.core.frontend.theme.schedulerColors
+import cs.trade.scheduler.dashboard.web.presentation.components.CopyableText
 import cs.trade.scheduler.dashboard.web.presentation.components.DashboardPanel
 import cs.trade.scheduler.dashboard.web.presentation.components.PageHeader
 import cs.trade.scheduler.dashboard.web.presentation.components.SettingsMenu
@@ -146,12 +147,12 @@ private fun WorkerRow(worker: WorkerDto, timeAbsolute: Boolean) {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         StatusCell(alive = worker.alive, modifier = Modifier.width(100.dp))
-        Text(
+        CopyableText(
             text = worker.nodeId,
             style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
             modifier = Modifier.width(220.dp),
         )
-        Text(worker.host, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.width(180.dp))
+        CopyableText(text = worker.host, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.width(180.dp))
         Text(
             text = if (worker.tags.isEmpty()) "—" else worker.tags.joinToString(", "),
             style = MaterialTheme.typography.bodySmall,

@@ -42,6 +42,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.arkivanov.decompose.extensions.compose.subscribeAsState
 import cs.trade.scheduler.core.frontend.theme.schedulerColors
+import cs.trade.scheduler.dashboard.web.presentation.components.CopyableText
 import cs.trade.scheduler.dashboard.web.presentation.components.DashboardPanel
 import cs.trade.scheduler.dashboard.web.presentation.components.PageHeader
 import cs.trade.scheduler.dashboard.web.presentation.components.SkeletonBar
@@ -193,7 +194,7 @@ private fun TypeStatsRow(row: TypeStatsDto) {
             .padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(
+        CopyableText(
             text = row.payloadType,
             style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
             modifier = Modifier.weight(1f),

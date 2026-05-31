@@ -39,6 +39,7 @@ import cs.trade.scheduler.dashboard.web.presentation.components.DashboardPanel
 import cs.trade.scheduler.dashboard.web.presentation.components.PageHeader
 import cs.trade.scheduler.dashboard.web.presentation.components.SettingsMenu
 import cs.trade.scheduler.dashboard.web.presentation.components.SkeletonBar
+import cs.trade.scheduler.dashboard.web.presentation.components.CopyableText
 import cs.trade.scheduler.dashboard.web.presentation.components.formatClock
 import cs.trade.scheduler.dashboard.web.presentation.components.timeAgo
 import cs.trade.scheduler.shared.dto.RecurringJobDto
@@ -46,9 +47,10 @@ import kotlin.time.Clock
 import kotlin.time.Duration
 import kotlin.time.Instant
 
-// Fixed columns (860) + a floor for the flexible Payload column. Above this the table fills the
-// panel (Payload absorbs the slack); below it the operator pans horizontally.
-private val TABLE_MIN_WIDTH = 1040.dp
+// Fixed columns (640) + floors for the two flexible columns (ID weight 2, Payload weight 1). ID
+// carries the long namespaced keys (marketplace.market_csgo.update_…), so it gets the bigger share
+// and grows with the screen; above this width the table fills the panel, below it the operator pans.
+private val TABLE_MIN_WIDTH = 1150.dp
 
 @Composable
 public fun RecurringListContent(component: RecurringListComponent) {
@@ -120,7 +122,7 @@ private fun RecurringHeader() {
             .padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        HeaderCell("ID", Modifier.width(220.dp))
+        HeaderCell("ID", Modifier.weight(2f))
         HeaderCell("Cron", Modifier.width(150.dp))
         HeaderCell("Queue", Modifier.width(110.dp))
         HeaderCell("Payload", Modifier.weight(1f))
@@ -160,7 +162,12 @@ private fun RecurringRow(
             .padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(job.id, style = MaterialTheme.typography.bodyMedium, color = fg, modifier = Modifier.width(220.dp))
+        CopyableText(
+            text = job.id,
+            style = MaterialTheme.typography.bodyMedium,
+            color = fg,
+            modifier = Modifier.weight(2f),
+        )
         Text(
             text = job.cron,
             style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),

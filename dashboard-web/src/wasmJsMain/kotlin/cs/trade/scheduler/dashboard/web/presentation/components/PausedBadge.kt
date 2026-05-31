@@ -22,6 +22,9 @@ public fun PausedBadge(modifier: Modifier = Modifier) {
         text = "PAUSED",
         style = MaterialTheme.typography.labelSmall,
         color = semantic.onWarningContainer,
+        // Never wrap — in a tight flex cell the pill must stay on one line, not stack letters.
+        maxLines = 1,
+        softWrap = false,
         modifier = modifier
             .background(semantic.warningContainer, RoundedCornerShape(4.dp))
             .padding(horizontal = 6.dp, vertical = 2.dp),

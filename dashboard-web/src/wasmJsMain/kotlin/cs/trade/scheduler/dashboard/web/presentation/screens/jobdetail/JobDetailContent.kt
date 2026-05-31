@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -30,6 +31,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -40,12 +42,15 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.arkivanov.decompose.extensions.compose.subscribeAsState
 import cs.trade.scheduler.core.frontend.theme.schedulerColors
+import cs.trade.scheduler.dashboard.web.presentation.components.CopyableText
 import cs.trade.scheduler.dashboard.web.presentation.components.DependencyGraph
 import cs.trade.scheduler.dashboard.web.presentation.components.PausedBadge
 import cs.trade.scheduler.dashboard.web.presentation.components.SettingsMenu
@@ -59,6 +64,7 @@ import cs.trade.scheduler.shared.dto.JobEventDto
 import cs.trade.scheduler.shared.dto.JobView
 import cs.trade.scheduler.shared.functionref.FunctionRefPayload
 import cs.trade.scheduler.shared.functionref.FunctionRefPayloadFormatter
+import kotlinx.coroutines.delay
 import kotlin.time.Instant
 
 // Below this the two-column layout (content + action sidebar) collapses to a single stack.
@@ -211,8 +217,8 @@ private fun SectionLabel(text: String) {
 @Composable
 private fun OverviewPanel(job: JobView, timeAbsolute: Boolean) {
     Panel("Overview") {
-        FactCell(Modifier.fillMaxWidth(), "Job ID", job.id, mono = true)
-        FactCell(Modifier.fillMaxWidth(), "Payload type", job.payloadType, mono = true)
+        FactCell(Modifier.fillMaxWidth(), "Job ID", job.id, mono = true, copyable = true)
+        FactCell(Modifier.fillMaxWidth(), "Payload type", job.payloadType, mono = true, copyable = true)
         FactRow {
             FactCell(Modifier.weight(1f), "Queue", job.queue)
             FactCell(Modifier.weight(1f), "Priority", job.priority.value.toString())
@@ -242,14 +248,22 @@ private fun FactRow(content: @Composable RowScope.() -> Unit) {
 }
 
 @Composable
-private fun FactCell(modifier: Modifier, label: String, value: String, mono: Boolean = false) {
+private fun FactCell(modifier: Modifier, label: String, value: String, mono: Boolean = false, copyable: Boolean = false) {
     Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(3.dp)) {
         SectionLabel(label)
-        Text(
-            text = value,
-            style = MaterialTheme.typography.bodyMedium.let { if (mono) it.copy(fontFamily = FontFamily.Monospace) else it },
-            color = MaterialTheme.colorScheme.onSurface,
-        )
+        val valueStyle = MaterialTheme.typography.bodyMedium.let {
+            if (mono) it.copy(fontFamily = FontFamily.Monospace) else it
+        }
+        if (copyable) {
+            CopyableText(
+                text = value,
+                style = valueStyle,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        } else {
+            Text(text = value, style = valueStyle, color = MaterialTheme.colorScheme.onSurface)
+        }
     }
 }
 
@@ -452,16 +466,33 @@ private fun TimelineRow(ev: JobEventDto, isFirst: Boolean, isLast: Boolean, time
             ev.actor?.let {
                 Text("by $it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            ev.errorMsg?.let {
-                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+            ev.errorMsg?.let { msg ->
+                Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = msg,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.weight(1f),
+                    )
+                    CopyButton(value = msg, label = "Copy")
+                }
             }
             ev.errorStack?.let { stack ->
-                Text(
-                    text = if (stackExpanded) "▼ Hide stack trace" else "▶ Show stack trace",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.clickable { stackExpanded = !stackExpanded },
-                )
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier.clickable { stackExpanded = !stackExpanded },
+                    ) {
+                        DisclosureChevron(expanded = stackExpanded, color = MaterialTheme.colorScheme.primary)
+                        Text(
+                            text = if (stackExpanded) "Hide stack trace" else "Show stack trace",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                    CopyButton(value = stack, label = "Copy trace")
+                }
                 Box(modifier = Modifier.animateContentSize()) {
                     if (stackExpanded) {
                         Surface(
@@ -486,6 +517,51 @@ private fun TimelineRow(ev: JobEventDto, isFirst: Boolean, isLast: Boolean, time
 // One timestamp, not two — honours the header's relative/absolute toggle.
 private fun fmtTime(instant: Instant, absolute: Boolean): String =
     if (absolute) formatDateTime(instant) else timeAgo(instant)
+
+/** Disclosure chevron drawn on Canvas — points right when collapsed, down when expanded. Replaces
+ *  the ▶/▼ glyphs, which skiko rendered as broken boxes. */
+@Composable
+private fun DisclosureChevron(expanded: Boolean, color: Color) {
+    Canvas(modifier = Modifier.size(10.dp)) {
+        val w = size.width
+        val h = size.height
+        val sw = w * 0.16f
+        if (expanded) {
+            drawLine(color, Offset(w * 0.18f, h * 0.34f), Offset(w * 0.50f, h * 0.70f), sw, cap = StrokeCap.Round)
+            drawLine(color, Offset(w * 0.50f, h * 0.70f), Offset(w * 0.82f, h * 0.34f), sw, cap = StrokeCap.Round)
+        } else {
+            drawLine(color, Offset(w * 0.34f, h * 0.18f), Offset(w * 0.70f, h * 0.50f), sw, cap = StrokeCap.Round)
+            drawLine(color, Offset(w * 0.70f, h * 0.50f), Offset(w * 0.34f, h * 0.82f), sw, cap = StrokeCap.Round)
+        }
+    }
+}
+
+/** Inline link-style button that copies [value] to the clipboard, flashing "Copied ✓" briefly. */
+// LocalClipboardManager is deprecated for the suspend LocalClipboard, but that needs a
+// platform-specific ClipEntry which is awkward on wasm; the synchronous setText works fine here.
+@Suppress("DEPRECATION")
+@Composable
+private fun CopyButton(value: String, label: String) {
+    val clipboard = LocalClipboardManager.current
+    var copied by remember { mutableStateOf(false) }
+    LaunchedEffect(copied) {
+        if (copied) {
+            delay(1400)
+            copied = false
+        }
+    }
+    Text(
+        text = if (copied) "Copied ✓" else label,
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.primary,
+        maxLines = 1,
+        softWrap = false,
+        modifier = Modifier.clickable {
+            clipboard.setText(AnnotatedString(value))
+            copied = true
+        },
+    )
+}
 
 @Composable
 private fun eventColor(type: String): Color = type.uppercase().let { t ->
