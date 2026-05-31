@@ -6,12 +6,16 @@ import com.arkivanov.decompose.value.Value
 import com.arkivanov.decompose.value.update
 import cs.trade.scheduler.core.frontend.BaseComponent
 import cs.trade.scheduler.dashboard.web.data.connection.EventStream
+import cs.trade.scheduler.dashboard.web.data.persistence.BrowserStorage
 import cs.trade.scheduler.dashboard.web.domain.usecases.ListWorkersUseCase
 import cs.trade.scheduler.shared.events.WebSocketEvent
 import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.launch
+import kotlin.time.Duration.Companion.seconds
 
 public class DefaultWorkersComponent(
     componentContext: ComponentContext,
@@ -20,19 +24,49 @@ public class DefaultWorkersComponent(
     private val onBack: () -> Unit,
 ) : BaseComponent(componentContext), WorkersComponent {
 
-    private val _model = MutableValue(WorkersComponent.Model(loading = true))
+    private val _model = MutableValue(
+        WorkersComponent.Model(
+            loading = true,
+            autoRefreshSeconds = BrowserStorage.load(AUTO_KEY)?.toIntOrNull(),
+            timeAbsolute = BrowserStorage.load(TIME_KEY) == "true",
+        ),
+    )
     override val model: Value<WorkersComponent.Model> = _model
 
     private val refreshSignal = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    private var autoRefreshJob: Job? = null
 
     init {
         refresh()
         subscribeToEvents()
         observeRefreshSignal()
+        restartAutoRefresh()
     }
 
     override fun onRefreshClicked() = refresh()
     override fun onBackClicked() = onBack()
+
+    override fun onAutoRefreshChanged(seconds: Int?) {
+        _model.update { it.copy(autoRefreshSeconds = seconds) }
+        BrowserStorage.save(AUTO_KEY, seconds?.toString() ?: "")
+        restartAutoRefresh()
+    }
+
+    override fun onTimeModeChanged(absolute: Boolean) {
+        _model.update { it.copy(timeAbsolute = absolute) }
+        BrowserStorage.save(TIME_KEY, absolute.toString())
+    }
+
+    private fun restartAutoRefresh() {
+        autoRefreshJob?.cancel()
+        val seconds = _model.value.autoRefreshSeconds ?: return
+        autoRefreshJob = scope.launch {
+            while (true) {
+                delay(seconds.seconds)
+                if (!_model.value.loading) refreshSilently()
+            }
+        }
+    }
 
     private fun refresh() {
         _model.update { it.copy(loading = true, error = null) }
@@ -86,5 +120,7 @@ public class DefaultWorkersComponent(
 
     private companion object {
         const val REFRESH_DEBOUNCE_MS = 200L
+        const val AUTO_KEY = "dashboard.workers.autoRefresh"
+        const val TIME_KEY = "dashboard.workers.timeAbsolute"
     }
 }

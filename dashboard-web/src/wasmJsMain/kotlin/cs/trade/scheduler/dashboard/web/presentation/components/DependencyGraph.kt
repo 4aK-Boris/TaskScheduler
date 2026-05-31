@@ -31,6 +31,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import cs.trade.scheduler.core.frontend.theme.schedulerColors
 import cs.trade.scheduler.shared.OnFailure
 import cs.trade.scheduler.shared.dto.JobGraph
 import cs.trade.scheduler.shared.dto.JobGraphEdge
@@ -42,16 +43,17 @@ import kotlin.math.sin
 // Node-card and spacing geometry, all in dp. The layout pass works purely in these units;
 // the Canvas converts to px at draw time via `.dp.toPx()` so edges line up with the
 // dp-positioned cards regardless of display density.
-private const val NODE_W = 172f
-private const val NODE_H = 66f
-private const val H_GAP = 28f
-private const val V_GAP = 54f
+private const val NODE_W = 340f // wide enough for the state chip + short id on one line
+private const val NODE_H = 96f // two lines for a long payload name + the chip/id row, with breathing room
+private const val LEVEL_GAP = 72f // horizontal gap between dependency levels (columns) — room for edges
+private const val SIBLING_GAP = 24f // vertical gap between siblings within a level
 
 /**
- * Node-link rendering of a job's transitive dependency DAG (DESIGN.md 9.6). Lays the
- * component out in topological rows (roots at the top, each node one level below its
- * deepest parent), draws directed parent → child edges on a [Canvas] behind state-coloured
- * node cards, highlights the [focalId] job, and navigates to a node's detail on click.
+ * Node-link rendering of a job's transitive dependency DAG (DESIGN.md 9.6). Lays the component
+ * out left-to-right: roots in the leftmost column, each node one level to the right of its
+ * deepest parent, so a dependency chain reads as a "ran → unlocked the next" flow and uses the
+ * panel's width instead of growing tall. Draws directed parent → child edges on a [Canvas]
+ * behind state-coloured node cards, highlights the [focalId] job, navigates on click.
  *
  * Sizes itself to its content and scrolls horizontally — it lives inside JobDetail's outer
  * vertical scroll, so it must NOT introduce a nested vertical scroll. Only call this when
@@ -72,8 +74,8 @@ public fun DependencyGraph(
     val propagateColor = MaterialTheme.colorScheme.outline
     val edgeColors: Map<OnFailure, Color> = mapOf(
         OnFailure.PROPAGATE_FAILURE to propagateColor,
-        OnFailure.CANCEL_CHILD to Color(0xFFEF6C00),
-        OnFailure.IGNORE to Color(0xFF78909C),
+        OnFailure.CANCEL_CHILD to MaterialTheme.schedulerColors.warning,
+        OnFailure.IGNORE to MaterialTheme.colorScheme.onSurfaceVariant,
     )
 
     Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -87,9 +89,9 @@ public fun DependencyGraph(
                     graph.edges.forEach { edge ->
                         val from = layout.positions[edge.parentId] ?: return@forEach
                         val to = layout.positions[edge.childId] ?: return@forEach
-                        // parent bottom-centre -> child top-centre
-                        val start = Offset((from.first + NODE_W / 2f).dp.toPx(), (from.second + NODE_H).dp.toPx())
-                        val end = Offset((to.first + NODE_W / 2f).dp.toPx(), to.second.dp.toPx())
+                        // parent right-centre -> child left-centre (left-to-right layout)
+                        val start = Offset((from.first + NODE_W).dp.toPx(), (from.second + NODE_H / 2f).dp.toPx())
+                        val end = Offset(to.first.dp.toPx(), (to.second + NODE_H / 2f).dp.toPx())
                         val color = edgeColors[edge.onFailure] ?: propagateColor
                         val stroke = 1.5.dp.toPx()
                         drawLine(color, start, end, strokeWidth = stroke)
@@ -163,15 +165,18 @@ private fun GraphNodeCard(node: JobView, isFocal: Boolean, onClick: () -> Unit) 
         modifier = Modifier.fillMaxSize().clickable(enabled = !isFocal, onClick = onClick),
     ) {
         Column(
-            Modifier.fillMaxSize().padding(horizontal = 10.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
+            Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 12.dp),
+            // Name stays at the top, status/id pinned to the bottom — the slack sits between them
+            // so short single-line names don't leave an odd gap under the status row.
+            verticalArrangement = Arrangement.SpaceBetween,
         ) {
             Text(
                 // Short payload name keeps the card readable; full FQN is on the detail screen.
+                // Wraps to two lines so long type names stay legible instead of being clipped.
                 text = node.payloadType.substringAfterLast('.'),
                 style = MaterialTheme.typography.labelLarge,
                 fontWeight = if (isFocal) FontWeight.Bold else FontWeight.Normal,
-                maxLines = 1,
+                maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
             Row(
@@ -199,10 +204,11 @@ private data class GraphLayout(
 )
 
 /**
- * Layered DAG layout. Assigns each node a level via longest-path layering (Kahn topological
- * order — the DAG is acyclic by construction, DESIGN.md 22.10), orders nodes within a level
- * by the barycentre of their parents' positions to cut edge crossings, then centres each row
- * and converts to dp coordinates. Pure function, memoised by the caller.
+ * Layered DAG layout, left-to-right. Assigns each node a level via longest-path layering (Kahn
+ * topological order — the DAG is acyclic by construction, DESIGN.md 22.10), orders nodes within a
+ * level by the barycentre of their parents' positions to cut edge crossings, then centres each
+ * column vertically and converts to dp coordinates. Level = column (x), order-in-level = row (y).
+ * Pure function, memoised by the caller.
  */
 private fun computeGraphLayout(graph: JobGraph): GraphLayout {
     val ids = graph.nodes.map { it.id }
@@ -253,18 +259,20 @@ private fun computeGraphLayout(graph: JobGraph): GraphLayout {
         row.forEachIndexed { i, id -> orderInLevel[id] = i }
     }
 
+    // `rows` holds the levels in left-to-right order; each becomes a column. The tallest column
+    // sets the content height, and shorter columns are centred against it.
     val maxCount = rows.maxOf { it.size }
-    val totalWidth = maxCount * NODE_W + (maxCount - 1).coerceAtLeast(0) * H_GAP
+    val totalHeight = maxCount * NODE_H + (maxCount - 1).coerceAtLeast(0) * SIBLING_GAP
 
     val positions = HashMap<String, Pair<Float, Float>>()
-    rows.forEachIndexed { rowIdx, row ->
-        val rowWidth = row.size * NODE_W + (row.size - 1).coerceAtLeast(0) * H_GAP
-        val startX = (totalWidth - rowWidth) / 2f
-        row.forEachIndexed { i, id ->
-            positions[id] = (startX + i * (NODE_W + H_GAP)) to (rowIdx * (NODE_H + V_GAP))
+    rows.forEachIndexed { levelIdx, column ->
+        val colHeight = column.size * NODE_H + (column.size - 1).coerceAtLeast(0) * SIBLING_GAP
+        val startY = (totalHeight - colHeight) / 2f
+        column.forEachIndexed { i, id ->
+            positions[id] = (levelIdx * (NODE_W + LEVEL_GAP)) to (startY + i * (NODE_H + SIBLING_GAP))
         }
     }
-    val rowCount = rows.size
-    val totalHeight = rowCount * NODE_H + (rowCount - 1).coerceAtLeast(0) * V_GAP
+    val levelCount = rows.size
+    val totalWidth = levelCount * NODE_W + (levelCount - 1).coerceAtLeast(0) * LEVEL_GAP
     return GraphLayout(positions, totalWidth, totalHeight)
 }

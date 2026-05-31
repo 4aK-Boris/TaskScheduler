@@ -6,15 +6,19 @@ import com.arkivanov.decompose.value.Value
 import com.arkivanov.decompose.value.update
 import cs.trade.scheduler.core.frontend.BaseComponent
 import cs.trade.scheduler.dashboard.web.data.connection.EventStream
+import cs.trade.scheduler.dashboard.web.data.persistence.BrowserStorage
 import cs.trade.scheduler.dashboard.web.domain.usecases.ListKnownTypesUseCase
 import cs.trade.scheduler.dashboard.web.domain.usecases.ListPausedTypesUseCase
 import cs.trade.scheduler.dashboard.web.domain.usecases.PauseTypeUseCase
 import cs.trade.scheduler.dashboard.web.domain.usecases.UnpauseTypeUseCase
 import cs.trade.scheduler.shared.events.WebSocketEvent
 import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.launch
+import kotlin.time.Duration.Companion.seconds
 
 /**
  * Types screen — paused-only list (the server doesn't yet expose "all known types";
@@ -35,16 +39,47 @@ public class DefaultTypesComponent(
     private val onBack: () -> Unit,
 ) : BaseComponent(componentContext), TypesComponent {
 
-    private val _model = MutableValue(TypesComponent.Model(loading = true))
+    private val _model = MutableValue(
+        TypesComponent.Model(
+            loading = true,
+            autoRefreshSeconds = BrowserStorage.load(AUTO_KEY)?.toIntOrNull(),
+            timeAbsolute = BrowserStorage.load(TIME_KEY) == "true",
+        ),
+    )
     override val model: Value<TypesComponent.Model> = _model
 
     private val refreshSignal = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    private var autoRefreshJob: Job? = null
 
     init {
         refresh()
         refreshKnownTypes()
         subscribeToEvents()
         observeRefreshSignal()
+        restartAutoRefresh()
+    }
+
+    override fun onAutoRefreshChanged(seconds: Int?) {
+        _model.update { it.copy(autoRefreshSeconds = seconds) }
+        BrowserStorage.save(AUTO_KEY, seconds?.toString() ?: "")
+        restartAutoRefresh()
+    }
+
+    override fun onTimeModeChanged(absolute: Boolean) {
+        _model.update { it.copy(timeAbsolute = absolute) }
+        BrowserStorage.save(TIME_KEY, absolute.toString())
+    }
+
+    // Polling fallback on top of the WS live-updates — useful if the socket drops.
+    private fun restartAutoRefresh() {
+        autoRefreshJob?.cancel()
+        val seconds = _model.value.autoRefreshSeconds ?: return
+        autoRefreshJob = scope.launch {
+            while (true) {
+                delay(seconds.seconds)
+                if (!_model.value.loading) refreshSilently()
+            }
+        }
     }
 
     private fun refreshKnownTypes() {
@@ -164,5 +199,7 @@ public class DefaultTypesComponent(
 
     private companion object {
         const val REFRESH_DEBOUNCE_MS = 200L
+        const val AUTO_KEY = "dashboard.types.autoRefresh"
+        const val TIME_KEY = "dashboard.types.timeAbsolute"
     }
 }

@@ -4,16 +4,17 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.requiredWidth
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -21,7 +22,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
@@ -31,13 +31,11 @@ import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.MenuAnchorType
+import androidx.compose.material3.ExposedDropdownMenuAnchorType
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TriStateCheckbox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -54,120 +52,189 @@ import cs.trade.scheduler.dashboard.web.presentation.components.PausedBadge
 import cs.trade.scheduler.dashboard.web.presentation.components.QueueHealthBadge
 import cs.trade.scheduler.dashboard.web.presentation.components.StateChip
 import cs.trade.scheduler.dashboard.web.presentation.components.timeAgo
+import cs.trade.scheduler.dashboard.web.presentation.components.DashboardPanel
+import cs.trade.scheduler.dashboard.web.presentation.components.PageHeader
+import cs.trade.scheduler.dashboard.web.presentation.components.SettingsMenu
+import cs.trade.scheduler.dashboard.web.presentation.components.SkeletonBar
+import cs.trade.scheduler.dashboard.web.presentation.components.CopyableText
 import cs.trade.scheduler.shared.JobState
 import cs.trade.scheduler.shared.dto.BulkActionResponse
 import cs.trade.scheduler.shared.dto.JobView
 import cs.trade.scheduler.shared.dto.QueueHealthDto
 import cs.trade.scheduler.shared.dto.QueueHealthStatus
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.hoverable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.layout.size
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.StrokeCap
+import cs.trade.scheduler.dashboard.web.presentation.components.formatClock
 
-// Sum of column widths (checkbox 44 + state 140 + queue 120 + payload 320 + attempts 80
-// + age 96 + id 130). We force this min width so the row keeps its grid even on a
-// narrow viewport — operator scrolls horizontally instead of seeing collapsed columns.
-private val TABLE_MIN_WIDTH = 950.dp
+// Fixed columns (checkbox 44 + state 168 + queue 120 + attempts 80 + age 96 + id 130 = 638) plus a
+// floor for the flexible Name column. Above this the table fills the panel (Name absorbs the slack);
+// below it the operator pans horizontally.
+private val TABLE_MIN_WIDTH = 948.dp
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 public fun JobListContent(component: JobListComponent) {
     val state by component.model.subscribeAsState()
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Jobs (${state.total})") },
-                actions = {
-                    OutlinedButton(onClick = component::onRefreshClicked) { Text("Refresh") }
-                    Spacer(Modifier.width(8.dp))
-                },
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background),
+    ) {
+        PageHeader(title = "Jobs", count = state.total) {
+            SettingsMenu(
+                autoRefreshSeconds = state.autoRefreshSeconds,
+                onAutoRefreshChanged = component::onAutoRefreshChanged,
+                timeSectionLabel = "Age column",
+                relativeLabel = "Relative (3m ago)",
+                timeAbsolute = state.ageAbsolute,
+                onTimeModeChanged = component::onAgeModeChanged,
             )
-        },
-    ) { padding ->
-        Column(modifier = Modifier.fillMaxSize().padding(padding)) {
-            StateFilterRow(
-                selected = state.stateFilter,
-                dlqOnly = state.dlqOnly,
-                onChanged = component::onStateFilterChanged,
-                onDlqToggle = component::onDlqOnlyToggled,
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-            )
-            ExtraFiltersRow(
-                queue = state.queueFilter,
-                payloadType = state.payloadTypeFilter,
-                knownTypes = state.knownTypes,
-                onQueueChange = component::onQueueFilterChanged,
-                onPayloadTypeChange = component::onPayloadTypeFilterChanged,
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-            )
-            QueueHealthRow(
-                health = state.queueHealth,
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-            )
-            HorizontalDivider()
-            if (state.selectedIds.isNotEmpty() || state.bulkResult != null || state.bulkInFlight) {
-                BulkActionToolbar(
-                    selectedCount = state.selectedIds.size,
-                    inFlight = state.bulkInFlight,
-                    actionLabel = state.bulkActionLabel,
-                    result = state.bulkResult,
-                    onRetry = component::onBulkRetryClicked,
-                    onCancel = component::onBulkCancelClicked,
-                    onDelete = component::onBulkDeleteClicked,
-                    onClear = component::onClearSelection,
-                    onDismiss = component::onDismissBulkResult,
-                )
-                HorizontalDivider()
+            OutlinedButton(onClick = component::onRefreshClicked, shape = MaterialTheme.shapes.small) {
+                Text("Refresh")
             }
-            PaginationBar(
-                page = state.page,
-                pageSize = state.pageSize,
-                total = state.total,
-                loading = state.loading,
-                onPrev = component::onPrevPageClicked,
-                onNext = component::onNextPageClicked,
-                onSizeChange = component::onPageSizeChanged,
-            )
-            HorizontalDivider()
-            // Table — wraps in horizontalScroll. requiredWidth keeps the grid sane
-            // when viewport < TABLE_MIN_WIDTH; operator pans horizontally on phones.
-            val tableScroll = rememberScrollState()
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .horizontalScroll(tableScroll),
-            ) {
-                JobListHeader(
-                    allVisibleSelected = state.items.isNotEmpty() &&
-                        state.items.all { it.id in state.selectedIds },
-                    anySelected = state.selectedIds.isNotEmpty(),
-                    onToggleAll = component::onSelectAllVisibleClicked,
+        }
+        DashboardPanel {
+            Column(modifier = Modifier.fillMaxSize()) {
+                StateFilterRow(
+                    selected = state.stateFilter,
+                    dlqOnly = state.dlqOnly,
+                    onChanged = component::onStateFilterChanged,
+                    onDlqToggle = component::onDlqOnlyToggled,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
                 )
-                HorizontalDivider(modifier = Modifier.requiredWidth(TABLE_MIN_WIDTH))
-                Box(modifier = Modifier.fillMaxSize().requiredWidth(TABLE_MIN_WIDTH)) {
-                    when {
-                        state.loading && state.items.isEmpty() -> CircularProgressIndicator(
-                            modifier = Modifier.align(Alignment.Center),
-                        )
-                        state.error != null -> Text(
-                            text = "Error: ${state.error}",
-                            color = MaterialTheme.colorScheme.error,
-                            modifier = Modifier.align(Alignment.Center).padding(16.dp),
-                        )
-                        state.items.isEmpty() -> Text(
-                            text = "No jobs match the current filter",
-                            modifier = Modifier.align(Alignment.Center).padding(16.dp),
-                        )
-                        else -> LazyColumn(modifier = Modifier.fillMaxSize()) {
-                            items(state.items, key = { it.id }) { row ->
-                                JobRow(
-                                    job = row,
-                                    checked = row.id in state.selectedIds,
-                                    paused = row.payloadType in state.pausedTypes,
-                                    onCheckedChange = { component.onJobChecked(row.id, it) },
-                                    onClick = { component.onJobClicked(row.id) },
-                                )
-                                HorizontalDivider()
+                ExtraFiltersRow(
+                    queue = state.queueFilter,
+                    payloadType = state.payloadTypeFilter,
+                    knownQueues = state.queueHealth.map { it.queue }.distinct().sorted(),
+                    knownTypes = state.knownTypes,
+                    onQueueChange = component::onQueueFilterChanged,
+                    onPayloadTypeChange = component::onPayloadTypeFilterChanged,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                )
+                QueueHealthRow(
+                    health = state.queueHealth,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                )
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                if (state.selectedIds.isNotEmpty() || state.bulkResult != null || state.bulkInFlight) {
+                    BulkActionToolbar(
+                        selectedCount = state.selectedIds.size,
+                        inFlight = state.bulkInFlight,
+                        actionLabel = state.bulkActionLabel,
+                        result = state.bulkResult,
+                        onRetry = component::onBulkRetryClicked,
+                        onCancel = component::onBulkCancelClicked,
+                        onDelete = component::onBulkDeleteClicked,
+                        onClear = component::onClearSelection,
+                        onDismiss = component::onDismissBulkResult,
+                    )
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                }
+                PaginationBar(
+                    page = state.page,
+                    pageSize = state.pageSize,
+                    total = state.total,
+                    loading = state.loading,
+                    onPrev = component::onPrevPageClicked,
+                    onNext = component::onNextPageClicked,
+                    onSizeChange = component::onPageSizeChanged,
+                )
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                // Table takes the remaining height (weight) so a second pagination bar can sit
+                // below it. Fills the panel above TABLE_MIN_WIDTH (Name absorbs the slack); below
+                // it the operator pans horizontally.
+                BoxWithConstraints(modifier = Modifier.fillMaxWidth().weight(1f)) {
+                    val tableWidth = maxOf(maxWidth, TABLE_MIN_WIDTH)
+                    val tableScroll = rememberScrollState()
+                    Box(modifier = Modifier.fillMaxSize().horizontalScroll(tableScroll)) {
+                        Column(modifier = Modifier.width(tableWidth).fillMaxHeight()) {
+                            JobListHeader(
+                                allVisibleSelected = state.items.isNotEmpty() &&
+                                    state.items.all { it.id in state.selectedIds },
+                                anySelected = state.selectedIds.isNotEmpty(),
+                                onToggleAll = component::onSelectAllVisibleClicked,
+                            )
+                            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                            Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
+                                when {
+                                    state.loading && state.items.isEmpty() ->
+                                        JobListSkeleton(modifier = Modifier.align(Alignment.TopStart))
+                                    state.error != null -> Text(
+                                        text = "Error: ${state.error}",
+                                        color = MaterialTheme.colorScheme.error,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        modifier = Modifier.align(Alignment.Center).padding(24.dp),
+                                    )
+                                    state.items.isEmpty() -> Text(
+                                        text = "No jobs match the current filter",
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        modifier = Modifier.align(Alignment.Center).padding(24.dp),
+                                    )
+                                    else -> LazyColumn(modifier = Modifier.fillMaxSize()) {
+                                        items(state.items, key = { it.id }) { row ->
+                                            JobRow(
+                                                job = row,
+                                                checked = row.id in state.selectedIds,
+                                                paused = row.payloadType in state.pausedTypes,
+                                                ageAbsolute = state.ageAbsolute,
+                                                onCheckedChange = { component.onJobChecked(row.id, it) },
+                                                onClick = { component.onJobClicked(row.id) },
+                                            )
+                                            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
                 }
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                // Second pagination bar below the table — operator can page without scrolling
+                // back to the top of a long list.
+                PaginationBar(
+                    page = state.page,
+                    pageSize = state.pageSize,
+                    total = state.total,
+                    loading = state.loading,
+                    onPrev = component::onPrevPageClicked,
+                    onNext = component::onNextPageClicked,
+                    onSizeChange = component::onPageSizeChanged,
+                )
+            }
+        }
+    }
+}
+
+// Placeholder rows while the first page loads — calmer than a bare spinner.
+@Composable
+private fun JobListSkeleton(modifier: Modifier = Modifier) {
+    Column(
+        modifier = modifier.fillMaxWidth().padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        repeat(10) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                SkeletonBar(110.dp)
+                SkeletonBar(100.dp)
+                SkeletonBar(260.dp)
+                SkeletonBar(56.dp)
+                SkeletonBar(70.dp)
+                SkeletonBar(90.dp)
             }
         }
     }
@@ -185,35 +252,75 @@ private fun PaginationBar(
 ) {
     val totalPages = if (total <= 0) 1 else (((total - 1) / pageSize) + 1).toInt()
     val pageIndex = page + 1
+    val from = if (total == 0L) 0L else page.toLong() * pageSize + 1
+    val to = if (total == 0L) 0L else minOf((page + 1).toLong() * pageSize, total)
     Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
     ) {
-        OutlinedButton(onClick = onPrev, enabled = !loading && page > 0) { Text("Prev") }
-        Text(
-            text = "Page $pageIndex / $totalPages — $total total",
-            style = MaterialTheme.typography.bodySmall,
-        )
-        OutlinedButton(onClick = onNext, enabled = !loading && pageIndex < totalPages) { Text("Next") }
-        Spacer(Modifier.width(16.dp))
-        Text("Size:", style = MaterialTheme.typography.labelMedium)
-        listOf(50, 100, 200).forEach { size ->
-            FilterChip(
-                selected = pageSize == size,
-                onClick = { if (pageSize != size) onSizeChange(size) },
-                label = { Text(size.toString()) },
-                colors = FilterChipDefaults.filterChipColors(),
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            NavBtn(left = true, enabled = !loading && page > 0, onClick = onPrev)
+            Text(
+                text = "Page $pageIndex of $totalPages",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurface,
             )
+            NavBtn(left = false, enabled = !loading && pageIndex < totalPages, onClick = onNext)
+        }
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(
+                text = if (total == 0L) "0 jobs" else "$from–$to of $total",
+                style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text("Rows", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                listOf(50, 100, 200).forEach { size ->
+                    FilterChip(
+                        selected = pageSize == size,
+                        onClick = { if (pageSize != size) onSizeChange(size) },
+                        label = { Text(size.toString()) },
+                        colors = FilterChipDefaults.filterChipColors(),
+                    )
+                }
+            }
         }
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+// Square outlined chevron button for pagination — dimmed + non-clickable when disabled.
+@Composable
+private fun NavBtn(left: Boolean, enabled: Boolean, onClick: () -> Unit) {
+    val color = if (enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.outlineVariant
+    Box(
+        modifier = Modifier
+            .size(width = 36.dp, height = 30.dp)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.small)
+            .then(if (enabled) Modifier.clickable(onClick = onClick) else Modifier),
+        contentAlignment = Alignment.Center,
+    ) {
+        Canvas(modifier = Modifier.size(9.dp)) {
+            val w = size.width
+            val h = size.height
+            val sw = w * 0.18f
+            if (left) {
+                drawLine(color, Offset(w * 0.62f, h * 0.15f), Offset(w * 0.30f, h * 0.5f), sw, cap = StrokeCap.Round)
+                drawLine(color, Offset(w * 0.30f, h * 0.5f), Offset(w * 0.62f, h * 0.85f), sw, cap = StrokeCap.Round)
+            } else {
+                drawLine(color, Offset(w * 0.38f, h * 0.15f), Offset(w * 0.70f, h * 0.5f), sw, cap = StrokeCap.Round)
+                drawLine(color, Offset(w * 0.70f, h * 0.5f), Offset(w * 0.38f, h * 0.85f), sw, cap = StrokeCap.Round)
+            }
+        }
+    }
+}
+
+
 @Composable
 private fun ExtraFiltersRow(
     queue: String,
     payloadType: String,
+    knownQueues: List<String>,
     knownTypes: List<String>,
     onQueueChange: (String) -> Unit,
     onPayloadTypeChange: (String) -> Unit,
@@ -224,53 +331,58 @@ private fun ExtraFiltersRow(
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        AutocompleteFilter("Queue", queue, knownQueues, onQueueChange, width = 220.dp)
+        AutocompleteFilter("Payload type", payloadType, knownTypes, onPayloadTypeChange, width = 320.dp)
+    }
+}
+
+// Free-text field + dropdown of known values, filtered by what's typed. Shared by the Queue
+// and Payload-type filters: pick an existing value, or type a rare one by hand.
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun AutocompleteFilter(
+    label: String,
+    value: String,
+    suggestions: List<String>,
+    onValueChange: (String) -> Unit,
+    width: Dp,
+) {
+    val matches = remember(value, suggestions) {
+        val needle = value.trim()
+        suggestions.filter { it.contains(needle, ignoreCase = true) }.take(30)
+    }
+    var expanded by remember { mutableStateOf(false) }
+    ExposedDropdownMenuBox(
+        expanded = expanded && matches.isNotEmpty(),
+        onExpandedChange = { expanded = it },
+        modifier = Modifier.width(width),
+    ) {
         OutlinedTextField(
-            value = queue,
-            onValueChange = onQueueChange,
+            value = value,
+            onValueChange = {
+                onValueChange(it)
+                expanded = true
+            },
             singleLine = true,
-            label = { Text("Queue") },
+            label = { Text(label) },
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
             textStyle = MaterialTheme.typography.bodySmall,
-            modifier = Modifier.width(180.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryEditable, enabled = true),
         )
-        // Payload-type dropdown driven by knownTypes — same pattern as TypesContent.
-        // Free-text fallback is still supported (operator can paste a rare FQN).
-        val suggestions = remember(payloadType, knownTypes) {
-            val needle = payloadType.trim()
-            knownTypes.filter { it.contains(needle, ignoreCase = true) }.take(30)
-        }
-        var expanded by remember { mutableStateOf(false) }
-        ExposedDropdownMenuBox(
-            expanded = expanded && suggestions.isNotEmpty(),
-            onExpandedChange = { expanded = it },
-            modifier = Modifier.width(320.dp),
+        ExposedDropdownMenu(
+            expanded = expanded && matches.isNotEmpty(),
+            onDismissRequest = { expanded = false },
         ) {
-            OutlinedTextField(
-                value = payloadType,
-                onValueChange = {
-                    onPayloadTypeChange(it)
-                    expanded = true
-                },
-                singleLine = true,
-                label = { Text("Payload type") },
-                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
-                textStyle = MaterialTheme.typography.bodySmall,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .menuAnchor(MenuAnchorType.PrimaryEditable, enabled = true),
-            )
-            ExposedDropdownMenu(
-                expanded = expanded && suggestions.isNotEmpty(),
-                onDismissRequest = { expanded = false },
-            ) {
-                suggestions.forEach { suggestion ->
-                    DropdownMenuItem(
-                        text = { Text(suggestion, style = MaterialTheme.typography.bodySmall) },
-                        onClick = {
-                            onPayloadTypeChange(suggestion)
-                            expanded = false
-                        },
-                    )
-                }
+            matches.forEach { match ->
+                DropdownMenuItem(
+                    text = { Text(match, style = MaterialTheme.typography.bodySmall) },
+                    onClick = {
+                        onValueChange(match)
+                        expanded = false
+                    },
+                )
             }
         }
     }
@@ -346,7 +458,7 @@ private fun QueueHealthRow(health: List<QueueHealthDto>, modifier: Modifier = Mo
     val visible = health.filter { it.status != QueueHealthStatus.NORMAL }
     if (visible.isEmpty()) return
     FlowRow(
-        modifier = modifier.padding(vertical = 4.dp),
+        modifier = modifier.padding(vertical = 12.dp),
         horizontalArrangement = Arrangement.spacedBy(6.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
@@ -398,8 +510,9 @@ private fun JobListHeader(
 ) {
     Row(
         modifier = Modifier
-            .requiredWidth(TABLE_MIN_WIDTH)
-            .padding(horizontal = 16.dp, vertical = 8.dp),
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surfaceContainerLow)
+            .padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(modifier = Modifier.width(44.dp)) {
@@ -412,31 +525,45 @@ private fun JobListHeader(
                 onClick = { onToggleAll(!allVisibleSelected) },
             )
         }
-        Text("State", style = headerStyle(), modifier = Modifier.width(140.dp))
-        Text("Queue", style = headerStyle(), modifier = Modifier.width(120.dp))
-        Text("Payload", style = headerStyle(), modifier = Modifier.width(320.dp))
-        Text("Attempts", style = headerStyle(), modifier = Modifier.width(80.dp))
-        Text("Age", style = headerStyle(), modifier = Modifier.width(96.dp))
-        Text("ID", style = headerStyle())
+        HeaderCell("State", Modifier.width(168.dp))
+        HeaderCell("Queue", Modifier.width(120.dp))
+        HeaderCell("Name", Modifier.weight(1f))
+        HeaderCell("Attempts", Modifier.width(80.dp))
+        HeaderCell("Age", Modifier.width(96.dp))
+        HeaderCell("ID", Modifier.width(130.dp))
     }
 }
 
+// Uppercase, tracked column label — matches the top-nav treatment.
 @Composable
-private fun headerStyle() = MaterialTheme.typography.labelSmall.copy(
-    color = MaterialTheme.colorScheme.onSurfaceVariant,
-)
+private fun HeaderCell(label: String, modifier: Modifier) {
+    Text(
+        text = label.uppercase(),
+        style = MaterialTheme.typography.labelSmall.copy(
+            fontWeight = FontWeight.Medium,
+            letterSpacing = 0.6.sp,
+        ),
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = modifier,
+    )
+}
 
 @Composable
 private fun JobRow(
     job: JobView,
     checked: Boolean,
     paused: Boolean,
+    ageAbsolute: Boolean,
     onCheckedChange: (Boolean) -> Unit,
     onClick: () -> Unit,
 ) {
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
     Row(
         modifier = Modifier
-            .requiredWidth(TABLE_MIN_WIDTH)
+            .fillMaxWidth()
+            .hoverable(interaction)
+            .background(if (hovered) MaterialTheme.colorScheme.surfaceContainerLow else Color.Transparent)
             .heightIn(min = 44.dp)
             .padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -450,16 +577,15 @@ private fun JobRow(
                 .clickable(onClick = onClick),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Box(modifier = Modifier.width(140.dp)) {
-                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Box(modifier = Modifier.width(168.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     StateChip(job.state)
                     // Mini progress bar under the state chip — shows only for PROCESSING
-                    // rows that have reported. Stays under the chip's fixed 140.dp cell
-                    // so column alignment doesn't shift when bars appear/disappear.
+                    // rows that have reported. end padding keeps it clear of the Queue column.
                     job.progress?.takeIf { job.state == JobState.PROCESSING }?.let { p ->
                         LinearProgressIndicator(
                             progress = { p.coerceIn(0f, 1f) },
-                            modifier = Modifier.fillMaxWidth().heightIn(min = 3.dp, max = 4.dp),
+                            modifier = Modifier.fillMaxWidth().padding(end = 16.dp).heightIn(min = 3.dp, max = 4.dp),
                         )
                     }
                 }
@@ -472,12 +598,21 @@ private fun JobRow(
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.width(320.dp),
+                // end padding keeps a clear gap to the Attempts column (esp. the PAUSED pill).
+                modifier = Modifier.weight(1f).padding(end = 16.dp),
             ) {
-                Text(
-                    text = job.payloadType.substringAfterLast('.'),
-                    style = MaterialTheme.typography.bodyMedium,
-                )
+                // Weight on a plain Box (reliable in Row layout); the text fills it and ellipsises.
+                // Keeps the PAUSED pill its own slot instead of squeezing it to one char per line.
+                Box(modifier = Modifier.weight(1f)) {
+                    // Simple name shown; full FQN on hover and on copy.
+                    CopyableText(
+                        text = job.payloadType.substringAfterLast('.'),
+                        copyValue = job.payloadType,
+                        tooltip = job.payloadType,
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
                 if (paused) PausedBadge()
             }
             Text(
@@ -486,7 +621,7 @@ private fun JobRow(
                 modifier = Modifier.width(80.dp),
             )
             Text(
-                text = timeAgo(job.updatedAt),
+                text = if (ageAbsolute) formatClock(job.updatedAt) else timeAgo(job.updatedAt),
                 style = MaterialTheme.typography.bodyMedium,
                 modifier = Modifier.width(96.dp),
             )
@@ -496,6 +631,7 @@ private fun JobRow(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     fontFamily = FontFamily.Monospace,
                 ),
+                modifier = Modifier.width(130.dp),
             )
         }
     }

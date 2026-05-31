@@ -106,9 +106,8 @@ public class EventStream(
     }
 
     private suspend fun collectOnce() {
-        // First frame is the proof we're really live (not a half-open socket that will time
-        // out in 60s). Flip to CONNECTED there, not before the webSocket {} call — a 401
-        // returns before any frame and we don't want a flicker through CONNECTED on failed auth.
+        // CONNECTED is set the instant the WS upgrade succeeds (see streamFrames) — an idle
+        // server sends no frames, so waiting for one would falsely read as "Reconnecting".
         streamFrames(onConnected = { statusStore.set(ConnectionStatus.CONNECTED) }) { event ->
             _events.emit(event)
         }
@@ -128,12 +127,17 @@ public class EventStream(
         val scheme = if (window.location.protocol == "https:") "wss" else "ws"
         val url = "$scheme://${window.location.host}$endpoint"
         ApiClient.http.webSocket(urlString = url, request = request) {
+            // Upgrade succeeded → we're genuinely live. Flip to CONNECTED on OPEN, not on the
+            // first decoded frame: an idle server (no job activity) sends no frames for minutes,
+            // and gating on the first frame left the badge stuck on "Reconnecting" over a perfectly
+            // healthy socket (observed in prod). A failed upgrade (e.g. 401) throws before this
+            // block ever runs, so there's no CONNECTED flicker on auth failure.
+            onConnected()
             for (frame in incoming) {
                 if (frame !is Frame.Text) continue
                 val event = runCatching {
                     ApiClient.json.decodeFromString<WebSocketEvent>(frame.readText())
                 }.getOrNull() ?: continue
-                onConnected()
                 onEvent(event)
             }
         }

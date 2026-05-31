@@ -14,6 +14,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
@@ -100,21 +102,46 @@ public class RabbitJobTransport(
         handler: suspend (jobId: Uuid) -> Unit,
     ): ConsumerHandle = withContext(Dispatchers.IO) {
         val qName = "q.$queue"
-        val channel = connection.createChannel()
-        channel.basicQos(prefetch)
-
         val consumerScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val handle = ConsumerHandleImpl(qName, consumerScope, prefetch)
+        consumersMutex.withLock { activeConsumers.add(handle) }
+        // First subscription. Re-subscription on an unexpected channel death is driven by the
+        // ShutdownListener registered inside subscribe() — see its KDoc.
+        subscribe(handle, handler)
+        handle
+    }
+
+    /**
+     * (Re)opens a channel for [handle] and starts consuming. The registered [com.rabbitmq.client.ShutdownListener]
+     * re-invokes this method when the channel dies for a reason OTHER than our own cancel/close or a
+     * connection-level drop:
+     *
+     * - **App-initiated** (our `cancel()`/`close()`, or the client closing deliberately) →
+     *   `isInitiatedByApplication` is true → no recovery.
+     * - **Connection-level drop** (`!connection.isOpen`) → the amqp-client's automatic recovery
+     *   re-creates this channel and its consumer; re-subscribing here too would double-consume, so skip.
+     * - **Channel-level protocol error** — the killer case: `406 PRECONDITION_FAILED` from
+     *   `consumer_timeout` (an unacked delivery held past the broker's deadline). The amqp-client does
+     *   NOT auto-recover channel-level closes, so without this the consumer would be gone until a full
+     *   process restart (prod outage 2026-05-31). We re-subscribe after [RECONNECT_DELAY], retrying
+     *   until it sticks or the handle is cancelled.
+     */
+    private fun subscribe(handle: ConsumerHandleImpl, handler: suspend (jobId: Uuid) -> Unit) {
+        if (handle.closing) return
+        val qName = handle.queue
+        val channel = connection.createChannel()
+        channel.basicQos(handle.prefetch)
 
         val deliverCallback = DeliverCallback { _, delivery ->
             val tag = delivery.envelope.deliveryTag
             val body = delivery.body
             if (body == null || body.size != UUID_BYTES) {
                 log.warn("Unexpected body size={} on queue {} — routing to DLX", body?.size ?: -1, qName)
-                channel.basicNack(tag, /* multiple = */ false, /* requeue = */ false)
+                runCatching { channel.basicNack(tag, /* multiple = */ false, /* requeue = */ false) }
                 return@DeliverCallback
             }
             val jobId = Uuid.fromByteArray(body)
-            consumerScope.launch {
+            handle.scope.launch {
                 try {
                     handler(jobId)
                     channel.basicAck(tag, false)
@@ -131,11 +158,32 @@ public class RabbitJobTransport(
             log.info("Consumer {} on queue {} was cancelled by the broker", consumerTag, qName)
         }
 
+        channel.addShutdownListener { cause ->
+            when {
+                handle.closing -> Unit // our cancel()/close() — leave it dead
+                cause.isInitiatedByApplication -> Unit // deliberate close on our side
+                !connection.isOpen ->
+                    log.warn("Channel for queue {} closed by connection drop — amqp auto-recovery will re-consume", qName)
+                else -> {
+                    val reconnectDelay = config.reconnectDelay
+                    log.error("Channel for queue {} closed by broker ({}) — re-subscribing in {}", qName, cause.reason, reconnectDelay)
+                    handle.scope.launch {
+                        while (isActive && !handle.closing) {
+                            delay(reconnectDelay.inWholeMilliseconds)
+                            if (!isActive || handle.closing) return@launch
+                            val ok = runCatching { subscribe(handle, handler) }
+                                .onFailure { log.error("Re-subscribe attempt failed for queue {} — retrying in {}", qName, reconnectDelay, it) }
+                                .isSuccess
+                            if (ok) return@launch // the fresh channel's own listener owns the next death
+                        }
+                    }
+                }
+            }
+        }
+
         val consumerTag = channel.basicConsume(qName, /* autoAck = */ false, deliverCallback, cancelCallback)
-        val handle = ConsumerHandleImpl(channel, consumerTag, consumerScope, qName)
-        consumersMutex.withLock { activeConsumers.add(handle) }
-        log.info("Consumer started — queue={}, tag={}, prefetch={}", qName, consumerTag, prefetch)
-        handle
+        handle.bind(channel, consumerTag)
+        log.info("Consumer started — queue={}, tag={}, prefetch={}", qName, consumerTag, handle.prefetch)
     }
 
     override suspend fun cancelAllConsumers() {
@@ -157,20 +205,44 @@ public class RabbitJobTransport(
         }
     }
 
+    /**
+     * Mutable so [subscribe] can re-point it at a fresh channel/tag after a recovery without the
+     * worker-side handle (held in WorkerPool.consumers) going stale. [prefetch] is tracked here so
+     * a re-subscription re-applies the tuner's latest value, and [closing] gates recovery off once
+     * the operator/shutdown has cancelled this consumer.
+     */
     private class ConsumerHandleImpl(
-        private val channel: Channel,
-        private val consumerTag: String,
-        private val scope: CoroutineScope,
-        private val queue: String,
+        val queue: String,
+        val scope: CoroutineScope,
+        @Volatile var prefetch: Int,
     ) : ConsumerHandle {
 
         private val log = LoggerFactory.getLogger(javaClass)
 
+        @Volatile private var channel: Channel? = null
+        @Volatile private var consumerTag: String? = null
+
+        @Volatile var closing: Boolean = false
+            private set
+
+        /** Point the handle at the live channel after a (re)subscription. */
+        fun bind(channel: Channel, consumerTag: String) {
+            this.channel = channel
+            this.consumerTag = consumerTag
+        }
+
         override suspend fun cancel() {
+            // Set before touching the channel so the ShutdownListener fired by close() sees closing=true
+            // and skips recovery.
+            closing = true
+            val ch = channel
+            val tag = consumerTag
             withContext(Dispatchers.IO) {
-                runCatching { channel.basicCancel(consumerTag) }
-                    .onFailure { log.warn("basicCancel failed for {}", consumerTag, it) }
-                runCatching { channel.close() }
+                if (ch != null && tag != null) {
+                    runCatching { ch.basicCancel(tag) }
+                        .onFailure { log.warn("basicCancel failed for {}", tag, it) }
+                }
+                runCatching { ch?.close() }
                     .onFailure { log.warn("channel close failed for queue {}", queue, it) }
             }
             scope.cancel()
@@ -179,9 +251,11 @@ public class RabbitJobTransport(
         override suspend fun setPrefetch(prefetch: Int) {
             // Live update — basicQos can be called on a running channel at any time and
             // the broker honours it on the next dispatch. Doesn't affect already-in-flight
-            // messages (the tuner's adjustment converges as those drain).
+            // messages (the tuner's adjustment converges as those drain). Stored so a recovery
+            // re-applies it.
+            this.prefetch = prefetch
             withContext(Dispatchers.IO) {
-                runCatching { channel.basicQos(prefetch) }
+                runCatching { channel?.basicQos(prefetch) }
                     .onFailure { log.warn("basicQos({}) failed on queue {}", prefetch, queue, it) }
             }
         }

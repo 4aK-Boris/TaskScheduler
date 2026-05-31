@@ -316,4 +316,56 @@ class RecurringIntegrationTest {
             "lastTriggeredAt must be preserved across re-registration",
         )
     }
+
+    @Test
+    fun `recurring timeout persists and propagates to the fired job`() = runBlocking {
+        val id = "timeout-${System.nanoTime()}"
+        val tenant = System.nanoTime()
+
+        scheduler.recurring(
+            RecurringDefinition(
+                id = id,
+                cron = "* * * * *",
+                job = DailyReport(tenantId = tenant),
+                timeout = kotlin.time.Duration.parse("PT2M"),   // 120s
+            ),
+        )
+
+        val row = recurring.findById(id)!!
+        assertEquals(120, row.timeoutSeconds, "RecurringDefinition.timeout must persist as timeout_seconds")
+
+        recurring.upsert(row.copy(nextTriggerAt = kotlin.time.Clock.System.now() - kotlin.time.Duration.parse("PT1M")))
+        fireDue().getOrThrow()
+
+        val fired = firstFiredJob(tenant)
+        assertEquals(120, fired.timeoutSeconds, "fired job must inherit the recurring definition's timeout")
+    }
+
+    @Test
+    fun `recurring without timeout leaves the fired job at null (falls back to defaultJobTimeout)`() = runBlocking {
+        val id = "no-timeout-${System.nanoTime()}"
+        val tenant = System.nanoTime()
+
+        scheduler.recurring(
+            RecurringDefinition(id = id, cron = "* * * * *", job = DailyReport(tenantId = tenant)),
+        )
+
+        val row = recurring.findById(id)!!
+        assertNull(row.timeoutSeconds, "no timeout specified → timeout_seconds must be null")
+
+        recurring.upsert(row.copy(nextTriggerAt = kotlin.time.Clock.System.now() - kotlin.time.Duration.parse("PT1M")))
+        fireDue().getOrThrow()
+
+        val fired = firstFiredJob(tenant)
+        assertNull(fired.timeoutSeconds, "fired job without a recurring timeout must stay null")
+    }
+
+    /** First ENQUEUED job carrying this recurring's unique payload marker, via the outbox. */
+    private suspend fun firstFiredJob(tenantId: Long) =
+        outbox.findUnpublished(limit = 1000)
+            .mapNotNull { jobs.findById(it.jobId) }
+            .first {
+                it.payloadType == DailyReport::class.qualifiedName &&
+                    Regex("\"tenantId\"\\s*:\\s*$tenantId\\b").containsMatchIn(it.payloadJson)
+            }
 }

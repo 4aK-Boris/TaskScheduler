@@ -6,6 +6,8 @@ import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
+import kotlinx.datetime.TimeZone
+import kotlinx.datetime.toLocalDateTime
 
 /**
  * Human-readable "5m ago" / "2h ago" / "3d ago" / "just now". Used in list rows so the
@@ -23,3 +25,22 @@ public fun timeAgo(instant: Instant, now: Instant = Clock.System.now()): String 
         else -> "${delta.inWholeDays / 30}mo ago"
     }
 }
+
+/**
+ * Absolute local wall-clock "HH:mm:ss" — the "exact moment it happened" alternative to
+ * [timeAgo], toggled by the Age-column display setting.
+ */
+public fun formatClock(instant: Instant): String {
+    val dt = instant.toLocalDateTime(TimeZone.currentSystemDefault())
+    fun pad(n: Int): String = n.toString().padStart(2, '0')
+    return "${pad(dt.hour)}:${pad(dt.minute)}:${pad(dt.second)}"
+}
+
+/**
+ * Full local date + time ("2026-05-30 14:30:05") — the absolute alternative for views with the
+ * room for it (JobDetail), where [formatClock]'s time-only loses the day for older timestamps.
+ * Built off the ISO-8601 [kotlinx.datetime.LocalDateTime.toString] so it's robust to the date
+ * property renames in kotlinx-datetime 0.8.0; the 'T' separator becomes a space for readability.
+ */
+public fun formatDateTime(instant: Instant): String =
+    instant.toLocalDateTime(TimeZone.currentSystemDefault()).toString().replace('T', ' ')

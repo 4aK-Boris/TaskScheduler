@@ -14,6 +14,7 @@ plugins {
 }
 
 group = "cs.trade.scheduler"
+
 // The version number lives in gradle.properties (`schedulerVersion`) so the published library and
 // the Docker image tag share one source of truth; the SNAPSHOT rationale is documented there.
 version = providers.gradleProperty("schedulerVersion").get()

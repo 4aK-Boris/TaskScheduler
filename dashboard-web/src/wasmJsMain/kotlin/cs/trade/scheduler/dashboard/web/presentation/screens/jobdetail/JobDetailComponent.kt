@@ -33,11 +33,19 @@ public interface JobDetailComponent {
     public fun onRerouteTagChanged(value: String)
     public fun onRerouteSubmit()
 
+    /** Auto-refresh cadence — `null` = off (WS push + manual Refresh only), else re-load every N seconds. */
+    public fun onAutoRefreshChanged(seconds: Int?)
+
+    /** Timestamps: `false` = relative ("3m ago"), `true` = absolute ("2026-05-30 14:30:05"). */
+    public fun onTimeModeChanged(absolute: Boolean)
+
     public data class Model(
         val jobId: String,
         val detail: JobDetail? = null,
         val loading: Boolean = false,
         val error: String? = null,
+        val autoRefreshSeconds: Int? = null,
+        val timeAbsolute: Boolean = false,
         val cancelResult: CancelResult? = null,
         val cancelling: Boolean = false,
         val retryResult: RetryResult? = null,

@@ -47,4 +47,9 @@ public data class ArchivedJobRecord(
     val contextJson: String?,
     val createdAt: Instant,
     val updatedAt: Instant,
+    // Counting-progress-bar metadata (JobContext.progressBar). Defaults keep older archive
+    // readers and existing construction sites compiling unchanged.
+    val progressSucceeded: Long? = null,
+    val progressFailed: Long? = null,
+    val progressTotal: Long? = null,
 )

@@ -50,6 +50,12 @@ public object JobTable : UuidTable("job") {
     public val progressMsg: Column<String?> = text("progress_msg").nullable()
     public val progressUpdatedAt: Column<OffsetDateTime?> = timestampWithTimeZone("progress_updated_at").nullable()
 
+    // Counting progress bar (JobContext.progressBar). NULL unless the handler used the
+    // counting API — `progress` stays the derived fraction either way. See V6 migration.
+    public val progressSucceeded: Column<Long?> = long("progress_succeeded").nullable()
+    public val progressFailed: Column<Long?> = long("progress_failed").nullable()
+    public val progressTotal: Column<Long?> = long("progress_total").nullable()
+
     public val startedAt: Column<OffsetDateTime?> = timestampWithTimeZone("started_at").nullable()
     public val durationMs: Column<Long?> = long("duration_ms").nullable()
 

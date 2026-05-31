@@ -47,6 +47,7 @@ public class RecurringJobRepositoryImpl(
                     it[lastTriggeredAt] = row.lastTriggeredAt?.toOffsetDateTimeUtc()
                     it[nextTriggerAt] = row.nextTriggerAt.toOffsetDateTimeUtc()
                     it[enabled] = row.enabled
+                    it[timeoutSeconds] = row.timeoutSeconds
                 }
             } else {
                 RecurringJobTable.update({ RecurringJobTable.id eq row.id }) {
@@ -60,7 +61,9 @@ public class RecurringJobRepositoryImpl(
                     it[payloadType] = row.payloadType
                     it[payloadJson] = row.payloadJson
                     it[nextTriggerAt] = row.nextTriggerAt.toOffsetDateTimeUtc()
+                    it[timeoutSeconds] = row.timeoutSeconds
                     // Intentionally NOT touching: enabled, lastTriggeredAt — preserve state.
+                    // timeoutSeconds IS a definition field → refreshed on re-registration.
                 }
             }
         }
@@ -152,4 +155,5 @@ private fun ResultRow.toRow(): RecurringJobRow = RecurringJobRow(
     lastTriggeredAt = this[RecurringJobTable.lastTriggeredAt]?.toKotlinTime(),
     nextTriggerAt = this[RecurringJobTable.nextTriggerAt].toKotlinTime(),
     enabled = this[RecurringJobTable.enabled],
+    timeoutSeconds = this[RecurringJobTable.timeoutSeconds],
 )

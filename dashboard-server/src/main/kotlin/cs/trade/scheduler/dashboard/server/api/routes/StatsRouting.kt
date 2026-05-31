@@ -40,7 +40,7 @@ public fun Route.configureStatsRouting() {
         }
 
         // GET /api/stats/types?range=24h  — per-payload-type aggregates (DESIGN.md 22.4).
-        // `range` accepts short forms only (1h, 24h, 7d, 30d); unrecognised values fall
+        // `range` accepts short forms only (1h, 3h, 6h, 12h, 24h, 3d, 7d, 30d); unrecognised values fall
         // back to the 24h default with a warning so the operator's typo doesn't 4xx the
         // page. Invalid ranges out of the [1..720] window still 4xx via the UseCase's
         // require() so a hand-crafted curl can't drag the dashboard into a seq scan.
@@ -63,12 +63,16 @@ public fun Route.configureStatsRouting() {
 private const val DEFAULT_RANGE_HOURS: Int = 24
 
 /**
- * `"1h"` → 1, `"24h"` → 24, `"7d"` → 168, `"30d"` → 720.
+ * `"1h"` → 1, `"3h"` → 3, `"6h"` → 6, `"12h"` → 12, `"24h"` → 24, `"3d"` → 72, `"7d"` → 168, `"30d"` → 720.
  * Returns null on any unrecognised input so the caller can decide the fallback.
  */
 private fun rangeToHours(range: String): Int? = when (range.lowercase()) {
     "1h" -> 1
+    "3h" -> 3
+    "6h" -> 6
+    "12h" -> 12
     "24h" -> 24
+    "3d" -> 24 * 3
     "7d" -> 24 * 7
     "30d" -> 24 * 30
     else -> null

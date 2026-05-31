@@ -28,4 +28,6 @@ public data class RecurringJobRow(
     val lastTriggeredAt: Instant?,
     val nextTriggerAt: Instant,
     val enabled: Boolean,
+    /** Per-job timeout (seconds) copied to each fired job; `null` = worker's defaultJobTimeout. */
+    val timeoutSeconds: Int? = null,
 )

@@ -271,8 +271,21 @@ public interface JobRepository {
      * State-scoped to PROCESSING so we don't accidentally repaint a SUCCEEDED row's
      * progress if a handler reports late. Returns `true` if the row was PROCESSING
      * and got stamped.
+     *
+     * [succeeded] / [failed] / [total] carry counting-progress-bar metadata
+     * ([cs.trade.scheduler.core.backend.handler.JobContext.progressBar]). They are written
+     * only when non-null — a plain `updateProgress` call passes all three as `null`, which
+     * leaves any existing counters on the row untouched rather than clobbering them.
      */
-    public suspend fun setProgress(jobId: Uuid, progress: Float, msg: String?, at: Instant): Boolean
+    public suspend fun setProgress(
+        jobId: Uuid,
+        progress: Float,
+        msg: String?,
+        at: Instant,
+        succeeded: Long? = null,
+        failed: Long? = null,
+        total: Long? = null,
+    ): Boolean
 
     /**
      * Operator-initiated RE-ROUTE (DESIGN.md 22.2). Updates `target_node` / `target_tag`

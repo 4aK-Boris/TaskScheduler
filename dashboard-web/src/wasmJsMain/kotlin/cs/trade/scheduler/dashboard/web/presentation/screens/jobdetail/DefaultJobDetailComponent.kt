@@ -6,6 +6,7 @@ import com.arkivanov.decompose.value.Value
 import com.arkivanov.decompose.value.update
 import cs.trade.scheduler.core.frontend.BaseComponent
 import cs.trade.scheduler.dashboard.web.data.connection.EventStream
+import cs.trade.scheduler.dashboard.web.data.persistence.BrowserStorage
 import cs.trade.scheduler.dashboard.web.domain.usecases.CancelJobUseCase
 import cs.trade.scheduler.dashboard.web.domain.usecases.DeleteJobUseCase
 import cs.trade.scheduler.dashboard.web.domain.usecases.GetJobDetailUseCase
@@ -17,7 +18,10 @@ import cs.trade.scheduler.shared.RerouteResult
 import cs.trade.scheduler.shared.RetryMode
 import cs.trade.scheduler.shared.events.EventFilter
 import cs.trade.scheduler.shared.events.WebSocketEvent
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlin.time.Duration.Companion.seconds
 
 public class DefaultJobDetailComponent(
     componentContext: ComponentContext,
@@ -35,14 +39,58 @@ public class DefaultJobDetailComponent(
     private val onNavigateToJob: (jobId: String) -> Unit,
 ) : BaseComponent(componentContext), JobDetailComponent {
 
-    private val _model = MutableValue(JobDetailComponent.Model(jobId = jobId, loading = true))
+    private val _model = MutableValue(
+        JobDetailComponent.Model(
+            jobId = jobId,
+            loading = true,
+            autoRefreshSeconds = BrowserStorage.load(AUTO_KEY)?.toIntOrNull(),
+            timeAbsolute = BrowserStorage.load(TIME_KEY) == "true",
+        ),
+    )
     override val model: Value<JobDetailComponent.Model> = _model
+
+    private var autoRefreshJob: Job? = null
 
     init {
         refresh()
         refreshPausedTypes()
         subscribeToPauseEvents()
         subscribeToProgressEvents()
+        restartAutoRefresh()
+    }
+
+    override fun onAutoRefreshChanged(seconds: Int?) {
+        _model.update { it.copy(autoRefreshSeconds = seconds) }
+        BrowserStorage.save(AUTO_KEY, seconds?.toString() ?: "")
+        restartAutoRefresh()
+    }
+
+    override fun onTimeModeChanged(absolute: Boolean) {
+        _model.update { it.copy(timeAbsolute = absolute) }
+        BrowserStorage.save(TIME_KEY, absolute.toString())
+    }
+
+    // State transitions (PROCESSING → SUCCEEDED, new events) aren't pushed to this screen — only
+    // progress is — so a periodic silent re-load is the way to watch a job evolve without clicking
+    // Refresh. Silent = no loading flag (the body stays put; no skeleton flash).
+    private fun restartAutoRefresh() {
+        autoRefreshJob?.cancel()
+        val seconds = _model.value.autoRefreshSeconds ?: return
+        autoRefreshJob = scope.launch {
+            while (true) {
+                delay(seconds.seconds)
+                if (!_model.value.loading) refreshSilently()
+            }
+        }
+    }
+
+    private fun refreshSilently() {
+        scope.launch {
+            getDetail(_model.value.jobId).fold(
+                onSuccess = { detail -> _model.update { it.copy(detail = detail ?: it.detail) } },
+                onFailure = { /* keep last good snapshot on transient error */ },
+            )
+        }
     }
 
     private fun refreshPausedTypes() {
@@ -85,6 +133,12 @@ public class DefaultJobDetailComponent(
                             job = d.job.copy(
                                 progress = event.progress,
                                 progressMsg = event.msg,
+                                // Counting-bar counters ride along on counting events; a plain
+                                // updateProgress event carries null for all three, so keep the
+                                // existing values rather than wiping the split bar.
+                                progressSucceeded = event.succeeded ?: d.job.progressSucceeded,
+                                progressFailed = event.failed ?: d.job.progressFailed,
+                                progressTotal = event.total ?: d.job.progressTotal,
                             ),
                         ),
                     )
@@ -241,5 +295,10 @@ public class DefaultJobDetailComponent(
                 },
             )
         }
+    }
+
+    private companion object {
+        const val AUTO_KEY = "dashboard.jobDetail.autoRefresh"
+        const val TIME_KEY = "dashboard.jobDetail.timeAbsolute"
     }
 }
