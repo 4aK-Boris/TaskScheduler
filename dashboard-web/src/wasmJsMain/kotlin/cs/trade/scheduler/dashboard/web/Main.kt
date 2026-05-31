@@ -3,6 +3,8 @@ package cs.trade.scheduler.dashboard.web
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.window.ComposeViewport
 import com.arkivanov.decompose.DefaultComponentContext
+import com.arkivanov.decompose.ExperimentalDecomposeApi
+import com.arkivanov.decompose.router.stack.webhistory.DefaultWebHistoryController
 import com.arkivanov.essenty.lifecycle.LifecycleRegistry
 import cs.trade.scheduler.dashboard.web.data.connection.ConnectionStatusStore
 import cs.trade.scheduler.dashboard.web.data.connection.EventStream
@@ -58,7 +60,7 @@ import kotlinx.coroutines.SupervisorJob
 // Wasm entry point. Composition root: hand-wires repositories and UseCases, then hands
 // them to DefaultRootComponent. No DI container in the browser bundle to keep the wasm
 // output small and the wiring obvious.
-@OptIn(ExperimentalComposeUiApi::class)
+@OptIn(ExperimentalComposeUiApi::class, ExperimentalDecomposeApi::class)
 fun main() {
     val lifecycle = LifecycleRegistry()
 
@@ -81,8 +83,15 @@ fun main() {
     val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     eventStream.start(appScope)
 
+    // Syncs navigation with the browser address bar + Back/Forward via query-string routing
+    // ("/?jobs/{id}"): the path stays "/", so reload / shared links work with no server config.
+    // The query at load restores the screen.
+    val webHistoryController = DefaultWebHistoryController()
+
     val root = DefaultRootComponent(
         componentContext = DefaultComponentContext(lifecycle = lifecycle),
+        deepLinkPath = window.location.search,
+        webHistoryController = webHistoryController,
         getJobsList = GetJobsListUseCase(jobsRepository),
         getJobDetail = GetJobDetailUseCase(jobsRepository),
         cancelJob = CancelJobUseCase(jobsRepository),
