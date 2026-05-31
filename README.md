@@ -15,10 +15,13 @@ covers what you need to get something running.
 ## Quick start
 
 ```bash
-# 1. Bring up Postgres + RabbitMQ + the infra process + a demo app
-docker compose up --build
+# 1. Build the infra + demo-app images from the shadow JARs (needs a running Docker daemon)
+./gradlew :standalone-runner:dockerImage :app:dockerImage
 
-# 2. Open the dashboard (BasicAuth: admin / admin)
+# 2. Bring up Postgres + RabbitMQ + the infra process + a demo app
+docker compose up
+
+# 3. Open the dashboard (BasicAuth: admin / admin)
 open http://localhost:8080
 ```
 
@@ -141,3 +144,45 @@ replica.
 This project follows the suggested multi-module setup with a `buildSrc`
 convention plugin and a Gradle version catalog (`gradle/libs.versions.toml`).
 Build and configuration caches are enabled (`gradle.properties`).
+
+## Docker image & deployment
+
+The `scheduler-infra` process ships as a Docker image. There are two ways to get one:
+
+```bash
+# Local build — produces taskscheduler-infra:<version> and :latest (version from gradle.properties)
+./gradlew :standalone-runner:dockerImage
+
+# Override the tag / repository name if needed
+./gradlew :standalone-runner:dockerImage -Pimage.tag=rc1 -Pimage.name=myorg/scheduler-infra
+```
+
+The task builds the shadow JAR (bundling the Wasm dashboard) and then reuses
+[`docker/infra/Dockerfile`](docker/infra/Dockerfile) — the same Dockerfile CI uses, so local and
+published images are identical.
+
+**CI auto-build:** [`.github/workflows/docker.yml`](.github/workflows/docker.yml) builds and pushes
+to GHCR on every push to `master` and on `vX.Y.Z` tags:
+
+| Trigger          | Tags pushed                                              |
+|------------------|----------------------------------------------------------|
+| push to `master` | `:master`, `:sha-<short>`, `:latest`                     |
+| tag `v0.2.0`     | `:0.2.0`, `:0.2`, `:latest`                              |
+
+Deploy a published image (no local build needed):
+
+```bash
+# via compose
+SCHEDULER_INFRA_IMAGE=ghcr.io/4ak-boris/taskscheduler-infra:latest docker compose up
+
+# or standalone
+docker run -p 8080:8080 \
+  -e POSTGRES_URL=jdbc:postgresql://<host>:5432/scheduler \
+  -e POSTGRES_USER=scheduler -e POSTGRES_PASSWORD=... \
+  -e RABBITMQ_HOST=<host> -e RABBITMQ_USER=scheduler -e RABBITMQ_PASSWORD=... \
+  -e DASHBOARD_AUTH_PASSWORD=... \
+  ghcr.io/4ak-boris/taskscheduler-infra:latest
+```
+
+Bump the release version in one place — `schedulerVersion` in `gradle.properties` — which drives both
+the published library coordinates and the Docker image tag.

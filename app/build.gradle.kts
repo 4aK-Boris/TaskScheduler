@@ -2,6 +2,7 @@ import com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar
 
 plugins {
     id("buildsrc.convention.kotlin-jvm")
+    id("buildsrc.convention.docker-image")
     application
     alias(libs.plugins.kotlinPluginSerialization)
     alias(libs.plugins.koinCompiler)
@@ -42,5 +43,11 @@ tasks.named<ShadowJar>("shadowJar") {
     manifest {
         attributes["Main-Class"] = "cs.trade.scheduler.demo.DemoAppKt"
     }
+}
+
+// `./gradlew :app:dockerImage` builds the demo-app image so `docker compose up` has both halves.
+dockerImage {
+    imageName = "taskscheduler-demo-app"
+    dockerfile = "docker/app/Dockerfile"
 }
 

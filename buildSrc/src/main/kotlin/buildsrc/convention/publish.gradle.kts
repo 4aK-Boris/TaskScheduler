@@ -14,11 +14,10 @@ plugins {
 }
 
 group = "cs.trade.scheduler"
-// Fixed release version (no -SNAPSHOT): Gradle caches release artifacts, so a consumer picks
-// up changes only when this number bumps — cut a new version per release rather than re-pushing
-// the same coordinates. 0.2.0: dashboard Graphite redesign across all screens, sub-minute cron,
-// migrations relocated to `scheduler/migration` (consumer Flyway collision fix).
-version = "0.2.0"
+
+// The version number lives in gradle.properties (`schedulerVersion`) so the published library and
+// the Docker image tag share one source of truth; the SNAPSHOT rationale is documented there.
+version = providers.gradleProperty("schedulerVersion").get()
 
 // JVM modules (kotlin("jvm")) get no publication for free — create one from the `java`
 // component. KMP modules (kotlin("multiplatform")) auto-register a publication per target

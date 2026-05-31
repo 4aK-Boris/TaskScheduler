@@ -1,5 +1,11 @@
 # Local-dev compose: postgres + custom rabbitmq + scheduler-infra + demo app.
 # See DESIGN.md section 14.6.
+#
+# The scheduler-infra and app images are built by Gradle, not by compose:
+#   ./gradlew :standalone-runner:dockerImage :app:dockerImage
+#   docker compose up
+# To run a published image instead of the local build, point the env vars at GHCR, e.g.:
+#   SCHEDULER_INFRA_IMAGE=ghcr.io/4ak-boris/taskscheduler-infra:latest docker compose up
 
 services:
   postgres:
@@ -29,9 +35,7 @@ services:
       - rabbit_data:/var/lib/rabbitmq
 
   scheduler-infra:
-    build:
-      context: .
-      dockerfile: docker/infra/Dockerfile
+    image: ${SCHEDULER_INFRA_IMAGE:-taskscheduler-infra:latest}
     environment:
       POSTGRES_URL: jdbc:postgresql://postgres:5432/scheduler
       POSTGRES_USER: scheduler
@@ -47,9 +51,7 @@ services:
     restart: unless-stopped
 
   app:
-    build:
-      context: .
-      dockerfile: docker/app/Dockerfile
+    image: ${SCHEDULER_DEMO_APP_IMAGE:-taskscheduler-demo-app:latest}
     environment:
       POSTGRES_URL: jdbc:postgresql://postgres:5432/scheduler
       POSTGRES_USER: scheduler
