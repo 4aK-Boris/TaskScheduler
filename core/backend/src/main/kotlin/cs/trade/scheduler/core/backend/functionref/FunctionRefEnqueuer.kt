@@ -178,11 +178,10 @@ public object FunctionRefEnqueuer {
             return JsonNull
         }
         return runCatching {
-            // serializer(KType) honours nullability + generics from the declared KType.
-            // We bake the declared type into the wire format implicitly; the worker has
-            // to re-derive the same KType from the resolved method's parameter to decode.
-            @Suppress("UNCHECKED_CAST")
-            json.encodeToJsonElement(serializer(param.type) as kotlinx.serialization.KSerializer<Any?>, arg)
+            // serializer(KType) honours nullability + generics from the declared KType (and is
+            // already typed KSerializer<Any?>). We bake the declared type into the wire format
+            // implicitly; the worker re-derives the same KType from the resolved param to decode.
+            json.encodeToJsonElement(serializer(param.type), arg)
         }.getOrElse { cause ->
             val hint = when (cause) {
                 is SerializationException -> "@Serializable is missing or the type isn't supported by kotlinx-serialization"

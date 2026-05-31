@@ -4,7 +4,6 @@ package cs.trade.scheduler.engine.worker.infrastructure
 
 import cs.trade.scheduler.core.backend.functionref.FunctionRefEnqueuer
 import cs.trade.scheduler.shared.functionref.FunctionRefPayload
-import kotlinx.serialization.KSerializer
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
@@ -144,8 +143,7 @@ public class FunctionRefRunner(
                 null
             } else {
                 runCatching {
-                    @Suppress("UNCHECKED_CAST")
-                    json.decodeFromJsonElement(serializer(param.type) as KSerializer<Any?>, el)
+                    json.decodeFromJsonElement(serializer(param.type), el)
                 }.getOrElse { cause ->
                     throw IllegalStateException(
                         "Function-ref API: ${method.name} arg[$idx] (${param.name}: ${param.type}) " +

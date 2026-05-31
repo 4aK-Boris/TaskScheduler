@@ -1,6 +1,7 @@
 package cs.trade.scheduler.dashboard.web.presentation.root
 
 import com.arkivanov.decompose.ComponentContext
+import com.arkivanov.decompose.DelicateDecomposeApi
 import com.arkivanov.decompose.ExperimentalDecomposeApi
 import com.arkivanov.decompose.router.stack.ChildStack
 import com.arkivanov.decompose.router.stack.StackNavigation
@@ -48,7 +49,9 @@ import cs.trade.scheduler.dashboard.web.presentation.screens.workers.DefaultWork
 
 // Root nav host. Each child is constructed with its own scoped UseCases — no DI
 // container at runtime; the Root passes everything down explicitly.
-@OptIn(ExperimentalDecomposeApi::class)
+// push/replaceCurrent are @DelicateDecomposeApi (pushing a duplicate config is the caller's
+// responsibility) — we accept that here intentionally; pushNew would throw on a repeat JobDetail.
+@OptIn(ExperimentalDecomposeApi::class, DelicateDecomposeApi::class)
 public class DefaultRootComponent(
     componentContext: ComponentContext,
     // Browser query string at startup (window.location.search, e.g. "?jobs/{id}") — restores the
