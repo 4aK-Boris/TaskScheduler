@@ -1,8 +1,9 @@
 # Auto-build the scheduler-infra Docker image and push it to GitHub Container Registry.
 #
 # Triggers:
-#   * push to master      -> ghcr.io/4ak-boris/taskscheduler-infra:master + :sha-<short> + :latest
-#   * push of a vX.Y.Z tag -> ...:X.Y.Z + :X.Y + :latest
+#   * pull_request -> master : build-only validation (no push) — a PR can't merge a broken build
+#   * push to master       -> ghcr.io/4ak-boris/taskscheduler-infra:master + :sha-<short> + :latest
+#   * push of a vX.Y.Z tag  -> ...:X.Y.Z + :X.Y + :latest
 #
 # Deploy a published image with:
 #   SCHEDULER_INFRA_IMAGE=ghcr.io/4ak-boris/taskscheduler-infra:latest docker compose up
@@ -12,6 +13,8 @@
 name: docker
 
 on:
+  pull_request:
+    branches: [master]
   push:
     branches: [master]
     tags: ['v*']
@@ -47,7 +50,9 @@ jobs:
       - name: Build infra shadow JAR
         run: ./gradlew --no-daemon :standalone-runner:shadowJar
 
+      # Skipped on pull_request — PR builds don't push, so no registry auth is needed.
       - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -72,12 +77,13 @@ jobs:
 
       # Context = the build/libs dir (only the fat JAR), Dockerfile reused from docker/infra/ — the
       # exact same inputs the local `./gradlew :standalone-runner:dockerImage` task uses.
-      - name: Build and push
+      # On a pull request the image is built but NOT pushed (push: false) — validation only.
+      - name: Build image (push on master/tags)
         uses: docker/build-push-action@v6
         with:
           context: standalone-runner/build/libs
           file: docker/infra/Dockerfile
-          push: true
+          push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
