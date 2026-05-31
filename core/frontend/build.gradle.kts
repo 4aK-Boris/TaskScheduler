@@ -8,11 +8,11 @@ kotlin {
         wasmJsMain.dependencies {
             api(project(":core:shared"))
 
-            api(compose.runtime)
-            api(compose.foundation)
-            api(compose.material3)
-            api(compose.ui)
-            api(compose.components.resources)
+            api(libs.composeRuntime)
+            api(libs.composeFoundation)
+            api(libs.composeMaterial3)
+            api(libs.composeUi)
+            api(libs.composeComponentsResources)
 
             api(libs.bundles.ktorClientWasm)
             api(libs.bundles.decompose)

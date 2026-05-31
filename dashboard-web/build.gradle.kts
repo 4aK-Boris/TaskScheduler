@@ -21,10 +21,10 @@ kotlin {
             implementation(project(":core:shared"))
             implementation(project(":core:frontend"))
 
-            implementation(compose.runtime)
-            implementation(compose.foundation)
-            implementation(compose.material3)
-            implementation(compose.ui)
+            implementation(libs.composeRuntime)
+            implementation(libs.composeFoundation)
+            implementation(libs.composeMaterial3)
+            implementation(libs.composeUi)
 
             implementation(libs.bundles.decompose)
             implementation(libs.bundles.ktorClientWasm)
