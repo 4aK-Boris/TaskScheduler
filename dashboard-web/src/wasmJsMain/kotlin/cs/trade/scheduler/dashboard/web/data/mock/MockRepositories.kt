@@ -323,6 +323,10 @@ private val MOCK_RECURRING: List<RecurringJobDto> = run {
         enabled = enabled,
     )
     listOf(
+        row(
+            "marketplace.market_csgo.update_market_cs_go_item_buy_order_prises_task",
+            "*/30 * * * *", "marketplace", "com.acme.marketplace.UpdateBuyOrderPrices", "UTC", true, 12, 18, 6,
+        ),
         row("nightly-report", "0 3 * * *", "reports", "com.acme.report.GenerateReport", "Europe/Berlin", true, 600, 720, 5),
         row("hourly-inventory-sync", "0 * * * *", "default", "com.acme.inventory.SyncInventory", null, true, 35, 25, 0),
         row("healthcheck-10s", "*/10 * * * * *", "default", "com.acme.webhook.DeliverWebhook", null, true, 0, 0, 0),
