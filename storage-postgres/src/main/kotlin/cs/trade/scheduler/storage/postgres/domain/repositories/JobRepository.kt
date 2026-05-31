@@ -201,6 +201,22 @@ public interface JobRepository {
     public suspend fun findActiveByIdempotencyKey(idempotencyKey: String): Job?
 
     /**
+     * The "leader" for [idempotencyKey] — the running / queued-to-run row (states
+     * SCHEDULED / ENQUEUED / PROCESSING / AWAITING_RETRY), matching `job_idem_leader_idx`
+     * (V8). [forUpdate] takes a `SELECT … FOR UPDATE` row lock so a caller can atomically
+     * decide a [cs.trade.scheduler.shared.ConcurrencyPolicy] action against a stable leader —
+     * it serialises concurrent enqueueOnce calls for the same key and orders correctly against
+     * the worker's terminal finalize. Only meaningful inside a transaction. `null` = no leader.
+     */
+    public suspend fun findLeaderByIdempotencyKey(idempotencyKey: String, forUpdate: Boolean = false): Job?
+
+    /**
+     * The parked "successor" for [idempotencyKey] — an AWAITING_DEPS row waiting behind the
+     * leader (matches `job_idem_successor_idx`, V8). At most one per key. `null` = none parked.
+     */
+    public suspend fun findSuccessorByIdempotencyKey(idempotencyKey: String): Job?
+
+    /**
      * DELETE rows in terminal [state] whose `updated_at < olderThan`. Bounded by
      * [batchSize] (PG generates a subquery `id IN (SELECT id FROM job WHERE ... LIMIT n)`).
      * Returns the number of rows deleted.

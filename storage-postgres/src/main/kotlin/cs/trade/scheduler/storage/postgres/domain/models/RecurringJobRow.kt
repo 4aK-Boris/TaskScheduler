@@ -1,6 +1,7 @@
 package cs.trade.scheduler.storage.postgres.domain.models
 
 import cs.trade.scheduler.shared.MisfirePolicy
+import cs.trade.scheduler.shared.RecurringOverlap
 import kotlin.time.Instant
 
 /**
@@ -30,4 +31,6 @@ public data class RecurringJobRow(
     val enabled: Boolean,
     /** Per-job timeout (seconds) copied to each fired job; `null` = worker's defaultJobTimeout. */
     val timeoutSeconds: Int? = null,
+    /** Overlap guard when the previous fired instance is still active. Stored as `overlap_policy`. */
+    val overlap: RecurringOverlap = RecurringOverlap.ALLOW,
 )

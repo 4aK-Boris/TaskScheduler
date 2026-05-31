@@ -4,6 +4,7 @@ import cs.trade.scheduler.core.backend.handler.Job
 import cs.trade.scheduler.core.backend.handler.retry.RetryPolicy
 import cs.trade.scheduler.shared.MisfirePolicy
 import cs.trade.scheduler.shared.OnFailure
+import cs.trade.scheduler.shared.RecurringOverlap
 import kotlin.time.Duration
 
 /**
@@ -59,4 +60,12 @@ public data class RecurringDefinition(
      * lowering the global default that long jobs (e.g. ML training) rely on.
      */
     val timeout: Duration? = null,
+    /**
+     * What to do when the next trigger fires while this definition's previous instance is still
+     * active. [RecurringOverlap.ALLOW] (default) keeps the current behaviour (instances may
+     * overlap); [RecurringOverlap.SKIP] skips the fire; [RecurringOverlap.REPLACE] cancels the
+     * previous instance and fires a new one. Distinct from [misfirePolicy], which handles cron
+     * slots missed during downtime. Stored as `recurring_job.overlap_policy`.
+     */
+    val overlap: RecurringOverlap = RecurringOverlap.ALLOW,
 )

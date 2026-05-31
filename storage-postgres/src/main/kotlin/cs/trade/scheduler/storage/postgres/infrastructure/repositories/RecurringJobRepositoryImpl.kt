@@ -1,6 +1,7 @@
 package cs.trade.scheduler.storage.postgres.infrastructure.repositories
 
 import cs.trade.scheduler.shared.MisfirePolicy
+import cs.trade.scheduler.shared.RecurringOverlap
 import cs.trade.scheduler.storage.postgres.domain.models.RecurringJobRow
 import cs.trade.scheduler.storage.postgres.domain.repositories.RecurringJobRepository
 import cs.trade.scheduler.storage.postgres.infrastructure.tables.RecurringJobTable
@@ -48,6 +49,7 @@ public class RecurringJobRepositoryImpl(
                     it[nextTriggerAt] = row.nextTriggerAt.toOffsetDateTimeUtc()
                     it[enabled] = row.enabled
                     it[timeoutSeconds] = row.timeoutSeconds
+                    it[overlapPolicy] = row.overlap.name
                 }
             } else {
                 RecurringJobTable.update({ RecurringJobTable.id eq row.id }) {
@@ -62,6 +64,7 @@ public class RecurringJobRepositoryImpl(
                     it[payloadJson] = row.payloadJson
                     it[nextTriggerAt] = row.nextTriggerAt.toOffsetDateTimeUtc()
                     it[timeoutSeconds] = row.timeoutSeconds
+                    it[overlapPolicy] = row.overlap.name
                     // Intentionally NOT touching: enabled, lastTriggeredAt — preserve state.
                     // timeoutSeconds IS a definition field → refreshed on re-registration.
                 }
@@ -156,4 +159,5 @@ private fun ResultRow.toRow(): RecurringJobRow = RecurringJobRow(
     nextTriggerAt = this[RecurringJobTable.nextTriggerAt].toKotlinTime(),
     enabled = this[RecurringJobTable.enabled],
     timeoutSeconds = this[RecurringJobTable.timeoutSeconds],
+    overlap = RecurringOverlap.valueOf(this[RecurringJobTable.overlapPolicy]),
 )

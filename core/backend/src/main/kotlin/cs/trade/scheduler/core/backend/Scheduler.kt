@@ -3,6 +3,7 @@ package cs.trade.scheduler.core.backend
 import cs.trade.scheduler.core.backend.handler.Job
 import kotlin.reflect.KFunction
 import cs.trade.scheduler.shared.CancelResult
+import cs.trade.scheduler.shared.ConcurrencyPolicy
 import cs.trade.scheduler.shared.DeleteResult
 import cs.trade.scheduler.shared.RerouteResult
 import cs.trade.scheduler.shared.RetryMode
@@ -34,11 +35,23 @@ public interface Scheduler {
         options: EnqueueOptions = EnqueueOptions(),
     ): Uuid
 
-    /** Producer-side dedup via stable [key] (DESIGN.md 17.4). */
+    /**
+     * Producer-side dedup / collision handling via stable [key] (DESIGN.md 17.4).
+     *
+     * [policy] decides what happens when [key] already has an active (non-terminal) job:
+     *  - [ConcurrencyPolicy.SKIP] (default) — coalesce: return the existing job's id, enqueue nothing.
+     *  - [ConcurrencyPolicy.REPLACE] — cancel the active job and run this one (a running incumbent
+     *    is cancelled cooperatively and this job runs only after it stops).
+     *  - [ConcurrencyPolicy.ENQUEUE_AFTER] — this job waits for the active one to finish, then runs.
+     *
+     * Returns the id of the job that now owns [key] going forward — for SKIP that is the existing
+     * job; for REPLACE/ENQUEUE_AFTER it is the newly created (possibly still-waiting) job.
+     */
     public suspend fun enqueueOnce(
         key: String,
         job: Job,
         options: EnqueueOptions = EnqueueOptions(),
+        policy: ConcurrencyPolicy = ConcurrencyPolicy.SKIP,
     ): Uuid
 
     /**
