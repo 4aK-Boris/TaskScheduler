@@ -19,7 +19,14 @@ public fun Route.configureStatsRouting() {
 
     route("/api/stats") {
         get("/overview") {
-            getOverview().fold(
+            // `range` (short form 1h/24h/7d/…) windows the terminal outcome counts; live states
+            // ignore it. Unrecognised / absent → 24h default, same as /types.
+            val raw = call.request.queryParameters["range"]
+            val rangeHours = raw?.let { rangeToHours(it) } ?: run {
+                if (raw != null) log.warn("Unrecognised /api/stats/overview range='{}'; falling back to 24h", raw)
+                DEFAULT_RANGE_HOURS
+            }
+            getOverview(rangeHours).fold(
                 onSuccess = { c ->
                     call.respond(
                         HttpStatusCode.OK,

@@ -42,5 +42,9 @@ public fun formatClock(instant: Instant): String {
  * Built off the ISO-8601 [kotlinx.datetime.LocalDateTime.toString] so it's robust to the date
  * property renames in kotlinx-datetime 0.8.0; the 'T' separator becomes a space for readability.
  */
-public fun formatDateTime(instant: Instant): String =
-    instant.toLocalDateTime(TimeZone.currentSystemDefault()).toString().replace('T', ' ')
+public fun formatDateTime(instant: Instant): String {
+    // date.toString() is a clean ISO "YYYY-MM-DD"; formatClock gives padded HH:mm:ss — composing
+    // them avoids LocalDateTime.toString()'s trailing fractional seconds (…:05.123456789).
+    val dt = instant.toLocalDateTime(TimeZone.currentSystemDefault())
+    return "${dt.date} ${formatClock(instant)}"
+}

@@ -13,12 +13,14 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
@@ -44,10 +46,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import com.arkivanov.decompose.extensions.compose.subscribeAsState
+import cs.trade.scheduler.core.frontend.theme.schedulerColors
 import cs.trade.scheduler.dashboard.web.presentation.components.PausedBadge
 import cs.trade.scheduler.dashboard.web.presentation.components.QueueHealthBadge
 import cs.trade.scheduler.dashboard.web.presentation.components.StateChip
@@ -548,6 +552,31 @@ private fun HeaderCell(label: String, modifier: Modifier) {
     )
 }
 
+// Thin two-colour progress bar: green succeeded + red failed over a neutral track (the remaining
+// gap = not-yet-processed). Matches the JobDetail counting bar so the list and card read the same.
+@Composable
+private fun CountingMiniBar(succeeded: Long, failed: Long, total: Long, modifier: Modifier = Modifier) {
+    val succeededFrac = (succeeded.toFloat() / total).coerceIn(0f, 1f)
+    val failedFrac = (failed.toFloat() / total).coerceIn(0f, 1f - succeededFrac)
+    val remaining = (1f - succeededFrac - failedFrac).coerceIn(0f, 1f)
+    Box(
+        modifier = modifier
+            .height(4.dp)
+            .clip(RoundedCornerShape(2.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh),
+    ) {
+        Row(Modifier.fillMaxSize()) {
+            if (succeededFrac > 0f) {
+                Box(Modifier.fillMaxHeight().weight(succeededFrac).background(MaterialTheme.schedulerColors.success))
+            }
+            if (failedFrac > 0f) {
+                Box(Modifier.fillMaxHeight().weight(failedFrac).background(MaterialTheme.colorScheme.error))
+            }
+            if (remaining > 0f) Box(Modifier.fillMaxHeight().weight(remaining))
+        }
+    }
+}
+
 @Composable
 private fun JobRow(
     job: JobView,
@@ -580,13 +609,23 @@ private fun JobRow(
             Box(modifier = Modifier.width(168.dp)) {
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     StateChip(job.state)
-                    // Mini progress bar under the state chip — shows only for PROCESSING
-                    // rows that have reported. end padding keeps it clear of the Queue column.
-                    job.progress?.takeIf { job.state == JobState.PROCESSING }?.let { p ->
-                        LinearProgressIndicator(
-                            progress = { p.coerceIn(0f, 1f) },
-                            modifier = Modifier.fillMaxWidth().padding(end = 16.dp).heightIn(min = 3.dp, max = 4.dp),
-                        )
+                    // Mini progress bar under the state chip, for PROCESSING rows. Counting jobs
+                    // (succeeded/failed/total reported) get the green/red split like the detail
+                    // screen; plain updateProgress jobs get a single bar. end padding clears Queue.
+                    if (job.state == JobState.PROCESSING) {
+                        val s = job.progressSucceeded
+                        val f = job.progressFailed
+                        val t = job.progressTotal
+                        if (s != null && f != null && t != null && t > 0L) {
+                            CountingMiniBar(s, f, t, modifier = Modifier.fillMaxWidth().padding(end = 16.dp))
+                        } else {
+                            job.progress?.let { p ->
+                                LinearProgressIndicator(
+                                    progress = { p.coerceIn(0f, 1f) },
+                                    modifier = Modifier.fillMaxWidth().padding(end = 16.dp).heightIn(min = 3.dp, max = 4.dp),
+                                )
+                            }
+                        }
                     }
                 }
             }

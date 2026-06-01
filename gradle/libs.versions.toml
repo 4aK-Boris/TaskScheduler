@@ -11,6 +11,9 @@ kotlinxCoroutines = "1.11.0"
 # Compose Multiplatform (Web/wasmJs) — 1.10.1 runs on Java 21 LTS;
 # 1.11.x requires Java 24 in the Gradle plugin classpath.
 composeMultiplatform = "1.10.1"
+# Material3 ships on its own cadence — Compose MP 1.10.1 bundles material3 1.9.0 (exactly what the
+# deprecated `compose.material3` accessor resolved to). Kept separate so each tracks its real version.
+composeMaterial3 = "1.9.0"
 
 # Decompose (navigation + lifecycle for Compose MP)
 decompose = "3.5.0"
@@ -64,6 +67,14 @@ mockk = "1.14.9"
 kotlinGradlePlugin = { module = "org.jetbrains.kotlin:kotlin-gradle-plugin", version.ref = "kotlin" }
 composeGradlePlugin = { module = "org.jetbrains.compose:compose-gradle-plugin", version.ref = "composeMultiplatform" }
 composeCompilerGradlePlugin = { module = "org.jetbrains.kotlin:compose-compiler-gradle-plugin", version.ref = "kotlin" }
+
+# --- Compose Multiplatform UI (direct coords; the `compose.*` DSL accessors are deprecated in 1.10
+# because the artifact versions diverge — material3 lags the umbrella version) ---
+composeRuntime = { module = "org.jetbrains.compose.runtime:runtime", version.ref = "composeMultiplatform" }
+composeFoundation = { module = "org.jetbrains.compose.foundation:foundation", version.ref = "composeMultiplatform" }
+composeMaterial3 = { module = "org.jetbrains.compose.material3:material3", version.ref = "composeMaterial3" }
+composeUi = { module = "org.jetbrains.compose.ui:ui", version.ref = "composeMultiplatform" }
+composeComponentsResources = { module = "org.jetbrains.compose.components:components-resources", version.ref = "composeMultiplatform" }
 
 # --- Kotlin ecosystem ---
 kotlinReflect = { module = "org.jetbrains.kotlin:kotlin-reflect", version.ref = "kotlin" }

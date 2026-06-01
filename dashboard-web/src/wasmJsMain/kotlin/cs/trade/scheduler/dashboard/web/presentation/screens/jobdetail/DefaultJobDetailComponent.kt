@@ -233,12 +233,12 @@ public class DefaultJobDetailComponent(
         }
     }
 
-    override fun onRerouteNodeChanged(node: String) {
-        _model.update { it.copy(rerouteNode = node) }
+    override fun onRerouteNodeChanged(value: String) {
+        _model.update { it.copy(rerouteNode = value) }
     }
 
-    override fun onRerouteTagChanged(tag: String) {
-        _model.update { it.copy(rerouteTag = tag) }
+    override fun onRerouteTagChanged(value: String) {
+        _model.update { it.copy(rerouteTag = value) }
     }
 
     override fun onRerouteSubmit() {

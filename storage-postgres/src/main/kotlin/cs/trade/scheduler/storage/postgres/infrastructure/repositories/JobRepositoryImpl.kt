@@ -886,6 +886,31 @@ public class JobRepositoryImpl(
         }
     }
 
+    override suspend fun countTerminalByStateSince(windowHours: Int): Map<JobState, Long> {
+        require(windowHours > 0) { "windowHours must be positive, got $windowHours" }
+        return withContext(Dispatchers.IO) {
+            suspendTransaction(db = database) {
+                // Raw SQL for the `now() - interval` window — same approach (and injection-safety
+                // note) as statsByPayloadType: windowHours is a validated, caller-bounded Int.
+                val sql = """
+                    SELECT state, count(*) AS cnt
+                    FROM job
+                    WHERE updated_at > now() - ($windowHours || ' hours')::interval
+                      AND state IN ('SUCCEEDED','FAILED','CANCELLED')
+                    GROUP BY state
+                """.trimIndent()
+                val out = mutableMapOf<JobState, Long>()
+                exec(sql) { rs ->
+                    while (rs.next()) {
+                        val state = runCatching { JobState.valueOf(rs.getString("state")) }.getOrNull()
+                        if (state != null) out[state] = rs.getLong("cnt")
+                    }
+                }
+                out
+            }
+        }
+    }
+
     override suspend fun countActiveByQueue(): Map<String, Long> = withContext(Dispatchers.IO) {
         suspendTransaction(db = database) {
             // GROUP BY queue over non-terminal rows. Exposed 1.x renamed the count()
