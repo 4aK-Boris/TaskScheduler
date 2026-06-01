@@ -41,6 +41,9 @@ public interface JobsRepository {
 
     public suspend fun delete(jobId: String, by: String? = null): DeleteResult
 
+    /** Clone this job into a fresh ENQUEUED one. Returns the new job's id, or null if the source is gone (404). */
+    public suspend fun rerun(jobId: String): String?
+
     public suspend fun reroute(
         jobId: String,
         targetNode: String?,

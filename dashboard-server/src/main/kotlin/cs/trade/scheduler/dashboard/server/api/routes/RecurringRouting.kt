@@ -1,3 +1,5 @@
+@file:OptIn(kotlin.uuid.ExperimentalUuidApi::class)
+
 package cs.trade.scheduler.dashboard.server.api.routes
 
 import cs.trade.scheduler.dashboard.server.api.extractors.RecurringExtractor
@@ -5,8 +7,10 @@ import cs.trade.scheduler.dashboard.server.api.mappers.RecurringApiMapper
 import cs.trade.scheduler.dashboard.server.domain.usecases.DisableRecurringJobUseCase
 import cs.trade.scheduler.dashboard.server.domain.usecases.EnableRecurringJobUseCase
 import cs.trade.scheduler.dashboard.server.domain.usecases.ListRecurringJobsUseCase
+import cs.trade.scheduler.dashboard.server.domain.usecases.TriggerRecurringJobUseCase
 import cs.trade.scheduler.shared.dto.ListRecurringJobsResponse
 import cs.trade.scheduler.shared.dto.ToggleRecurringResponse
+import cs.trade.scheduler.shared.dto.TriggerRecurringResponse
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.response.respond
 import io.ktor.server.routing.Route
@@ -22,6 +26,7 @@ public fun Route.configureRecurringRouting() {
     val list by inject<ListRecurringJobsUseCase>()
     val enable by inject<EnableRecurringJobUseCase>()
     val disable by inject<DisableRecurringJobUseCase>()
+    val trigger by inject<TriggerRecurringJobUseCase>()
 
     route("/api/recurring") {
 
@@ -59,6 +64,21 @@ public fun Route.configureRecurringRouting() {
                     onSuccess = { ok ->
                         if (ok) call.respond(HttpStatusCode.OK, ToggleRecurringResponse(id, enabled = false))
                         else call.respond(HttpStatusCode.NotFound)
+                    },
+                    onFailure = { call.respond(HttpStatusCode.InternalServerError, it.message ?: "error") },
+                )
+            }
+
+            // POST /api/recurring/{id}/trigger — fire the definition once now, off-schedule.
+            post("/trigger") {
+                val id = extractor.extractId(call)
+                trigger(id).fold(
+                    onSuccess = { jobId ->
+                        if (jobId == null) call.respond(HttpStatusCode.NotFound)
+                        else call.respond(
+                            HttpStatusCode.OK,
+                            TriggerRecurringResponse(id = id, jobId = jobId.toString()),
+                        )
                     },
                     onFailure = { call.respond(HttpStatusCode.InternalServerError, it.message ?: "error") },
                 )

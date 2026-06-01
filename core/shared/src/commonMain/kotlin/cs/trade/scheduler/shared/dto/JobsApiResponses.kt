@@ -45,3 +45,10 @@ public data class RerouteJobResponse(
     val jobId: String,
     val result: RerouteResult,
 )
+
+// Re-run: the source job that was cloned + the id of the fresh copy that was enqueued.
+@Serializable
+public data class RerunJobResponse(
+    val sourceJobId: String,
+    val jobId: String,
+)

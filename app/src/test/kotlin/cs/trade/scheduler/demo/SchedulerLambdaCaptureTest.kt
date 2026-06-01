@@ -118,6 +118,8 @@ private class RecordingScheduler : Scheduler {
     override suspend fun retry(jobId: Uuid, by: String?, mode: RetryMode): RetryResult = unused()
     override suspend fun delete(jobId: Uuid, by: String?): DeleteResult = unused()
     override suspend fun reroute(jobId: Uuid, targetNode: String?, targetTag: String?, by: String?): RerouteResult = unused()
+    override suspend fun triggerRecurringNow(id: String): Uuid? = unused()
+    override suspend fun rerun(sourceJobId: Uuid): Uuid? = unused()
     override suspend fun enqueueFunctionRef(method: KFunction<*>, args: List<Any?>, options: EnqueueOptions): Uuid = unused()
 
     private fun unused(): Nothing = throw UnsupportedOperationException("not used by SchedulerLambdaCaptureTest")

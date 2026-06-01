@@ -35,7 +35,9 @@ import cs.trade.scheduler.dashboard.web.domain.usecases.ListTypeStatsUseCase
 import cs.trade.scheduler.dashboard.web.domain.usecases.ListWorkersUseCase
 import cs.trade.scheduler.dashboard.web.domain.usecases.PauseTypeUseCase
 import cs.trade.scheduler.dashboard.web.domain.usecases.RerouteJobUseCase
+import cs.trade.scheduler.dashboard.web.domain.usecases.RerunJobUseCase
 import cs.trade.scheduler.dashboard.web.domain.usecases.RetryJobUseCase
+import cs.trade.scheduler.dashboard.web.domain.usecases.TriggerRecurringJobUseCase
 import cs.trade.scheduler.dashboard.web.domain.usecases.UnpauseTypeUseCase
 import cs.trade.scheduler.dashboard.web.presentation.screens.jobdetail.DefaultJobDetailComponent
 import cs.trade.scheduler.dashboard.web.presentation.screens.joblist.DefaultJobListComponent
@@ -58,12 +60,14 @@ public class DefaultRootComponent(
     private val retryJob: RetryJobUseCase,
     private val deleteJob: DeleteJobUseCase,
     private val rerouteJob: RerouteJobUseCase,
+    private val rerunJob: RerunJobUseCase,
     private val bulkRetry: BulkRetryJobsUseCase,
     private val bulkCancel: BulkCancelJobsUseCase,
     private val bulkDelete: BulkDeleteJobsUseCase,
     private val listRecurring: ListRecurringJobsUseCase,
     private val enableRecurring: EnableRecurringJobUseCase,
     private val disableRecurring: DisableRecurringJobUseCase,
+    private val triggerRecurring: TriggerRecurringJobUseCase,
     private val getStatsOverview: GetStatsOverviewUseCase,
     private val listWorkers: ListWorkersUseCase,
     private val listPausedTypes: ListPausedTypesUseCase,
@@ -162,6 +166,7 @@ public class DefaultRootComponent(
                 retryJob = retryJob,
                 deleteJob = deleteJob,
                 rerouteJob = rerouteJob,
+                rerunJob = rerunJob,
                 listPausedTypes = listPausedTypes,
                 events = eventStream,
                 onBack = { navigation.pop() },
@@ -174,8 +179,10 @@ public class DefaultRootComponent(
                 listUseCase = listRecurring,
                 enableUseCase = enableRecurring,
                 disableUseCase = disableRecurring,
+                triggerUseCase = triggerRecurring,
                 events = eventStream,
                 onBack = ::onNavigateToJobs,
+                onNavigateToJob = { id -> navigation.push(RootComponent.Config.JobDetail(id)) },
             )
         )
         RootComponent.Config.Stats -> RootComponent.Child.Stats(

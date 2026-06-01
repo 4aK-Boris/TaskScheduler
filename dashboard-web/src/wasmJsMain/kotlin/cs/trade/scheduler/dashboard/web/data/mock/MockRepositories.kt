@@ -167,6 +167,10 @@ public class MockJobsRepository : JobsRepository {
     override suspend fun cancel(jobId: String, by: String?): CancelResult = error(READ_ONLY)
     override suspend fun retry(jobId: String, by: String?, mode: RetryMode): RetryResult = error(READ_ONLY)
     override suspend fun delete(jobId: String, by: String?): DeleteResult = error(READ_ONLY)
+
+    // Re-run is a "create", not a mutation of existing rows, so we don't fail it like the others —
+    // returning a sample id lets the Run/Re-run navigation flow be exercised under ?mock.
+    override suspend fun rerun(jobId: String): String = MOCK_JOBS[1].id
     override suspend fun reroute(jobId: String, targetNode: String?, targetTag: String?, by: String?): RerouteResult =
         error(READ_ONLY)
     override suspend fun bulkRetry(ids: List<String>, by: String?): BulkActionResponse = error(READ_ONLY)
@@ -356,6 +360,9 @@ public class MockRecurringRepository : RecurringRepository {
         enabledOverride[id] = false
         return true
     }
+
+    // "Run now" — returns a sample job id so the screen can navigate to a (synthesised) detail.
+    override suspend fun trigger(id: String): String = MOCK_JOBS.first().id
 }
 
 private val MOCK_WORKERS: List<WorkerDto> = run {

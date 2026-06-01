@@ -15,6 +15,7 @@ import cs.trade.scheduler.dashboard.server.domain.usecases.DeleteJobUseCase
 import cs.trade.scheduler.dashboard.server.domain.usecases.GetJobDetailUseCase
 import cs.trade.scheduler.dashboard.server.domain.usecases.GetJobsListUseCase
 import cs.trade.scheduler.dashboard.server.domain.usecases.RerouteJobUseCase
+import cs.trade.scheduler.dashboard.server.domain.usecases.RerunJobUseCase
 import cs.trade.scheduler.dashboard.server.domain.usecases.RetryJobUseCase
 import cs.trade.scheduler.shared.CancelResult
 import cs.trade.scheduler.shared.DeleteResult
@@ -27,6 +28,7 @@ import cs.trade.scheduler.shared.dto.DeleteJobResponse
 import cs.trade.scheduler.shared.dto.GetJobDetailResponse
 import cs.trade.scheduler.shared.dto.ListJobsResponse
 import cs.trade.scheduler.shared.dto.RerouteJobResponse
+import cs.trade.scheduler.shared.dto.RerunJobResponse
 import cs.trade.scheduler.shared.dto.RetryJobResponse
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.request.receive
@@ -63,6 +65,7 @@ public fun Route.configureJobsRouting() {
     val bulkCancel by inject<BulkCancelJobsUseCase>()
     val bulkDelete by inject<BulkDeleteJobsUseCase>()
     val rerouteJob by inject<RerouteJobUseCase>()
+    val rerunJob by inject<RerunJobUseCase>()
 
     route("/api/jobs") {
 
@@ -198,6 +201,25 @@ public fun Route.configureJobsRouting() {
                             RetryResult.NOT_FOUND -> HttpStatusCode.NotFound
                         }
                         call.respond(status, RetryJobResponse(jobId = jobId.toString(), result = result))
+                    },
+                    onFailure = { call.respond(HttpStatusCode.InternalServerError, it.message ?: "error") },
+                )
+            }
+
+            // POST /api/jobs/{id}/rerun — clone this job into a fresh ENQUEUED one.
+            post("/rerun") {
+                val rawId = extractor.extractJobId(call)
+                val jobId = runCatching { Uuid.parse(rawId) }.getOrElse {
+                    call.respond(HttpStatusCode.BadRequest, "Invalid jobId: $rawId")
+                    return@post
+                }
+                rerunJob(jobId).fold(
+                    onSuccess = { newId ->
+                        if (newId == null) call.respond(HttpStatusCode.NotFound)
+                        else call.respond(
+                            HttpStatusCode.OK,
+                            RerunJobResponse(sourceJobId = jobId.toString(), jobId = newId.toString()),
+                        )
                     },
                     onFailure = { call.respond(HttpStatusCode.InternalServerError, it.message ?: "error") },
                 )

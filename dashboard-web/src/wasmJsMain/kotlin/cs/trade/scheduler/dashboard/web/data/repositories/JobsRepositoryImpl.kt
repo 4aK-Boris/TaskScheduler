@@ -16,6 +16,7 @@ import cs.trade.scheduler.shared.dto.GetJobDetailResponse
 import cs.trade.scheduler.shared.dto.JobDetail
 import cs.trade.scheduler.shared.dto.ListJobsResponse
 import cs.trade.scheduler.shared.dto.RerouteJobResponse
+import cs.trade.scheduler.shared.dto.RerunJobResponse
 import cs.trade.scheduler.shared.dto.RetryJobResponse
 import io.ktor.client.call.body
 import io.ktor.client.request.delete
@@ -120,6 +121,14 @@ public class JobsRepositoryImpl : JobsRepository {
             HttpStatusCode.NotFound -> RerouteResult.NOT_FOUND
             HttpStatusCode.Conflict -> resp.body<RerouteJobResponse>().result
             else -> resp.expectSuccess().body<RerouteJobResponse>().result
+        }
+    }
+
+    override suspend fun rerun(jobId: String): String? {
+        val resp = ApiClient.http.post("$JOBS_PATH/$jobId/rerun")
+        return when (resp.status) {
+            HttpStatusCode.NotFound -> null
+            else -> resp.expectSuccess().body<RerunJobResponse>().jobId
         }
     }
 

@@ -125,6 +125,28 @@ public interface Scheduler {
     ): RerouteResult
 
     /**
+     * Fire a registered recurring definition once, immediately, off-schedule. Reuses the
+     * definition's stored payload (already serialised by the app at [recurring] registration,
+     * so it's known-good) and inserts a fresh ENQUEUED job + outbox row — the same shape a
+     * scheduled firing produces. The cron schedule is untouched: `next_trigger_at` /
+     * `last_triggered_at` keep advancing on their own. Works on a disabled (paused) definition
+     * too — a manual trigger is independent of the schedule being on.
+     *
+     * @return the new job's id, or null if no recurring definition with [id] exists.
+     */
+    public suspend fun triggerRecurringNow(id: String): Uuid?
+
+    /**
+     * Enqueue a fresh copy of an existing job: same payload / queue / priority / routing /
+     * timeout, but a brand-new id and a clean attempt budget. Distinct from [retry], which
+     * revives the SAME FAILED row in place — `rerun` clones any job (terminal or not) into a
+     * new one, leaving the original as-is.
+     *
+     * @return the new job's id, or null if no job with [sourceJobId] exists.
+     */
+    public suspend fun rerun(sourceJobId: Uuid): Uuid?
+
+    /**
      * Function-ref enqueue primitive (DESIGN.md 21.2). The user-facing typed overloads
      * `enqueue(Receiver::method, a1, …, aN)` live as extension functions in
      * [cs.trade.scheduler.core.backend.functionref.FunctionRefEnqueueExtensions] and all

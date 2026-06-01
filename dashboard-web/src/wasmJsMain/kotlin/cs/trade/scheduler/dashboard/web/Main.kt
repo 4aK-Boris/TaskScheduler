@@ -45,7 +45,9 @@ import cs.trade.scheduler.dashboard.web.domain.usecases.ListTypeStatsUseCase
 import cs.trade.scheduler.dashboard.web.domain.usecases.ListWorkersUseCase
 import cs.trade.scheduler.dashboard.web.domain.usecases.PauseTypeUseCase
 import cs.trade.scheduler.dashboard.web.domain.usecases.RerouteJobUseCase
+import cs.trade.scheduler.dashboard.web.domain.usecases.RerunJobUseCase
 import cs.trade.scheduler.dashboard.web.domain.usecases.RetryJobUseCase
+import cs.trade.scheduler.dashboard.web.domain.usecases.TriggerRecurringJobUseCase
 import cs.trade.scheduler.dashboard.web.domain.usecases.UnpauseTypeUseCase
 import cs.trade.scheduler.dashboard.web.presentation.root.DefaultRootComponent
 import cs.trade.scheduler.dashboard.web.presentation.root.RootContent
@@ -89,12 +91,14 @@ fun main() {
         retryJob = RetryJobUseCase(jobsRepository),
         deleteJob = DeleteJobUseCase(jobsRepository),
         rerouteJob = RerouteJobUseCase(jobsRepository),
+        rerunJob = RerunJobUseCase(jobsRepository),
         bulkRetry = BulkRetryJobsUseCase(jobsRepository),
         bulkCancel = BulkCancelJobsUseCase(jobsRepository),
         bulkDelete = BulkDeleteJobsUseCase(jobsRepository),
         listRecurring = ListRecurringJobsUseCase(recurringRepository),
         enableRecurring = EnableRecurringJobUseCase(recurringRepository),
         disableRecurring = DisableRecurringJobUseCase(recurringRepository),
+        triggerRecurring = TriggerRecurringJobUseCase(recurringRepository),
         getStatsOverview = GetStatsOverviewUseCase(statsRepository),
         listWorkers = ListWorkersUseCase(workersRepository),
         listPausedTypes = ListPausedTypesUseCase(typesRepository),

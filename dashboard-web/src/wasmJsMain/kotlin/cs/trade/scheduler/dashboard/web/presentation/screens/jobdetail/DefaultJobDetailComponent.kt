@@ -12,6 +12,7 @@ import cs.trade.scheduler.dashboard.web.domain.usecases.DeleteJobUseCase
 import cs.trade.scheduler.dashboard.web.domain.usecases.GetJobDetailUseCase
 import cs.trade.scheduler.dashboard.web.domain.usecases.ListPausedTypesUseCase
 import cs.trade.scheduler.dashboard.web.domain.usecases.RerouteJobUseCase
+import cs.trade.scheduler.dashboard.web.domain.usecases.RerunJobUseCase
 import cs.trade.scheduler.dashboard.web.domain.usecases.RetryJobUseCase
 import cs.trade.scheduler.shared.DeleteResult
 import cs.trade.scheduler.shared.RerouteResult
@@ -31,6 +32,7 @@ public class DefaultJobDetailComponent(
     private val retryJob: RetryJobUseCase,
     private val deleteJob: DeleteJobUseCase,
     private val rerouteJob: RerouteJobUseCase,
+    private val rerunJob: RerunJobUseCase,
     private val listPausedTypes: ListPausedTypesUseCase,
     private val events: EventStream,
     /** Output: parent should pop the stack. */
@@ -188,6 +190,26 @@ public class DefaultJobDetailComponent(
                 },
                 onFailure = { t ->
                     _model.update { it.copy(retrying = false, error = t.message ?: "Retry failed") }
+                },
+            )
+        }
+    }
+
+    override fun onRerunClicked() {
+        val s = _model.value
+        // Share the same single-action gate as cancel/retry/delete — they all touch this job.
+        if (s.rerunning || s.cancelling || s.retrying || s.deleting) return
+        _model.update { it.copy(rerunning = true, error = null) }
+        scope.launch {
+            rerunJob(s.jobId).fold(
+                onSuccess = { newId ->
+                    _model.update { it.copy(rerunning = false) }
+                    // Jump to the fresh copy — the original stays untouched. null = source gone (404).
+                    if (newId != null) onNavigateToJob(newId)
+                    else _model.update { it.copy(error = "Job not found — cannot re-run") }
+                },
+                onFailure = { t ->
+                    _model.update { it.copy(rerunning = false, error = t.message ?: "Re-run failed") }
                 },
             )
         }
