@@ -14,6 +14,7 @@ public fun Route.configureDashboardRouting() {
     configureJobsRouting()
     configureEventsRouting()
     configureRecurringRouting()
+    configureUpcomingRouting()
     configureStatsRouting()
     configureQueuesRouting()
     configureWorkersRouting()

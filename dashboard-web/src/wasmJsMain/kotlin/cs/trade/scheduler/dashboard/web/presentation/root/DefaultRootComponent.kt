@@ -29,6 +29,7 @@ import cs.trade.scheduler.dashboard.web.domain.usecases.EnableRecurringJobUseCas
 import cs.trade.scheduler.dashboard.web.domain.usecases.GetJobDetailUseCase
 import cs.trade.scheduler.dashboard.web.domain.usecases.GetJobsListUseCase
 import cs.trade.scheduler.dashboard.web.domain.usecases.GetStatsOverviewUseCase
+import cs.trade.scheduler.dashboard.web.domain.usecases.GetUpcomingUseCase
 import cs.trade.scheduler.dashboard.web.domain.usecases.ListKnownTypesUseCase
 import cs.trade.scheduler.dashboard.web.domain.usecases.ListPausedTypesUseCase
 import cs.trade.scheduler.dashboard.web.domain.usecases.ListQueuesHealthUseCase
@@ -73,6 +74,7 @@ public class DefaultRootComponent(
     private val disableRecurring: DisableRecurringJobUseCase,
     private val triggerRecurring: TriggerRecurringJobUseCase,
     private val getStatsOverview: GetStatsOverviewUseCase,
+    private val getUpcoming: GetUpcomingUseCase,
     private val listWorkers: ListWorkersUseCase,
     private val listPausedTypes: ListPausedTypesUseCase,
     private val listKnownTypes: ListKnownTypesUseCase,
@@ -256,10 +258,11 @@ public class DefaultRootComponent(
         RootComponent.Config.Upcoming -> RootComponent.Child.Upcoming(
             DefaultUpcomingComponent(
                 componentContext = ctx,
-                getJobsList = getJobsList,
+                getUpcoming = getUpcoming,
                 events = eventStream,
                 onBack = ::onNavigateToJobs,
                 onJobSelected = { id -> navigation.push(RootComponent.Config.JobDetail(id)) },
+                onRecurring = ::onNavigateToRecurring,
             )
         )
         RootComponent.Config.Stats -> RootComponent.Child.Stats(
