@@ -49,6 +49,8 @@ import cs.trade.scheduler.dashboard.web.presentation.components.PageHeader
 import cs.trade.scheduler.dashboard.web.presentation.components.PausedBadge
 import cs.trade.scheduler.dashboard.web.presentation.components.SettingsMenu
 import cs.trade.scheduler.dashboard.web.presentation.components.SkeletonBar
+import cs.trade.scheduler.dashboard.web.presentation.components.SortDirection
+import cs.trade.scheduler.dashboard.web.presentation.components.SortableHeaderCell
 import cs.trade.scheduler.dashboard.web.presentation.components.formatDateTime
 import cs.trade.scheduler.dashboard.web.presentation.components.timeAgo
 import cs.trade.scheduler.shared.dto.TypePauseDto
@@ -61,6 +63,18 @@ private const val MAX_SUGGESTIONS = 30
 @Composable
 public fun TypesContent(component: TypesComponent) {
     val state by component.model.subscribeAsState()
+    // Client-side sort over the full list. Default: most recently paused first. Three clicks on
+    // a column cycle sort → flip → back to the default.
+    var sortKey by remember { mutableStateOf(TP_DEFAULT_SORT) }
+    var sortAsc by remember { mutableStateOf(tpDefaultAsc(TP_DEFAULT_SORT)) }
+    val onSort: (TpSort) -> Unit = { key ->
+        when {
+            key != sortKey -> { sortKey = key; sortAsc = tpDefaultAsc(key) }
+            sortAsc == tpDefaultAsc(key) -> sortAsc = !sortAsc
+            else -> { sortKey = TP_DEFAULT_SORT; sortAsc = tpDefaultAsc(TP_DEFAULT_SORT) }
+        }
+    }
+    val sortedItems = remember(state.items, sortKey, sortAsc) { sortPausedTypes(state.items, sortKey, sortAsc) }
     Column(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         PageHeader(title = "Paused Types", count = state.items.size.toLong()) {
             SettingsMenu(
@@ -93,7 +107,7 @@ public fun TypesContent(component: TypesComponent) {
                     val scroll = rememberScrollState()
                     Box(modifier = Modifier.fillMaxSize().horizontalScroll(scroll)) {
                         Column(modifier = Modifier.width(tableWidth).fillMaxHeight()) {
-                            TypesHeader()
+                            TypesHeader(sortKey, sortAsc, onSort)
                             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                             Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
                                 when {
@@ -106,7 +120,7 @@ public fun TypesContent(component: TypesComponent) {
                                         modifier = Modifier.align(Alignment.Center).padding(24.dp),
                                     )
                                     else -> LazyColumn(modifier = Modifier.fillMaxSize()) {
-                                        items(state.items, key = { it.payloadType }) { row ->
+                                        items(sortedItems, key = { it.payloadType }) { row ->
                                             PausedRow(
                                                 row = row,
                                                 busy = state.unpausingType == row.payloadType,
@@ -241,7 +255,8 @@ private fun PauseForm(
 }
 
 @Composable
-private fun TypesHeader() {
+private fun TypesHeader(sortKey: TpSort, sortAsc: Boolean, onSort: (TpSort) -> Unit) {
+    val dir = if (sortAsc) SortDirection.ASC else SortDirection.DESC
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -249,12 +264,49 @@ private fun TypesHeader() {
             .padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        HeaderCell("Payload Type", Modifier.weight(1f))
-        HeaderCell("Since", Modifier.width(160.dp))
-        HeaderCell("Paused By", Modifier.width(190.dp))
-        HeaderCell("Reason", Modifier.width(300.dp))
+        TpHead("Payload Type", Modifier.weight(1f), TpSort.TYPE, sortKey, dir, onSort)
+        TpHead("Since", Modifier.width(160.dp), TpSort.SINCE, sortKey, dir, onSort)
+        TpHead("Paused By", Modifier.width(190.dp), TpSort.BY, sortKey, dir, onSort)
+        TpHead("Reason", Modifier.width(300.dp), TpSort.REASON, sortKey, dir, onSort)
+        // Last column is the Unpause action — not sortable.
         HeaderCell("", Modifier.width(130.dp))
     }
+}
+
+@Composable
+private fun TpHead(
+    label: String,
+    modifier: Modifier,
+    field: TpSort,
+    sortKey: TpSort,
+    direction: SortDirection,
+    onSort: (TpSort) -> Unit,
+) {
+    SortableHeaderCell(
+        label = label,
+        modifier = modifier,
+        active = sortKey == field,
+        direction = direction,
+        onClick = { onSort(field) },
+    )
+}
+
+private enum class TpSort { TYPE, SINCE, BY, REASON }
+
+private val TP_DEFAULT_SORT = TpSort.SINCE
+
+// Text columns ascending by default; Since (most recently paused) descending.
+private fun tpDefaultAsc(key: TpSort): Boolean = key != TpSort.SINCE
+
+private fun sortPausedTypes(items: List<TypePauseDto>, key: TpSort, asc: Boolean): List<TypePauseDto> {
+    val cmp: Comparator<TypePauseDto> = when (key) {
+        TpSort.TYPE -> compareBy { it.payloadType }
+        TpSort.SINCE -> compareBy { it.pausedSince }
+        TpSort.BY -> compareBy { it.pausedBy }
+        TpSort.REASON -> compareBy { it.reason }
+    }
+    val sorted = items.sortedWith(cmp)
+    return if (asc) sorted else sorted.reversed()
 }
 
 @Composable

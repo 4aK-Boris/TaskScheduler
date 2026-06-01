@@ -27,7 +27,9 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -40,6 +42,8 @@ import cs.trade.scheduler.dashboard.web.presentation.components.DashboardPanel
 import cs.trade.scheduler.dashboard.web.presentation.components.PageHeader
 import cs.trade.scheduler.dashboard.web.presentation.components.SettingsMenu
 import cs.trade.scheduler.dashboard.web.presentation.components.SkeletonBar
+import cs.trade.scheduler.dashboard.web.presentation.components.SortDirection
+import cs.trade.scheduler.dashboard.web.presentation.components.SortableHeaderCell
 import cs.trade.scheduler.dashboard.web.presentation.components.CopyableText
 import cs.trade.scheduler.dashboard.web.presentation.components.formatDateTime
 import cs.trade.scheduler.dashboard.web.presentation.components.timeAgo
@@ -56,6 +60,18 @@ private val TABLE_MIN_WIDTH = 1320.dp
 @Composable
 public fun RecurringListContent(component: RecurringListComponent) {
     val state by component.model.subscribeAsState()
+    // Client-side sort over the full list. Default: soonest next-run first. Three clicks on a
+    // column cycle sort → flip → back to the default.
+    var sortKey by remember { mutableStateOf(RC_DEFAULT_SORT) }
+    var sortAsc by remember { mutableStateOf(rcDefaultAsc(RC_DEFAULT_SORT)) }
+    val onSort: (RcSort) -> Unit = { key ->
+        when {
+            key != sortKey -> { sortKey = key; sortAsc = rcDefaultAsc(key) }
+            sortAsc == rcDefaultAsc(key) -> sortAsc = !sortAsc
+            else -> { sortKey = RC_DEFAULT_SORT; sortAsc = rcDefaultAsc(RC_DEFAULT_SORT) }
+        }
+    }
+    val sortedItems = remember(state.items, sortKey, sortAsc) { sortRecurring(state.items, sortKey, sortAsc) }
     Column(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         PageHeader(title = "Recurring", count = state.items.size.toLong()) {
             SettingsMenu(
@@ -76,7 +92,7 @@ public fun RecurringListContent(component: RecurringListComponent) {
                 val scroll = rememberScrollState()
                 Box(modifier = Modifier.fillMaxSize().horizontalScroll(scroll)) {
                     Column(modifier = Modifier.width(tableWidth).fillMaxHeight()) {
-                        RecurringHeader()
+                        RecurringHeader(sortKey, sortAsc, onSort)
                         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                         Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
                             when {
@@ -95,7 +111,7 @@ public fun RecurringListContent(component: RecurringListComponent) {
                                     modifier = Modifier.align(Alignment.Center).padding(24.dp),
                                 )
                                 else -> LazyColumn(modifier = Modifier.fillMaxSize()) {
-                                    items(state.items, key = { it.id }) { row ->
+                                    items(sortedItems, key = { it.id }) { row ->
                                         RecurringRow(
                                             job = row,
                                             busy = state.togglingId == row.id,
@@ -118,7 +134,8 @@ public fun RecurringListContent(component: RecurringListComponent) {
 }
 
 @Composable
-private fun RecurringHeader() {
+private fun RecurringHeader(sortKey: RcSort, sortAsc: Boolean, onSort: (RcSort) -> Unit) {
+    val dir = if (sortAsc) SortDirection.ASC else SortDirection.DESC
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -126,15 +143,33 @@ private fun RecurringHeader() {
             .padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        HeaderCell("ID", Modifier.weight(2f))
-        HeaderCell("Cron", Modifier.width(150.dp))
-        HeaderCell("Queue", Modifier.width(110.dp))
-        HeaderCell("Payload", Modifier.weight(1f))
-        HeaderCell("Next", Modifier.width(160.dp))
-        HeaderCell("Last", Modifier.width(160.dp))
-        HeaderCell("Status", Modifier.width(120.dp))
+        RcHead("ID", Modifier.weight(2f), RcSort.ID, sortKey, dir, onSort)
+        RcHead("Cron", Modifier.width(150.dp), RcSort.CRON, sortKey, dir, onSort)
+        RcHead("Queue", Modifier.width(110.dp), RcSort.QUEUE, sortKey, dir, onSort)
+        RcHead("Payload", Modifier.weight(1f), RcSort.PAYLOAD, sortKey, dir, onSort)
+        RcHead("Next", Modifier.width(160.dp), RcSort.NEXT, sortKey, dir, onSort)
+        RcHead("Last", Modifier.width(160.dp), RcSort.LAST, sortKey, dir, onSort)
+        RcHead("Status", Modifier.width(120.dp), RcSort.STATUS, sortKey, dir, onSort)
         HeaderCell("Run", Modifier.width(96.dp))
     }
+}
+
+@Composable
+private fun RcHead(
+    label: String,
+    modifier: Modifier,
+    field: RcSort,
+    sortKey: RcSort,
+    direction: SortDirection,
+    onSort: (RcSort) -> Unit,
+) {
+    SortableHeaderCell(
+        label = label,
+        modifier = modifier,
+        active = sortKey == field,
+        direction = direction,
+        onClick = { onSort(field) },
+    )
 }
 
 @Composable
@@ -252,4 +287,25 @@ private fun formatDuration(d: Duration): String = when {
     d.inWholeHours < 1 -> "${d.inWholeMinutes}m"
     d.inWholeDays < 1 -> "${d.inWholeHours}h"
     else -> "${d.inWholeDays}d"
+}
+
+private enum class RcSort { ID, CRON, QUEUE, PAYLOAD, NEXT, LAST, STATUS }
+
+private val RC_DEFAULT_SORT = RcSort.NEXT
+
+// Text + Next sort ascending by default; Last (most-recent) and Status (enabled-first) descending.
+private fun rcDefaultAsc(key: RcSort): Boolean = key != RcSort.LAST && key != RcSort.STATUS
+
+private fun sortRecurring(items: List<RecurringJobDto>, key: RcSort, asc: Boolean): List<RecurringJobDto> {
+    val cmp: Comparator<RecurringJobDto> = when (key) {
+        RcSort.ID -> compareBy { it.id }
+        RcSort.CRON -> compareBy { it.cron }
+        RcSort.QUEUE -> compareBy { it.queue }
+        RcSort.PAYLOAD -> compareBy { it.payloadType }
+        RcSort.NEXT -> compareBy { it.nextTriggerAt }
+        RcSort.LAST -> compareBy { it.lastTriggeredAt }
+        RcSort.STATUS -> compareBy { it.enabled }
+    }
+    val sorted = items.sortedWith(cmp)
+    return if (asc) sorted else sorted.reversed()
 }

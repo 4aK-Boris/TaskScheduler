@@ -16,6 +16,7 @@ import cs.trade.scheduler.shared.dto.WorkerDto
 import cs.trade.scheduler.shared.CancelResult
 import cs.trade.scheduler.shared.DeleteResult
 import cs.trade.scheduler.shared.JobPriority
+import cs.trade.scheduler.shared.JobSortField
 import cs.trade.scheduler.shared.JobState
 import cs.trade.scheduler.shared.RerouteResult
 import cs.trade.scheduler.shared.RetryMode
@@ -125,6 +126,8 @@ public class MockJobsRepository : JobsRepository {
         size: Int,
         attemptsExhausted: Boolean?,
         scheduledWithinMinutes: Int?,
+        sortBy: JobSortField?,
+        sortAscending: Boolean,
     ): ListJobsResponse {
         var rows = MOCK_JOBS
         if (states.isNotEmpty()) rows = rows.filter { it.state in states }
@@ -136,6 +139,18 @@ public class MockJobsRepository : JobsRepository {
             val upper = now + scheduledWithinMinutes.minutes
             rows = rows.filter { r -> r.scheduledAt?.let { it >= now && it <= upper } == true }
                 .sortedBy { it.scheduledAt }
+        } else if (sortBy != null) {
+            val cmp: Comparator<JobView> = when (sortBy) {
+                JobSortField.CREATED -> compareBy { it.createdAt }
+                JobSortField.UPDATED -> compareBy { it.updatedAt }
+                JobSortField.STARTED -> compareBy { it.startedAt }
+                JobSortField.ATTEMPTS -> compareBy { it.attempts }
+                JobSortField.PRIORITY -> compareBy { it.priority.value }
+                JobSortField.QUEUE -> compareBy { it.queue }
+                JobSortField.TYPE -> compareBy { it.payloadType }
+                JobSortField.STATE -> compareBy { it.state.name }
+            }
+            rows = if (sortAscending) rows.sortedWith(cmp) else rows.sortedWith(cmp.reversed())
         }
         val total = rows.size.toLong()
         val from = (page * size).coerceIn(0, rows.size)

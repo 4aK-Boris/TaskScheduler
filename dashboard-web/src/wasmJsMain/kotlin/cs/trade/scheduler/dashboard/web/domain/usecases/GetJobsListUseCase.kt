@@ -1,6 +1,7 @@
 package cs.trade.scheduler.dashboard.web.domain.usecases
 
 import cs.trade.scheduler.dashboard.web.domain.repositories.JobsRepository
+import cs.trade.scheduler.shared.JobSortField
 import cs.trade.scheduler.shared.JobState
 import cs.trade.scheduler.shared.dto.ListJobsResponse
 
@@ -22,6 +23,8 @@ public class GetJobsListUseCase(
         size: Int = 50,
         attemptsExhausted: Boolean? = null,
         scheduledWithinMinutes: Int? = null,
+        sortBy: JobSortField? = null,
+        sortAscending: Boolean = false,
     ): Result<ListJobsResponse> = runCatching {
         repository.list(
             states = states,
@@ -31,6 +34,8 @@ public class GetJobsListUseCase(
             size = size,
             attemptsExhausted = attemptsExhausted,
             scheduledWithinMinutes = scheduledWithinMinutes,
+            sortBy = sortBy,
+            sortAscending = sortAscending,
         )
     }
 }

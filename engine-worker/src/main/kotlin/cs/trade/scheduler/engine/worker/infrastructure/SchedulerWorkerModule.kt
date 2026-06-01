@@ -18,6 +18,18 @@ import org.koin.dsl.module
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 
+// Stable-across-restart default node id: the container/host name (HOSTNAME on Linux & most
+// container runtimes, COMPUTERNAME on Windows, else the resolved local host name). Unlike the old
+// timestamp default, a rebuild/restart reuses the SAME `worker` registry row (upsert → alive again)
+// instead of leaving a dead row behind to pile up on the dashboard. Multi-worker-per-host
+// deployments should set `nodeId` explicitly so each process still gets its own row.
+private fun defaultNodeId(): String =
+    sequenceOf(
+        System.getenv("HOSTNAME"),
+        System.getenv("COMPUTERNAME"),
+        runCatching { java.net.InetAddress.getLocalHost().hostName }.getOrNull(),
+    ).firstOrNull { !it.isNullOrBlank() } ?: "worker"
+
 /**
  * Builder DSL for the worker pool config. See DESIGN.md section 13.1.
  *
@@ -49,7 +61,8 @@ import kotlin.time.Duration.Companion.seconds
  * ```
  */
 public class SchedulerWorkerConfig {
-    public var nodeId: String = "worker-${System.currentTimeMillis()}"
+    // Defaults to the host name (stable across restarts). Override for multiple workers per host.
+    public var nodeId: String = defaultNodeId()
     public var nodeTags: List<String> = emptyList()
 
     public var defaultConcurrency: Int = 10

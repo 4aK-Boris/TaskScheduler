@@ -4,6 +4,7 @@ import cs.trade.scheduler.core.frontend.api.ApiClient
 import cs.trade.scheduler.dashboard.web.domain.repositories.JobsRepository
 import cs.trade.scheduler.shared.CancelResult
 import cs.trade.scheduler.shared.DeleteResult
+import cs.trade.scheduler.shared.JobSortField
 import cs.trade.scheduler.shared.JobState
 import cs.trade.scheduler.shared.RerouteResult
 import cs.trade.scheduler.shared.RetryMode
@@ -46,6 +47,8 @@ public class JobsRepositoryImpl : JobsRepository {
         size: Int,
         attemptsExhausted: Boolean?,
         scheduledWithinMinutes: Int?,
+        sortBy: JobSortField?,
+        sortAscending: Boolean,
     ): ListJobsResponse {
         val resp = ApiClient.http.get(JOBS_PATH) {
             states.forEach { parameter("state", it.name) }
@@ -55,6 +58,10 @@ public class JobsRepositoryImpl : JobsRepository {
             parameter("size", size)
             attemptsExhausted?.let { parameter("attemptsExhausted", it.toString()) }
             scheduledWithinMinutes?.let { parameter("scheduledWithinMinutes", it.toString()) }
+            sortBy?.let {
+                parameter("sort", it.name)
+                parameter("dir", if (sortAscending) "asc" else "desc")
+            }
         }
         return resp.expectSuccess().body()
     }

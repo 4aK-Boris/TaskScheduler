@@ -35,4 +35,10 @@ public data class JobListFilter(
      * soonest-first. `null` = no scheduling filter (the default `updated_at DESC` order applies).
      */
     val scheduledWithinMinutes: Int? = null,
+    /**
+     * Operator-chosen sort column. `null` keeps the default `updated_at DESC`. Ignored while
+     * [scheduledWithinMinutes] is set (that view is always soonest-first by `scheduled_at`).
+     */
+    val sortBy: cs.trade.scheduler.shared.JobSortField? = null,
+    val sortAscending: Boolean = false,
 )

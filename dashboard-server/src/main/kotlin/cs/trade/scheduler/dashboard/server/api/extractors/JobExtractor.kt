@@ -46,6 +46,10 @@ public class JobExtractor {
             // "Upcoming" window (minutes ahead). Garbage falls through to null (filter off);
             // the validator bounds the accepted range.
             scheduledWithinMinutes = params["scheduledWithinMinutes"]?.toIntOrNull(),
+            // `?sort=STARTED&dir=asc`. Bad `sort` is rejected by the validator's enum check; `dir`
+            // defaults to descending (only `dir=asc` flips it).
+            sortBy = params["sort"]?.takeIf { it.isNotBlank() },
+            sortAscending = params["dir"].equals("asc", ignoreCase = true),
         )
     }
 

@@ -4,6 +4,7 @@ import cs.trade.scheduler.core.backend.ktor.validation.BaseValidation
 import cs.trade.scheduler.dashboard.server.api.dto.CancelJobQuery
 import cs.trade.scheduler.dashboard.server.api.dto.ListJobsQuery
 import cs.trade.scheduler.dashboard.server.api.extractors.JobExtractor
+import cs.trade.scheduler.shared.JobSortField
 import cs.trade.scheduler.shared.JobState
 import io.konform.validation.Validation
 import io.konform.validation.constraints.enum
@@ -59,6 +60,9 @@ public class JobValidation : BaseValidation {
         ListJobsQuery::scheduledWithinMinutes ifPresent {
             minimum(1)
             maximum(MAX_SCHEDULED_WITHIN_MINUTES)
+        }
+        ListJobsQuery::sortBy ifPresent {
+            enum<JobSortField>()
         }
     }
 

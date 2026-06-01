@@ -3,6 +3,7 @@
 package cs.trade.scheduler.dashboard.server.api.mappers
 
 import cs.trade.scheduler.dashboard.server.api.dto.ListJobsQuery
+import cs.trade.scheduler.shared.JobSortField
 import cs.trade.scheduler.shared.JobState
 import cs.trade.scheduler.shared.dto.JobDetail
 import cs.trade.scheduler.shared.dto.JobEventDto
@@ -31,6 +32,9 @@ public class JobApiMapper {
         payloadType = query.payloadType,
         attemptsExhausted = query.attemptsExhausted,
         scheduledWithinMinutes = query.scheduledWithinMinutes,
+        // Validated to a valid enum name upstream; guard anyway so a stray value just disables sort.
+        sortBy = query.sortBy?.let { runCatching { JobSortField.valueOf(it) }.getOrNull() },
+        sortAscending = query.sortAscending,
     )
 
     public fun toView(job: Job): JobView = JobView(

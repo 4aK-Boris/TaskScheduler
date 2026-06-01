@@ -1,6 +1,7 @@
 package cs.trade.scheduler.dashboard.web.presentation.screens.joblist
 
 import com.arkivanov.decompose.value.Value
+import cs.trade.scheduler.shared.JobSortField
 import cs.trade.scheduler.shared.JobState
 import cs.trade.scheduler.shared.dto.BulkActionResponse
 import cs.trade.scheduler.shared.dto.JobView
@@ -28,6 +29,9 @@ public interface JobListComponent {
     public fun onQueueFilterChanged(queue: String)
     public fun onPayloadTypeFilterChanged(payloadType: String)
 
+    /** Sort by [field] — same column flips direction, a new column starts at its natural default. */
+    public fun onSortChanged(field: JobSortField)
+
     /** Auto-refresh cadence — `null` = off (manual Refresh only), else poll every N seconds. */
     public fun onAutoRefreshChanged(seconds: Int?)
 
@@ -53,6 +57,9 @@ public interface JobListComponent {
         val stateFilter: Set<JobState> = emptySet(),
         val queueFilter: String = "",
         val payloadTypeFilter: String = "",
+        // Sort column + direction. null = server default (updated_at DESC).
+        val sortBy: JobSortField? = null,
+        val sortAscending: Boolean = false,
         val page: Int = 0,
         val pageSize: Int = 100,
         val loading: Boolean = false,

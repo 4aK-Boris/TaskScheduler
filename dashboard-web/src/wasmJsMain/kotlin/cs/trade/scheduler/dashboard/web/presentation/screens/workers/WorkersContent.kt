@@ -27,7 +27,9 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -42,6 +44,8 @@ import cs.trade.scheduler.dashboard.web.presentation.components.DashboardPanel
 import cs.trade.scheduler.dashboard.web.presentation.components.PageHeader
 import cs.trade.scheduler.dashboard.web.presentation.components.SettingsMenu
 import cs.trade.scheduler.dashboard.web.presentation.components.SkeletonBar
+import cs.trade.scheduler.dashboard.web.presentation.components.SortDirection
+import cs.trade.scheduler.dashboard.web.presentation.components.SortableHeaderCell
 import cs.trade.scheduler.dashboard.web.presentation.components.formatDateTime
 import cs.trade.scheduler.dashboard.web.presentation.components.timeAgo
 import cs.trade.scheduler.shared.dto.WorkerDto
@@ -52,6 +56,18 @@ private val TABLE_MIN_WIDTH = 1200.dp
 @Composable
 public fun WorkersContent(component: WorkersComponent) {
     val state by component.model.subscribeAsState()
+    // Client-side sort over the full roster. Default: node id A→Z. Three clicks on a column
+    // cycle sort → flip → back to the default.
+    var sortKey by remember { mutableStateOf(WK_DEFAULT_SORT) }
+    var sortAsc by remember { mutableStateOf(wkDefaultAsc(WK_DEFAULT_SORT)) }
+    val onSort: (WkSort) -> Unit = { key ->
+        when {
+            key != sortKey -> { sortKey = key; sortAsc = wkDefaultAsc(key) }
+            sortAsc == wkDefaultAsc(key) -> sortAsc = !sortAsc
+            else -> { sortKey = WK_DEFAULT_SORT; sortAsc = wkDefaultAsc(WK_DEFAULT_SORT) }
+        }
+    }
+    val sortedItems = remember(state.items, sortKey, sortAsc) { sortWorkers(state.items, sortKey, sortAsc) }
     Column(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         PageHeader(title = "Workers", count = state.items.size.toLong()) {
             SettingsMenu(
@@ -71,7 +87,7 @@ public fun WorkersContent(component: WorkersComponent) {
                 val scroll = rememberScrollState()
                 Box(modifier = Modifier.fillMaxSize().horizontalScroll(scroll)) {
                     Column(modifier = Modifier.width(tableWidth).fillMaxHeight()) {
-                        WorkersHeader()
+                        WorkersHeader(sortKey, sortAsc, onSort)
                         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                         Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
                             when {
@@ -90,7 +106,7 @@ public fun WorkersContent(component: WorkersComponent) {
                                     modifier = Modifier.align(Alignment.Center).padding(24.dp),
                                 )
                                 else -> LazyColumn(modifier = Modifier.fillMaxSize()) {
-                                    items(state.items, key = { it.nodeId }) { row ->
+                                    items(sortedItems, key = { it.nodeId }) { row ->
                                         WorkerRow(worker = row, timeAbsolute = state.timeAbsolute)
                                         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                                     }
@@ -105,7 +121,8 @@ public fun WorkersContent(component: WorkersComponent) {
 }
 
 @Composable
-private fun WorkersHeader() {
+private fun WorkersHeader(sortKey: WkSort, sortAsc: Boolean, onSort: (WkSort) -> Unit) {
+    val dir = if (sortAsc) SortDirection.ASC else SortDirection.DESC
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -113,14 +130,56 @@ private fun WorkersHeader() {
             .padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        HeaderCell("Status", Modifier.width(100.dp))
-        HeaderCell("Node ID", Modifier.width(220.dp))
-        HeaderCell("Host", Modifier.width(180.dp))
+        WkHead("Status", Modifier.width(100.dp), WkSort.STATUS, sortKey, dir, onSort)
+        WkHead("Node ID", Modifier.width(220.dp), WkSort.NODE, sortKey, dir, onSort)
+        WkHead("Host", Modifier.width(180.dp), WkSort.HOST, sortKey, dir, onSort)
+        // Tags is a list — not a useful single sort key.
         HeaderCell("Tags", Modifier.weight(1f))
-        HeaderCell("In flight", Modifier.width(160.dp))
-        HeaderCell("Last HB", Modifier.width(160.dp))
-        HeaderCell("Uptime", Modifier.width(160.dp))
+        WkHead("In flight", Modifier.width(160.dp), WkSort.INFLIGHT, sortKey, dir, onSort)
+        WkHead("Last HB", Modifier.width(160.dp), WkSort.LASTHB, sortKey, dir, onSort)
+        WkHead("Uptime", Modifier.width(160.dp), WkSort.UPTIME, sortKey, dir, onSort)
     }
+}
+
+@Composable
+private fun WkHead(
+    label: String,
+    modifier: Modifier,
+    field: WkSort,
+    sortKey: WkSort,
+    direction: SortDirection,
+    onSort: (WkSort) -> Unit,
+) {
+    SortableHeaderCell(
+        label = label,
+        modifier = modifier,
+        active = sortKey == field,
+        direction = direction,
+        onClick = { onSort(field) },
+    )
+}
+
+private enum class WkSort { STATUS, NODE, HOST, INFLIGHT, LASTHB, UPTIME }
+
+private val WK_DEFAULT_SORT = WkSort.NODE
+
+// Text columns ascending; status (alive-first), in-flight, last-HB descending; uptime asc = longest first.
+private fun wkDefaultAsc(key: WkSort): Boolean = when (key) {
+    WkSort.NODE, WkSort.HOST, WkSort.UPTIME -> true
+    else -> false
+}
+
+private fun sortWorkers(items: List<WorkerDto>, key: WkSort, asc: Boolean): List<WorkerDto> {
+    val cmp: Comparator<WorkerDto> = when (key) {
+        WkSort.STATUS -> compareBy { it.alive }
+        WkSort.NODE -> compareBy { it.nodeId }
+        WkSort.HOST -> compareBy { it.host }
+        WkSort.INFLIGHT -> compareBy { it.inFlightCount }
+        WkSort.LASTHB -> compareBy { it.lastHeartbeat }
+        WkSort.UPTIME -> compareBy { it.startedAt }
+    }
+    val sorted = items.sortedWith(cmp)
+    return if (asc) sorted else sorted.reversed()
 }
 
 @Composable
