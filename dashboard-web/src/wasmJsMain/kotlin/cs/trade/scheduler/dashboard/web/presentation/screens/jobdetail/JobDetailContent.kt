@@ -142,7 +142,6 @@ private fun JobHeader(
                 relativeLabel = "Relative (3m ago)",
                 timeAbsolute = timeAbsolute,
                 onTimeModeChanged = onTimeModeChanged,
-                absoluteLabel = "Absolute (2026-05-30 14:30)",
             )
             OutlinedButton(onClick = onBack, shape = MaterialTheme.shapes.small) { Text("Back") }
             OutlinedButton(onClick = onRefresh, shape = MaterialTheme.shapes.small) { Text("Refresh") }

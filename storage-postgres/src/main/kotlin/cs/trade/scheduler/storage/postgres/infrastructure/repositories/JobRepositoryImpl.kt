@@ -39,6 +39,7 @@ import org.jetbrains.exposed.v1.jdbc.update
 import kotlin.time.Clock
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Instant
 import kotlin.uuid.Uuid
 
@@ -134,13 +135,25 @@ public class JobRepositoryImpl(
                         else JobTable.attempts less JobTable.maxAttempts,
                     )
                 }
+                // "Upcoming" window: future-dated jobs in [now, now + N min]. The `>= now`
+                // bound also drops the historical scheduled_at left on already-run rows, and
+                // the range comparison naturally excludes NULL scheduled_at (no isNotNull needed).
+                filter.scheduledWithinMinutes?.let { mins ->
+                    val now = Clock.System.now()
+                    val lower = now.toOffsetDateTimeUtc()
+                    val upper = (now + mins.minutes).toOffsetDateTimeUtc()
+                    add((JobTable.scheduledAt greaterEq lower) and (JobTable.scheduledAt lessEq upper))
+                }
             }.reduceOrNull { acc, p -> acc and p } ?: Op.TRUE
 
             val total = JobTable.selectAll().where(predicate).count()
 
             val offset = page.toLong() * size.toLong()
+            // Upcoming view → soonest-scheduled first; the default list → newest activity first.
+            val order = if (filter.scheduledWithinMinutes != null) JobTable.scheduledAt to SortOrder.ASC
+            else JobTable.updatedAt to SortOrder.DESC
             val items = JobTable.selectAll().where(predicate)
-                .orderBy(JobTable.updatedAt to SortOrder.DESC)
+                .orderBy(order)
                 .limit(size)
                 .offset(offset)
                 .map { it.toJob() }

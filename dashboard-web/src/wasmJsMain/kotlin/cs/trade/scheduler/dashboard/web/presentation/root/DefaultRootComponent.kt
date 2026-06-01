@@ -47,6 +47,7 @@ import cs.trade.scheduler.dashboard.web.presentation.screens.recurring.DefaultRe
 import cs.trade.scheduler.dashboard.web.presentation.screens.stats.DefaultStatsComponent
 import cs.trade.scheduler.dashboard.web.presentation.screens.types.DefaultTypesComponent
 import cs.trade.scheduler.dashboard.web.presentation.screens.typesstats.DefaultTypeStatsComponent
+import cs.trade.scheduler.dashboard.web.presentation.screens.upcoming.DefaultUpcomingComponent
 import cs.trade.scheduler.dashboard.web.presentation.screens.workers.DefaultWorkersComponent
 
 // Root nav host. Each child is constructed with its own scoped UseCases — no DI
@@ -152,6 +153,7 @@ public class DefaultRootComponent(
     // exception, wedging all further navigation until reload. replaceAll keeps each section depth-1.
     override fun onNavigateToJobs() = navigation.replaceAll(RootComponent.Config.JobList)
     override fun onNavigateToRecurring() = navigation.replaceAll(RootComponent.Config.RecurringList)
+    override fun onNavigateToUpcoming() = navigation.replaceAll(RootComponent.Config.Upcoming)
     override fun onNavigateToStats() = navigation.replaceAll(RootComponent.Config.Stats)
     override fun onNavigateToWorkers() = navigation.replaceAll(RootComponent.Config.Workers)
     override fun onNavigateToTypes() = navigation.replaceAll(RootComponent.Config.Types)
@@ -166,6 +168,7 @@ public class DefaultRootComponent(
         RootComponent.Config.JobList -> "/"
         is RootComponent.Config.JobDetail -> "/jobs/${config.jobId}"
         RootComponent.Config.RecurringList -> "/recurring"
+        RootComponent.Config.Upcoming -> "/upcoming"
         RootComponent.Config.Stats -> "/stats"
         RootComponent.Config.Workers -> "/workers"
         RootComponent.Config.Types -> "/types"
@@ -180,6 +183,7 @@ public class DefaultRootComponent(
                 ?.let { RootComponent.Config.JobDetail(it) }
                 ?: RootComponent.Config.JobList
             "recurring" -> RootComponent.Config.RecurringList
+            "upcoming" -> RootComponent.Config.Upcoming
             "stats" -> RootComponent.Config.Stats
             "workers" -> RootComponent.Config.Workers
             "types" -> RootComponent.Config.Types
@@ -247,6 +251,15 @@ public class DefaultRootComponent(
                 events = eventStream,
                 onBack = ::onNavigateToJobs,
                 onNavigateToJob = { id -> navigation.push(RootComponent.Config.JobDetail(id)) },
+            )
+        )
+        RootComponent.Config.Upcoming -> RootComponent.Child.Upcoming(
+            DefaultUpcomingComponent(
+                componentContext = ctx,
+                getJobsList = getJobsList,
+                events = eventStream,
+                onBack = ::onNavigateToJobs,
+                onJobSelected = { id -> navigation.push(RootComponent.Config.JobDetail(id)) },
             )
         )
         RootComponent.Config.Stats -> RootComponent.Child.Stats(

@@ -43,6 +43,7 @@ import cs.trade.scheduler.dashboard.web.presentation.screens.recurring.Recurring
 import cs.trade.scheduler.dashboard.web.presentation.screens.stats.StatsContent
 import cs.trade.scheduler.dashboard.web.presentation.screens.types.TypesContent
 import cs.trade.scheduler.dashboard.web.presentation.screens.typesstats.TypeStatsContent
+import cs.trade.scheduler.dashboard.web.presentation.screens.upcoming.UpcomingContent
 import cs.trade.scheduler.dashboard.web.presentation.screens.workers.WorkersContent
 import androidx.compose.foundation.Canvas
 import androidx.compose.ui.geometry.Offset
@@ -85,6 +86,7 @@ public fun RootContent(component: RootComponent) {
                 isDark = isDark,
                 onJobs = component::onNavigateToJobs,
                 onRecurring = component::onNavigateToRecurring,
+                onUpcoming = component::onNavigateToUpcoming,
                 onStats = component::onNavigateToStats,
                 onWorkers = component::onNavigateToWorkers,
                 onTypes = component::onNavigateToTypes,
@@ -101,6 +103,7 @@ public fun RootContent(component: RootComponent) {
                     is RootComponent.Child.JobList -> JobListContent(child.component)
                     is RootComponent.Child.JobDetail -> JobDetailContent(child.component)
                     is RootComponent.Child.RecurringList -> RecurringListContent(child.component)
+                    is RootComponent.Child.Upcoming -> UpcomingContent(child.component)
                     is RootComponent.Child.Stats -> StatsContent(child.component)
                     is RootComponent.Child.Workers -> WorkersContent(child.component)
                     is RootComponent.Child.Types -> TypesContent(child.component)
@@ -119,6 +122,7 @@ private fun SectionNav(
     isDark: Boolean,
     onJobs: () -> Unit,
     onRecurring: () -> Unit,
+    onUpcoming: () -> Unit,
     onStats: () -> Unit,
     onWorkers: () -> Unit,
     onTypes: () -> Unit,
@@ -142,6 +146,7 @@ private fun SectionNav(
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(2.dp), verticalAlignment = Alignment.CenterVertically) {
                     NavLink("Jobs", active is RootComponent.Config.JobList || active is RootComponent.Config.JobDetail, onJobs)
+                    NavLink("Upcoming", active is RootComponent.Config.Upcoming, onUpcoming)
                     NavLink("Recurring", active is RootComponent.Config.RecurringList, onRecurring)
                     NavLink("Workers", active is RootComponent.Config.Workers, onWorkers)
                     NavLink("Types", active is RootComponent.Config.Types, onTypes)

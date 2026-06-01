@@ -56,6 +56,10 @@ public class JobValidation : BaseValidation {
             minimum(1)
             maximum(JobExtractor.MAX_PAGE_SIZE)
         }
+        ListJobsQuery::scheduledWithinMinutes ifPresent {
+            minimum(1)
+            maximum(MAX_SCHEDULED_WITHIN_MINUTES)
+        }
     }
 
     public val validateCancelJobQuery: Validation<CancelJobQuery> = Validation {
@@ -73,6 +77,10 @@ public class JobValidation : BaseValidation {
         public const val PAYLOAD_TYPE_MAX_LENGTH: Int = 256
         public const val ACTOR_MAX_LENGTH: Int = 128
         public const val MAX_PAGE_INDEX: Int = 10_000
+
+        // Upcoming-window cap: 31 days. Generous enough for any "what's coming up" view,
+        // tight enough to keep the scheduled_at range scan bounded.
+        public const val MAX_SCHEDULED_WITHIN_MINUTES: Int = 44_640
 
         // `letters/digits/_/-/./:` — enough for `email`, `default`, `cs.trade:high-prio`.
         // Rejects whitespace, control chars, quotes, slashes.

@@ -21,6 +21,7 @@ public class GetJobsListUseCase(
         page: Int = 0,
         size: Int = 50,
         attemptsExhausted: Boolean? = null,
+        scheduledWithinMinutes: Int? = null,
     ): Result<ListJobsResponse> = runCatching {
         repository.list(
             states = states,
@@ -29,6 +30,7 @@ public class GetJobsListUseCase(
             page = page,
             size = size,
             attemptsExhausted = attemptsExhausted,
+            scheduledWithinMinutes = scheduledWithinMinutes,
         )
     }
 }

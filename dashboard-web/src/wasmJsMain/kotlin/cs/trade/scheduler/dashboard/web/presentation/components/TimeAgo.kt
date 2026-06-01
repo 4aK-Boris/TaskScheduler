@@ -27,6 +27,21 @@ public fun timeAgo(instant: Instant, now: Instant = Clock.System.now()): String 
 }
 
 /**
+ * Future-facing "in 5m" / "in 2h" / "in 3d" / "due" — the upcoming-jobs counterpart to [timeAgo],
+ * for a `scheduled_at` that lies ahead. Past/now collapses to "due".
+ */
+public fun timeUntil(instant: Instant, now: Instant = Clock.System.now()): String {
+    val delta = instant - now
+    if (!delta.isPositive()) return "due"
+    return when {
+        delta < 1.minutes -> "in ${delta.inWholeSeconds}s"
+        delta < 1.hours -> "in ${delta.inWholeMinutes}m"
+        delta < 1.days -> "in ${delta.inWholeHours}h"
+        else -> "in ${delta.inWholeDays}d"
+    }
+}
+
+/**
  * Absolute local wall-clock "HH:mm:ss" — the "exact moment it happened" alternative to
  * [timeAgo], toggled by the Age-column display setting.
  */
@@ -37,14 +52,16 @@ public fun formatClock(instant: Instant): String {
 }
 
 /**
- * Full local date + time ("2026-05-30 14:30:05") — the absolute alternative for views with the
- * room for it (JobDetail), where [formatClock]'s time-only loses the day for older timestamps.
- * Built off the ISO-8601 [kotlinx.datetime.LocalDateTime.toString] so it's robust to the date
- * property renames in kotlinx-datetime 0.8.0; the 'T' separator becomes a space for readability.
+ * Full local date + time in the familiar day-first order ("30.05.2026 14:30:05") — the absolute
+ * alternative for any view, where [formatClock]'s time-only loses the day for older timestamps.
+ *
+ * Reorders the ISO date to dd.MM.yyyy by splitting [kotlinx.datetime.LocalDate.toString]'s
+ * "YYYY-MM-DD" (already zero-padded) rather than reading day/month/year properties — stays robust
+ * to the kotlinx-datetime 0.8.0 property renames. [formatClock] supplies the padded HH:mm:ss, which
+ * also avoids LocalDateTime.toString()'s trailing fractional seconds (…:05.123456789).
  */
 public fun formatDateTime(instant: Instant): String {
-    // date.toString() is a clean ISO "YYYY-MM-DD"; formatClock gives padded HH:mm:ss — composing
-    // them avoids LocalDateTime.toString()'s trailing fractional seconds (…:05.123456789).
     val dt = instant.toLocalDateTime(TimeZone.currentSystemDefault())
-    return "${dt.date} ${formatClock(instant)}"
+    val (year, month, day) = dt.date.toString().split("-")
+    return "$day.$month.$year ${formatClock(instant)}"
 }

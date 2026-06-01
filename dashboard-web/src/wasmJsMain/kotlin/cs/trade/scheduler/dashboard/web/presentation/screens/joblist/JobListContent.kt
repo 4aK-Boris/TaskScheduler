@@ -79,12 +79,12 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.size
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.StrokeCap
-import cs.trade.scheduler.dashboard.web.presentation.components.formatClock
+import cs.trade.scheduler.dashboard.web.presentation.components.formatDateTime
 
-// Fixed columns (checkbox 44 + state 168 + queue 120 + attempts 80 + age 96 + id 130 = 638) plus a
-// floor for the flexible Name column. Above this the table fills the panel (Name absorbs the slack);
-// below it the operator pans horizontally.
-private val TABLE_MIN_WIDTH = 948.dp
+// Fixed columns (checkbox 44 + state 168 + queue 120 + attempts 80 + started 160 + age 160 + id 130
+// = 862) plus a floor for the flexible Name column. Started/Age are 160 to fit the full absolute
+// "DD.MM.YYYY HH:mm:ss". Above this the table fills the panel (Name absorbs the slack); below it pans.
+private val TABLE_MIN_WIDTH = 1172.dp
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -99,7 +99,7 @@ public fun JobListContent(component: JobListComponent) {
             SettingsMenu(
                 autoRefreshSeconds = state.autoRefreshSeconds,
                 onAutoRefreshChanged = component::onAutoRefreshChanged,
-                timeSectionLabel = "Age column",
+                timeSectionLabel = "Time columns",
                 relativeLabel = "Relative (3m ago)",
                 timeAbsolute = state.ageAbsolute,
                 onTimeModeChanged = component::onAgeModeChanged,
@@ -238,6 +238,7 @@ private fun JobListSkeleton(modifier: Modifier = Modifier) {
                 SkeletonBar(260.dp)
                 SkeletonBar(56.dp)
                 SkeletonBar(70.dp)
+                SkeletonBar(70.dp)
                 SkeletonBar(90.dp)
             }
         }
@@ -336,7 +337,7 @@ private fun ExtraFiltersRow(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         AutocompleteFilter("Queue", queue, knownQueues, onQueueChange, width = 220.dp)
-        AutocompleteFilter("Payload type", payloadType, knownTypes, onPayloadTypeChange, width = 320.dp)
+        AutocompleteFilter("Task Type", payloadType, knownTypes, onPayloadTypeChange, width = 320.dp)
     }
 }
 
@@ -533,7 +534,8 @@ private fun JobListHeader(
         HeaderCell("Queue", Modifier.width(120.dp))
         HeaderCell("Name", Modifier.weight(1f))
         HeaderCell("Attempts", Modifier.width(80.dp))
-        HeaderCell("Age", Modifier.width(96.dp))
+        HeaderCell("Started", Modifier.width(160.dp))
+        HeaderCell("Age", Modifier.width(160.dp))
         HeaderCell("ID", Modifier.width(130.dp))
     }
 }
@@ -659,10 +661,18 @@ private fun JobRow(
                 style = MaterialTheme.typography.bodyMedium,
                 modifier = Modifier.width(80.dp),
             )
+            // Started — when a worker first picked the job up. "—" (muted) until it runs.
             Text(
-                text = if (ageAbsolute) formatClock(job.updatedAt) else timeAgo(job.updatedAt),
+                text = job.startedAt?.let { if (ageAbsolute) formatDateTime(it) else timeAgo(it) } ?: "—",
                 style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.width(96.dp),
+                color = if (job.startedAt != null) MaterialTheme.colorScheme.onSurface
+                else MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.width(160.dp),
+            )
+            Text(
+                text = if (ageAbsolute) formatDateTime(job.updatedAt) else timeAgo(job.updatedAt),
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.width(160.dp),
             )
             Text(
                 text = job.id.take(8),

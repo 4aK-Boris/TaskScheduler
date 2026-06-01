@@ -49,13 +49,13 @@ import cs.trade.scheduler.dashboard.web.presentation.components.PageHeader
 import cs.trade.scheduler.dashboard.web.presentation.components.PausedBadge
 import cs.trade.scheduler.dashboard.web.presentation.components.SettingsMenu
 import cs.trade.scheduler.dashboard.web.presentation.components.SkeletonBar
-import cs.trade.scheduler.dashboard.web.presentation.components.formatClock
+import cs.trade.scheduler.dashboard.web.presentation.components.formatDateTime
 import cs.trade.scheduler.dashboard.web.presentation.components.timeAgo
 import cs.trade.scheduler.shared.dto.TypePauseDto
 
 // Fixed columns (770) + a floor for the flexible Payload column. Above this the table fills the
 // panel (Payload absorbs the slack); below it the operator pans horizontally.
-private val TABLE_MIN_WIDTH = 1130.dp
+private val TABLE_MIN_WIDTH = 1140.dp
 private const val MAX_SUGGESTIONS = 30
 
 @Composable
@@ -250,7 +250,7 @@ private fun TypesHeader() {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         HeaderCell("Payload Type", Modifier.weight(1f))
-        HeaderCell("Since", Modifier.width(150.dp))
+        HeaderCell("Since", Modifier.width(160.dp))
         HeaderCell("Paused By", Modifier.width(190.dp))
         HeaderCell("Reason", Modifier.width(300.dp))
         HeaderCell("", Modifier.width(130.dp))
@@ -286,9 +286,9 @@ private fun PausedRow(row: TypePauseDto, busy: Boolean, timeAbsolute: Boolean, o
             modifier = Modifier.weight(1f),
         )
         Text(
-            text = if (timeAbsolute) formatClock(row.pausedSince) else timeAgo(row.pausedSince),
+            text = if (timeAbsolute) formatDateTime(row.pausedSince) else timeAgo(row.pausedSince),
             style = MaterialTheme.typography.bodySmall,
-            modifier = Modifier.width(150.dp),
+            modifier = Modifier.width(160.dp),
         )
         Text(
             text = row.pausedBy,

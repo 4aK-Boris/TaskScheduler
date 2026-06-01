@@ -27,6 +27,8 @@ public interface JobsRepository {
         page: Int = 0,
         size: Int = 50,
         attemptsExhausted: Boolean? = null,
+        // "Upcoming" window: future-dated jobs scheduled within the next N minutes, soonest-first.
+        scheduledWithinMinutes: Int? = null,
     ): ListJobsResponse
 
     public suspend fun detail(jobId: String): JobDetail?

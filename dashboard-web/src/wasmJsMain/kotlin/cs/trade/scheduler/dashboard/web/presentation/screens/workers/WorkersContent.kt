@@ -42,12 +42,12 @@ import cs.trade.scheduler.dashboard.web.presentation.components.DashboardPanel
 import cs.trade.scheduler.dashboard.web.presentation.components.PageHeader
 import cs.trade.scheduler.dashboard.web.presentation.components.SettingsMenu
 import cs.trade.scheduler.dashboard.web.presentation.components.SkeletonBar
-import cs.trade.scheduler.dashboard.web.presentation.components.formatClock
+import cs.trade.scheduler.dashboard.web.presentation.components.formatDateTime
 import cs.trade.scheduler.dashboard.web.presentation.components.timeAgo
 import cs.trade.scheduler.shared.dto.WorkerDto
 
 // Fixed columns (900) + a floor for the flexible Tags column.
-private val TABLE_MIN_WIDTH = 1120.dp
+private val TABLE_MIN_WIDTH = 1200.dp
 
 @Composable
 public fun WorkersContent(component: WorkersComponent) {
@@ -118,8 +118,8 @@ private fun WorkersHeader() {
         HeaderCell("Host", Modifier.width(180.dp))
         HeaderCell("Tags", Modifier.weight(1f))
         HeaderCell("In flight", Modifier.width(160.dp))
-        HeaderCell("Last HB", Modifier.width(120.dp))
-        HeaderCell("Uptime", Modifier.width(120.dp))
+        HeaderCell("Last HB", Modifier.width(160.dp))
+        HeaderCell("Uptime", Modifier.width(160.dp))
     }
 }
 
@@ -161,16 +161,16 @@ private fun WorkerRow(worker: WorkerDto, timeAbsolute: Boolean) {
         )
         InFlightCell(total = worker.inFlightCount, byQueue = worker.inFlightByQueue, modifier = Modifier.width(160.dp))
         Text(
-            text = if (timeAbsolute) formatClock(worker.lastHeartbeat) else timeAgo(worker.lastHeartbeat),
+            text = if (timeAbsolute) formatDateTime(worker.lastHeartbeat) else timeAgo(worker.lastHeartbeat),
             style = MaterialTheme.typography.bodySmall,
             color = if (worker.alive) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.error,
-            modifier = Modifier.width(120.dp),
+            modifier = Modifier.width(160.dp),
         )
         Text(
-            text = if (timeAbsolute) formatClock(worker.startedAt) else timeAgo(worker.startedAt),
+            text = if (timeAbsolute) formatDateTime(worker.startedAt) else timeAgo(worker.startedAt),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.width(120.dp),
+            modifier = Modifier.width(160.dp),
         )
     }
 }

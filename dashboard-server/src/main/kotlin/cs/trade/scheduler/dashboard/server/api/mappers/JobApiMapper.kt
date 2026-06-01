@@ -30,6 +30,7 @@ public class JobApiMapper {
         queue = query.queue,
         payloadType = query.payloadType,
         attemptsExhausted = query.attemptsExhausted,
+        scheduledWithinMinutes = query.scheduledWithinMinutes,
     )
 
     public fun toView(job: Job): JobView = JobView(
@@ -48,6 +49,7 @@ public class JobApiMapper {
         progressFailed = job.progressFailed,
         progressTotal = job.progressTotal,
         durationMs = job.durationMs,
+        startedAt = job.startedAt,
         createdAt = job.createdAt,
         updatedAt = job.updatedAt,
     )

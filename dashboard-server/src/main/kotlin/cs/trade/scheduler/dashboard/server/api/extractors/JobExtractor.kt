@@ -43,6 +43,9 @@ public class JobExtractor {
             // attempts axis unfiltered. Garbage values fall through to null (don't 400 —
             // the parameter is operator-supplied via a dashboard toggle, missing = off).
             attemptsExhausted = params["attemptsExhausted"]?.toBooleanStrictOrNull(),
+            // "Upcoming" window (minutes ahead). Garbage falls through to null (filter off);
+            // the validator bounds the accepted range.
+            scheduledWithinMinutes = params["scheduledWithinMinutes"]?.toIntOrNull(),
         )
     }
 

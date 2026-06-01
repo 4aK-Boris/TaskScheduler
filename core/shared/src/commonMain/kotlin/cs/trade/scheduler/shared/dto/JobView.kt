@@ -30,6 +30,8 @@ public data class JobView(
     val progressFailed: Long? = null,
     val progressTotal: Long? = null,
     val durationMs: Long? = null,
+    /** When a worker began executing the job (first PROCESSING transition). Null until it starts. */
+    val startedAt: Instant? = null,
     val createdAt: Instant,
     val updatedAt: Instant,
 )
