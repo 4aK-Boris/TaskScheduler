@@ -65,16 +65,19 @@ TaskScheduler разворачивается **двумя процессами**
 
 ## 2. Зависимости
 
-Библиотека публикуется в **mavenLocal** (`~/.m2`) под группой `cs.trade.scheduler`,
-версия `0.1.0-SNAPSHOT`. artifactId = путь модуля через дефис (`core-backend`,
-`engine-worker`, …). Настроено в `buildSrc/src/main/kotlin/buildsrc/convention/publish.gradle.kts`.
+Библиотека публикуется в **GitHub Packages** (релизы) под группой `cs.trade.scheduler`,
+текущая версия `0.4.0` — фиксированный релиз без `-SNAPSHOT` (новая версия выходит с бампом
+`schedulerVersion` в `gradle.properties`). Для локальной разработки рядом с проектом подойдёт
+**mavenLocal**. artifactId = путь модуля через дефис (`core-backend`, `engine-worker`, …).
+Настроено в `buildSrc/src/main/kotlin/buildsrc/convention/publish.gradle.kts`.
 
 ### Шаг 1 — опубликовать в mavenLocal (в репозитории TaskScheduler)
 ```bash
 ./gradlew publishToMavenLocal
 ```
-Кладёт 8 библиотечных модулей в `~/.m2/repository/cs/trade/scheduler/`. Повторяй после
-правок в библиотеке — версия SNAPSHOT, Gradle подхватит свежую без `--refresh-dependencies`.
+Кладёт 8 библиотечных модулей в `~/.m2/repository/cs/trade/scheduler/`. Версия фиксированная
+(не SNAPSHOT): после правок в библиотеке либо перезалей тот же `0.4.0` (mavenLocal перезапишет),
+либо бампни `schedulerVersion` и переключись на новую версию.
 
 ### Шаг 2 — подключить в основном проекте
 Добавь `mavenLocal()` в репозитории (`settings.gradle.kts`):
@@ -89,10 +92,10 @@ dependencyResolutionManagement {
 В `build.gradle.kts`:
 ```kotlin
 dependencies {
-    implementation("cs.trade.scheduler:core-backend:0.1.0-SNAPSHOT")
-    implementation("cs.trade.scheduler:storage-postgres:0.1.0-SNAPSHOT")
-    implementation("cs.trade.scheduler:transport-rabbit:0.1.0-SNAPSHOT")
-    implementation("cs.trade.scheduler:engine-worker:0.1.0-SNAPSHOT")
+    implementation("cs.trade.scheduler:core-backend:0.4.0")
+    implementation("cs.trade.scheduler:storage-postgres:0.4.0")
+    implementation("cs.trade.scheduler:transport-rabbit:0.4.0")
+    implementation("cs.trade.scheduler:engine-worker:0.4.0")
     // core-shared подтянется транзитивно (KMP — JVM-вариант резолвится по Gradle-метаданным)
 }
 ```
@@ -102,9 +105,11 @@ dependencies {
 > `dependencySubstitution { substitute(module("cs.trade.scheduler:engine-worker")).using(project(":engine-worker")) }`.
 > Для отдельного проекта mavenLocal проще.
 
-> **Прод**: замени mavenLocal на внутренний Maven (Nexus / GitHub Packages) — тот же
-> `maven-publish`, допиши `publishing { repositories { maven { url = … } } }` в
-> `publish.gradle.kts` и используй `publish` вместо `publishToMavenLocal`.
+> **Релизы (GitHub Packages)** — уже настроено: `publish.gradle.kts` публикует в
+> `https://maven.pkg.github.com/4aK-Boris/CsTradeService` через `./gradlew publish` (креды
+> `gpr.user`/`gpr.token` с `write:packages` в `~/.gradle/gradle.properties`). Потребитель
+> добавляет этот maven-репозиторий и тянет `cs.trade.scheduler:*:0.4.0`; в CI того же
+> репозитория он резолвится штатным `GITHUB_TOKEN` (same-repo, без отдельного PAT).
 
 ### Что именно нужно воркер-приложению
 | Модуль | Зачем |
