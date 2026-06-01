@@ -12,6 +12,7 @@ import cs.trade.scheduler.dashboard.web.data.repositories.JobsRepositoryImpl
 import cs.trade.scheduler.dashboard.web.data.repositories.QueueHealthRepositoryImpl
 import cs.trade.scheduler.dashboard.web.data.repositories.RecurringRepositoryImpl
 import cs.trade.scheduler.dashboard.web.data.repositories.StatsRepositoryImpl
+import cs.trade.scheduler.dashboard.web.data.repositories.UpcomingRepositoryImpl
 import cs.trade.scheduler.dashboard.web.data.repositories.TypeStatsRepositoryImpl
 import cs.trade.scheduler.dashboard.web.data.repositories.TypesRepositoryImpl
 import cs.trade.scheduler.dashboard.web.data.repositories.WorkersRepositoryImpl
@@ -19,6 +20,7 @@ import cs.trade.scheduler.dashboard.web.data.mock.MockJobsRepository
 import cs.trade.scheduler.dashboard.web.data.mock.MockQueueHealthRepository
 import cs.trade.scheduler.dashboard.web.data.mock.MockRecurringRepository
 import cs.trade.scheduler.dashboard.web.data.mock.MockStatsRepository
+import cs.trade.scheduler.dashboard.web.data.mock.MockUpcomingRepository
 import cs.trade.scheduler.dashboard.web.data.mock.MockTypeStatsRepository
 import cs.trade.scheduler.dashboard.web.data.mock.MockTypesRepository
 import cs.trade.scheduler.dashboard.web.data.mock.MockWorkersRepository
@@ -26,6 +28,7 @@ import cs.trade.scheduler.dashboard.web.domain.repositories.JobsRepository
 import cs.trade.scheduler.dashboard.web.domain.repositories.QueueHealthRepository
 import cs.trade.scheduler.dashboard.web.domain.repositories.RecurringRepository
 import cs.trade.scheduler.dashboard.web.domain.repositories.StatsRepository
+import cs.trade.scheduler.dashboard.web.domain.repositories.UpcomingRepository
 import cs.trade.scheduler.dashboard.web.domain.repositories.TypeStatsRepository
 import cs.trade.scheduler.dashboard.web.domain.repositories.TypesRepository
 import cs.trade.scheduler.dashboard.web.domain.repositories.WorkersRepository
@@ -39,6 +42,7 @@ import cs.trade.scheduler.dashboard.web.domain.usecases.EnableRecurringJobUseCas
 import cs.trade.scheduler.dashboard.web.domain.usecases.GetJobDetailUseCase
 import cs.trade.scheduler.dashboard.web.domain.usecases.GetJobsListUseCase
 import cs.trade.scheduler.dashboard.web.domain.usecases.GetStatsOverviewUseCase
+import cs.trade.scheduler.dashboard.web.domain.usecases.GetUpcomingUseCase
 import cs.trade.scheduler.dashboard.web.domain.usecases.ListKnownTypesUseCase
 import cs.trade.scheduler.dashboard.web.domain.usecases.ListPausedTypesUseCase
 import cs.trade.scheduler.dashboard.web.domain.usecases.ListQueuesHealthUseCase
@@ -76,6 +80,7 @@ fun main() {
     val typesRepository: TypesRepository = if (mock) MockTypesRepository() else TypesRepositoryImpl()
     val typeStatsRepository: TypeStatsRepository = if (mock) MockTypeStatsRepository() else TypeStatsRepositoryImpl()
     val queueHealthRepository: QueueHealthRepository = if (mock) MockQueueHealthRepository() else QueueHealthRepositoryImpl()
+    val upcomingRepository: UpcomingRepository = if (mock) MockUpcomingRepository() else UpcomingRepositoryImpl()
 
     // Shared WS subscription for the tab's lifetime — owns the reconnect loop and
     // feeds the connection-status badge. SupervisorJob so a hiccup inside the loop
@@ -107,6 +112,7 @@ fun main() {
         disableRecurring = DisableRecurringJobUseCase(recurringRepository),
         triggerRecurring = TriggerRecurringJobUseCase(recurringRepository),
         getStatsOverview = GetStatsOverviewUseCase(statsRepository),
+        getUpcoming = GetUpcomingUseCase(upcomingRepository),
         listWorkers = ListWorkersUseCase(workersRepository),
         listPausedTypes = ListPausedTypesUseCase(typesRepository),
         listKnownTypes = ListKnownTypesUseCase(typesRepository),

@@ -7,7 +7,7 @@ import com.arkivanov.decompose.value.update
 import cs.trade.scheduler.core.frontend.BaseComponent
 import cs.trade.scheduler.dashboard.web.data.connection.EventStream
 import cs.trade.scheduler.dashboard.web.data.persistence.BrowserStorage
-import cs.trade.scheduler.dashboard.web.domain.usecases.GetJobsListUseCase
+import cs.trade.scheduler.dashboard.web.domain.usecases.GetUpcomingUseCase
 import cs.trade.scheduler.shared.events.WebSocketEvent
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
@@ -19,10 +19,11 @@ import kotlin.time.Duration.Companion.seconds
 
 public class DefaultUpcomingComponent(
     componentContext: ComponentContext,
-    private val getJobsList: GetJobsListUseCase,
+    private val getUpcoming: GetUpcomingUseCase,
     private val events: EventStream,
     private val onBack: () -> Unit,
     private val onJobSelected: (jobId: String) -> Unit,
+    private val onRecurring: () -> Unit,
 ) : BaseComponent(componentContext), UpcomingComponent {
 
     private val _model = MutableValue(
@@ -49,6 +50,7 @@ public class DefaultUpcomingComponent(
     override fun onRefreshClicked() = refresh()
     override fun onBackClicked() = onBack()
     override fun onJobClicked(jobId: String) = onJobSelected(jobId)
+    override fun onRecurringClicked() = onRecurring()
 
     override fun onWindowChanged(minutes: Int) {
         if (minutes == _model.value.windowMinutes) return
@@ -86,18 +88,13 @@ public class DefaultUpcomingComponent(
 
     private fun refreshSilently() = load(silent = true)
 
-    // The server orders by scheduled_at ASC and filters [now, now + window]; we just take the page.
-    // A generous size cap (no pagination on the agenda) — a window with more than this many jobs is
-    // already past "glanceable", and the operator can narrow the window.
+    // The server merges recurring cron slots + future job rows, sorts soonest-first and caps the
+    // result, so we just take its items as-is.
     private fun load(silent: Boolean) {
         scope.launch {
-            getJobsList(
-                page = 0,
-                size = PAGE_SIZE,
-                scheduledWithinMinutes = _model.value.windowMinutes,
-            ).fold(
+            getUpcoming(_model.value.windowMinutes).fold(
                 onSuccess = { resp ->
-                    _model.update { it.copy(items = resp.items, loading = false, error = null) }
+                    _model.update { it.copy(items = resp.items, truncated = resp.truncated, loading = false, error = null) }
                 },
                 onFailure = { t ->
                     if (!silent) _model.update { it.copy(loading = false, error = t.message ?: "Failed to load") }
@@ -129,7 +126,6 @@ public class DefaultUpcomingComponent(
 
     private companion object {
         const val REFRESH_DEBOUNCE_MS = 200L
-        const val PAGE_SIZE = 200
         const val WINDOW_KEY = "dashboard.upcoming.windowMinutes"
         const val AUTO_KEY = "dashboard.upcoming.autoRefresh"
         const val TIME_KEY = "dashboard.upcoming.timeAbsolute"

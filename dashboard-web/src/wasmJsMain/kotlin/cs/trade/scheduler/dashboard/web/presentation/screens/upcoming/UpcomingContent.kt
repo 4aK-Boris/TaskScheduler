@@ -46,11 +46,12 @@ import cs.trade.scheduler.dashboard.web.presentation.components.SkeletonBar
 import cs.trade.scheduler.dashboard.web.presentation.components.StateChip
 import cs.trade.scheduler.dashboard.web.presentation.components.formatDateTime
 import cs.trade.scheduler.dashboard.web.presentation.components.timeUntil
-import cs.trade.scheduler.shared.dto.JobView
+import cs.trade.scheduler.shared.dto.UpcomingOccurrenceDto
+import cs.trade.scheduler.shared.dto.UpcomingSource
 
-// Fixed columns (scheduled 160 + state 140 + queue 120 + id 130 = 550) + a floor for the flexible
+// Fixed columns (when 150 + kind 120 + queue 120 + cron/id 200 = 590) + a floor for the flexible
 // Name column. Above this the table fills the panel; below it the operator pans horizontally.
-private val TABLE_MIN_WIDTH = 900.dp
+private val TABLE_MIN_WIDTH = 980.dp
 
 @Composable
 public fun UpcomingContent(component: UpcomingComponent) {
@@ -61,7 +62,7 @@ public fun UpcomingContent(component: UpcomingComponent) {
             SettingsMenu(
                 autoRefreshSeconds = state.autoRefreshSeconds,
                 onAutoRefreshChanged = component::onAutoRefreshChanged,
-                timeSectionLabel = "Scheduled column",
+                timeSectionLabel = "When column",
                 relativeLabel = "Relative (in 18m)",
                 timeAbsolute = state.timeAbsolute,
                 onTimeModeChanged = component::onTimeModeChanged,
@@ -70,37 +71,54 @@ public fun UpcomingContent(component: UpcomingComponent) {
             OutlinedButton(onClick = component::onRefreshClicked, shape = MaterialTheme.shapes.small) { Text("Refresh") }
         }
         DashboardPanel {
-            BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-                val tableWidth = maxOf(maxWidth, TABLE_MIN_WIDTH)
-                val scroll = rememberScrollState()
-                Box(modifier = Modifier.fillMaxSize().horizontalScroll(scroll)) {
-                    Column(modifier = Modifier.width(tableWidth).fillMaxHeight()) {
-                        UpcomingHeader()
-                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                        Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
-                            when {
-                                state.loading && state.items.isEmpty() ->
-                                    UpcomingSkeleton(modifier = Modifier.align(Alignment.TopStart))
-                                state.error != null -> Text(
-                                    text = "Error: ${state.error}",
-                                    color = MaterialTheme.colorScheme.error,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    modifier = Modifier.align(Alignment.Center).padding(24.dp),
-                                )
-                                state.items.isEmpty() -> Text(
-                                    text = "Nothing scheduled in the selected window",
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    modifier = Modifier.align(Alignment.Center).padding(24.dp),
-                                )
-                                else -> LazyColumn(modifier = Modifier.fillMaxSize()) {
-                                    items(state.items, key = { it.id }) { row ->
-                                        UpcomingRow(
-                                            job = row,
-                                            timeAbsolute = state.timeAbsolute,
-                                            onClick = { component.onJobClicked(row.id) },
-                                        )
-                                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            Column(modifier = Modifier.fillMaxSize()) {
+                if (state.truncated) {
+                    Text(
+                        text = "Showing the soonest ${state.items.size} runs — narrow the window for fewer.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+                    )
+                }
+                BoxWithConstraints(modifier = Modifier.fillMaxWidth().weight(1f)) {
+                    val tableWidth = maxOf(maxWidth, TABLE_MIN_WIDTH)
+                    val scroll = rememberScrollState()
+                    Box(modifier = Modifier.fillMaxSize().horizontalScroll(scroll)) {
+                        Column(modifier = Modifier.width(tableWidth).fillMaxHeight()) {
+                            UpcomingHeader()
+                            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                            Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
+                                when {
+                                    state.loading && state.items.isEmpty() ->
+                                        UpcomingSkeleton(modifier = Modifier.align(Alignment.TopStart))
+                                    state.error != null -> Text(
+                                        text = "Error: ${state.error}",
+                                        color = MaterialTheme.colorScheme.error,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        modifier = Modifier.align(Alignment.Center).padding(24.dp),
+                                    )
+                                    state.items.isEmpty() -> Text(
+                                        text = "Nothing scheduled to run in the selected window",
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        modifier = Modifier.align(Alignment.Center).padding(24.dp),
+                                    )
+                                    else -> LazyColumn(modifier = Modifier.fillMaxSize()) {
+                                        // (source, id, time) is unique — the same recurring repeats at distinct times.
+                                        items(
+                                            items = state.items,
+                                            key = { "${it.source}|${it.id}|${it.at}" },
+                                        ) { row ->
+                                            UpcomingRow(
+                                                item = row,
+                                                timeAbsolute = state.timeAbsolute,
+                                                onClick = {
+                                                    if (row.source == UpcomingSource.JOB) component.onJobClicked(row.id)
+                                                    else component.onRecurringClicked()
+                                                },
+                                            )
+                                            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                                        }
                                     }
                                 }
                             }
@@ -112,7 +130,7 @@ public fun UpcomingContent(component: UpcomingComponent) {
     }
 }
 
-// Look-ahead window picker. No "Off" — this screen is the upcoming view; the window only narrows it.
+// Look-ahead window picker — no "Off"; this screen is the agenda, the window only narrows it.
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun WindowSegments(current: Int, onSelected: (Int) -> Unit) {
@@ -138,11 +156,11 @@ private fun UpcomingHeader() {
             .padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        HeaderCell("Scheduled", Modifier.width(160.dp))
-        HeaderCell("State", Modifier.width(140.dp))
+        HeaderCell("When", Modifier.width(150.dp))
+        HeaderCell("Kind", Modifier.width(120.dp))
         HeaderCell("Queue", Modifier.width(120.dp))
         HeaderCell("Name", Modifier.weight(1f))
-        HeaderCell("ID", Modifier.width(130.dp))
+        HeaderCell("Cron / ID", Modifier.width(200.dp))
     }
 }
 
@@ -157,7 +175,7 @@ private fun HeaderCell(label: String, modifier: Modifier) {
 }
 
 @Composable
-private fun UpcomingRow(job: JobView, timeAbsolute: Boolean, onClick: () -> Unit) {
+private fun UpcomingRow(item: UpcomingOccurrenceDto, timeAbsolute: Boolean, onClick: () -> Unit) {
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
     Row(
@@ -170,31 +188,55 @@ private fun UpcomingRow(job: JobView, timeAbsolute: Boolean, onClick: () -> Unit
             .padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        // The agenda's headline value — when the job is due. Future → "in 18m"; absolute on toggle.
+        // The headline value — when this run fires. Future → "in 18m"; absolute on toggle.
         Text(
-            text = job.scheduledAt?.let { if (timeAbsolute) formatDateTime(it) else timeUntil(it) } ?: "—",
+            text = if (timeAbsolute) formatDateTime(item.at) else timeUntil(item.at),
             style = MaterialTheme.typography.bodyMedium,
-            modifier = Modifier.width(160.dp),
+            modifier = Modifier.width(150.dp),
         )
-        Box(modifier = Modifier.width(140.dp)) { StateChip(job.state) }
-        Text(job.queue, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.width(120.dp))
+        KindCell(item, Modifier.width(120.dp))
+        Text(item.queue, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.width(120.dp))
         Box(modifier = Modifier.weight(1f).padding(end = 16.dp)) {
             CopyableText(
-                text = job.payloadType.substringAfterLast('.'),
-                copyValue = job.payloadType,
-                tooltip = job.payloadType,
+                text = item.payloadType.substringAfterLast('.'),
+                copyValue = item.payloadType,
+                tooltip = item.payloadType,
                 style = MaterialTheme.typography.bodyMedium,
                 modifier = Modifier.fillMaxWidth(),
             )
         }
+        // Recurring → its cron; one-off job → short id.
         Text(
-            text = job.id.take(8),
+            text = item.cron ?: item.id.take(8),
             style = MaterialTheme.typography.bodySmall.copy(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontFamily = FontFamily.Monospace,
             ),
-            modifier = Modifier.width(130.dp),
+            modifier = Modifier.width(200.dp),
         )
+    }
+}
+
+// RECURRING → a cobalt pill; a real job → its state chip (so the kind and the job's state read at once).
+@Composable
+private fun KindCell(item: UpcomingOccurrenceDto, modifier: Modifier) {
+    Box(modifier) {
+        val state = item.state
+        if (item.source == UpcomingSource.JOB && state != null) {
+            StateChip(state)
+        } else {
+            Box(
+                modifier = Modifier
+                    .background(MaterialTheme.colorScheme.primaryContainer, MaterialTheme.shapes.small)
+                    .padding(horizontal = 8.dp, vertical = 3.dp),
+            ) {
+                Text(
+                    text = "RECURRING",
+                    style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 0.4.sp),
+                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                )
+            }
+        }
     }
 }
 
@@ -206,11 +248,11 @@ private fun UpcomingSkeleton(modifier: Modifier = Modifier) {
     ) {
         repeat(8) {
             Row(horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                SkeletonBar(120.dp)
+                SkeletonBar(110.dp)
                 SkeletonBar(90.dp)
                 SkeletonBar(90.dp)
                 SkeletonBar(220.dp)
-                SkeletonBar(90.dp)
+                SkeletonBar(120.dp)
             }
         }
     }

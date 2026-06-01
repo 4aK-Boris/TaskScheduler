@@ -1,7 +1,7 @@
 package cs.trade.scheduler.dashboard.web.presentation.screens.upcoming
 
 import com.arkivanov.decompose.value.Value
-import cs.trade.scheduler.shared.dto.JobView
+import cs.trade.scheduler.shared.dto.UpcomingOccurrenceDto
 
 /**
  * Decompose component for the "Upcoming" screen — an agenda of future-scheduled jobs due within a
@@ -17,8 +17,11 @@ public interface UpcomingComponent {
     /** Look-ahead window in minutes (60 / 360 / 1440 / 4320). */
     public fun onWindowChanged(minutes: Int)
 
-    /** Row tap → open the job's detail. */
+    /** Row tap on a real future job → open its detail. */
     public fun onJobClicked(jobId: String)
+
+    /** Row tap on a recurring occurrence (no job row exists yet) → open the Recurring section. */
+    public fun onRecurringClicked()
 
     /** Auto-refresh cadence — `null` = off, else re-list every N seconds. */
     public fun onAutoRefreshChanged(seconds: Int?)
@@ -27,7 +30,9 @@ public interface UpcomingComponent {
     public fun onTimeModeChanged(absolute: Boolean)
 
     public data class Model(
-        val items: List<JobView> = emptyList(),
+        val items: List<UpcomingOccurrenceDto> = emptyList(),
+        // True when the server capped the result (more runs in the window than the cap).
+        val truncated: Boolean = false,
         val windowMinutes: Int = DEFAULT_WINDOW_MINUTES,
         val loading: Boolean = false,
         val error: String? = null,

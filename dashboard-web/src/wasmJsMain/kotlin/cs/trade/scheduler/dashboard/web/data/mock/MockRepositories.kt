@@ -5,6 +5,7 @@ package cs.trade.scheduler.dashboard.web.data.mock
 import cs.trade.scheduler.dashboard.web.domain.repositories.JobsRepository
 import cs.trade.scheduler.dashboard.web.domain.repositories.QueueHealthRepository
 import cs.trade.scheduler.dashboard.web.domain.repositories.RecurringRepository
+import cs.trade.scheduler.dashboard.web.domain.repositories.UpcomingRepository
 import cs.trade.scheduler.dashboard.web.domain.repositories.StatsRepository
 import cs.trade.scheduler.dashboard.web.domain.repositories.TypeStatsRepository
 import cs.trade.scheduler.dashboard.web.domain.repositories.TypesRepository
@@ -33,6 +34,9 @@ import cs.trade.scheduler.shared.dto.StatsOverviewResponse
 import cs.trade.scheduler.shared.dto.TypePauseDto
 import cs.trade.scheduler.shared.dto.TypeStatsDto
 import cs.trade.scheduler.shared.dto.TypeStatsResponse
+import cs.trade.scheduler.shared.dto.UpcomingOccurrenceDto
+import cs.trade.scheduler.shared.dto.UpcomingResponse
+import cs.trade.scheduler.shared.dto.UpcomingSource
 import kotlin.time.Clock
 import kotlin.time.Duration
 import kotlin.time.Instant
@@ -374,6 +378,37 @@ public class MockRecurringRepository : RecurringRepository {
 
     // "Run now" — returns a sample job id so the screen can navigate to a (synthesised) detail.
     override suspend fun trigger(id: String): String = MOCK_JOBS.first().id
+}
+
+public class MockUpcomingRepository : UpcomingRepository {
+    // Synthesises a forward agenda from the sample recurring rows: each enabled definition repeats
+    // across the window at a pseudo-period, so the screen shows realistic repetitions under ?mock.
+    override suspend fun upcoming(withinMinutes: Int): UpcomingResponse {
+        val now = Clock.System.now()
+        val upper = now + withinMinutes.minutes
+        val items = buildList {
+            MOCK_RECURRING.filter { it.enabled }.forEachIndexed { idx, r ->
+                val periodSec = (10 + idx * 8).toLong()
+                var t = now + periodSec.seconds
+                var count = 0
+                while (t <= upper && count < 20) {
+                    add(
+                        UpcomingOccurrenceDto(
+                            at = t,
+                            source = UpcomingSource.RECURRING,
+                            payloadType = r.payloadType,
+                            queue = r.queue,
+                            id = r.id,
+                            cron = r.cron,
+                        ),
+                    )
+                    t += periodSec.seconds
+                    count++
+                }
+            }
+        }.sortedBy { it.at }
+        return UpcomingResponse(items = items.take(200), truncated = items.size > 200, windowMinutes = withinMinutes)
+    }
 }
 
 private val MOCK_WORKERS: List<WorkerDto> = run {
