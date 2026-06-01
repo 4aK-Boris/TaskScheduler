@@ -27,7 +27,9 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -44,6 +46,8 @@ import cs.trade.scheduler.dashboard.web.presentation.components.DashboardPanel
 import cs.trade.scheduler.dashboard.web.presentation.components.PageHeader
 import cs.trade.scheduler.dashboard.web.presentation.components.RangeSegments
 import cs.trade.scheduler.dashboard.web.presentation.components.SkeletonBar
+import cs.trade.scheduler.dashboard.web.presentation.components.SortDirection
+import cs.trade.scheduler.dashboard.web.presentation.components.SortableHeaderCell
 import cs.trade.scheduler.shared.dto.TypeStatsDto
 import cs.trade.scheduler.shared.dto.TypeStatsRange
 
@@ -54,6 +58,19 @@ private val TABLE_MIN_WIDTH = 1280.dp
 @Composable
 public fun TypeStatsContent(component: TypeStatsComponent) {
     val state by component.model.subscribeAsState()
+    // Client-side sort over the fully-loaded list (this screen isn't paginated). Default: most
+    // successes first, matching the server's baseline order. Three clicks on a column cycle
+    // sort → flip → back to the default.
+    var sortKey by remember { mutableStateOf(TS_DEFAULT_SORT) }
+    var sortAsc by remember { mutableStateOf(tsDefaultAsc(TS_DEFAULT_SORT)) }
+    val onSort: (TsSort) -> Unit = { key ->
+        when {
+            key != sortKey -> { sortKey = key; sortAsc = tsDefaultAsc(key) }
+            sortAsc == tsDefaultAsc(key) -> sortAsc = !sortAsc
+            else -> { sortKey = TS_DEFAULT_SORT; sortAsc = tsDefaultAsc(TS_DEFAULT_SORT) }
+        }
+    }
+    val sortedItems = remember(state.items, sortKey, sortAsc) { sortTypeStats(state.items, sortKey, sortAsc) }
     Column(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         PageHeader(title = "Type Stats", count = state.items.size.toLong()) {
             RangeSegments(current = state.range, onSelected = component::onRangeChanged)
@@ -66,7 +83,7 @@ public fun TypeStatsContent(component: TypeStatsComponent) {
                 val scroll = rememberScrollState()
                 Box(modifier = Modifier.fillMaxSize().horizontalScroll(scroll)) {
                     Column(modifier = Modifier.width(tableWidth).fillMaxHeight()) {
-                        TypeStatsHeader()
+                        TypeStatsHeader(sortKey, sortAsc, onSort)
                         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                         Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
                             when {
@@ -87,7 +104,7 @@ public fun TypeStatsContent(component: TypeStatsComponent) {
                                 else -> LazyColumn(modifier = Modifier.fillMaxSize()) {
                                     // (payloadType, queue) is the natural grouping key — two queues
                                     // for one type render as distinct rows.
-                                    items(state.items, key = { "${it.payloadType}|${it.queue}" }) { row ->
+                                    items(sortedItems, key = { "${it.payloadType}|${it.queue}" }) { row ->
                                         TypeStatsRow(row)
                                         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                                     }
@@ -102,7 +119,8 @@ public fun TypeStatsContent(component: TypeStatsComponent) {
 }
 
 @Composable
-private fun TypeStatsHeader() {
+private fun TypeStatsHeader(sortKey: TsSort, sortAsc: Boolean, onSort: (TsSort) -> Unit) {
+    val dir = if (sortAsc) SortDirection.ASC else SortDirection.DESC
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -110,18 +128,39 @@ private fun TypeStatsHeader() {
             .padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        HeaderCell("Type", Modifier.weight(1f))
-        HeaderCell("Queue", Modifier.width(120.dp))
+        TsHead("Type", Modifier.weight(1f), TsSort.TYPE, sortKey, dir, onSort)
+        TsHead("Queue", Modifier.width(120.dp), TsSort.QUEUE, sortKey, dir, onSort)
+        // Outcome is a proportion bar, not a value — left unsortable.
         HeaderCell("Outcome", Modifier.width(150.dp))
-        HeaderCell("Success", Modifier.width(88.dp), numeric = true)
-        HeaderCell("Failed", Modifier.width(88.dp), numeric = true)
-        HeaderCell("Cancel", Modifier.width(96.dp), numeric = true)
-        HeaderCell("Retries", Modifier.width(84.dp), numeric = true)
-        HeaderCell("Avg ms", Modifier.width(88.dp), numeric = true)
-        HeaderCell("Min ms", Modifier.width(84.dp), numeric = true)
-        HeaderCell("Max ms", Modifier.width(84.dp), numeric = true)
-        HeaderCell("P95 ms", Modifier.width(88.dp), numeric = true)
+        TsHead("Success", Modifier.width(88.dp), TsSort.SUCCESS, sortKey, dir, onSort, numeric = true)
+        TsHead("Failed", Modifier.width(88.dp), TsSort.FAILED, sortKey, dir, onSort, numeric = true)
+        TsHead("Cancel", Modifier.width(96.dp), TsSort.CANCELLED, sortKey, dir, onSort, numeric = true)
+        TsHead("Retries", Modifier.width(84.dp), TsSort.RETRIES, sortKey, dir, onSort, numeric = true)
+        TsHead("Avg ms", Modifier.width(88.dp), TsSort.AVG, sortKey, dir, onSort, numeric = true)
+        TsHead("Min ms", Modifier.width(84.dp), TsSort.MIN, sortKey, dir, onSort, numeric = true)
+        TsHead("Max ms", Modifier.width(84.dp), TsSort.MAX, sortKey, dir, onSort, numeric = true)
+        TsHead("P95 ms", Modifier.width(88.dp), TsSort.P95, sortKey, dir, onSort, numeric = true)
     }
+}
+
+@Composable
+private fun TsHead(
+    label: String,
+    modifier: Modifier,
+    field: TsSort,
+    sortKey: TsSort,
+    direction: SortDirection,
+    onSort: (TsSort) -> Unit,
+    numeric: Boolean = false,
+) {
+    SortableHeaderCell(
+        label = label,
+        modifier = modifier,
+        active = sortKey == field,
+        direction = direction,
+        onClick = { onSort(field) },
+        numeric = numeric,
+    )
 }
 
 @Composable
@@ -237,3 +276,27 @@ private fun TypeStatsSkeleton(modifier: Modifier = Modifier) {
 }
 
 private fun Long?.fmt(): String = this?.toString() ?: "—"
+
+private enum class TsSort { TYPE, QUEUE, SUCCESS, FAILED, CANCELLED, RETRIES, AVG, MIN, MAX, P95 }
+
+private val TS_DEFAULT_SORT = TsSort.SUCCESS
+
+// Text columns sort A→Z by default; counts/durations highest-first. Null durations sort last on desc.
+private fun tsDefaultAsc(key: TsSort): Boolean = key == TsSort.TYPE || key == TsSort.QUEUE
+
+private fun sortTypeStats(items: List<TypeStatsDto>, key: TsSort, asc: Boolean): List<TypeStatsDto> {
+    val cmp: Comparator<TypeStatsDto> = when (key) {
+        TsSort.TYPE -> compareBy { it.payloadType }
+        TsSort.QUEUE -> compareBy { it.queue }
+        TsSort.SUCCESS -> compareBy { it.successCount }
+        TsSort.FAILED -> compareBy { it.failedCount }
+        TsSort.CANCELLED -> compareBy { it.cancelledCount }
+        TsSort.RETRIES -> compareBy { it.retryCount }
+        TsSort.AVG -> compareBy { it.avgDurationMs }
+        TsSort.MIN -> compareBy { it.minDurationMs }
+        TsSort.MAX -> compareBy { it.maxDurationMs }
+        TsSort.P95 -> compareBy { it.p95DurationMs }
+    }
+    val sorted = items.sortedWith(cmp)
+    return if (asc) sorted else sorted.reversed()
+}

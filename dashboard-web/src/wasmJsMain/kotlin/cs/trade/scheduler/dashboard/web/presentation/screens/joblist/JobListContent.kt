@@ -54,6 +54,8 @@ import com.arkivanov.decompose.extensions.compose.subscribeAsState
 import cs.trade.scheduler.core.frontend.theme.schedulerColors
 import cs.trade.scheduler.dashboard.web.presentation.components.PausedBadge
 import cs.trade.scheduler.dashboard.web.presentation.components.QueueHealthBadge
+import cs.trade.scheduler.dashboard.web.presentation.components.SortDirection
+import cs.trade.scheduler.dashboard.web.presentation.components.SortableHeaderCell
 import cs.trade.scheduler.dashboard.web.presentation.components.StateChip
 import cs.trade.scheduler.dashboard.web.presentation.components.timeAgo
 import cs.trade.scheduler.dashboard.web.presentation.components.DashboardPanel
@@ -61,6 +63,7 @@ import cs.trade.scheduler.dashboard.web.presentation.components.PageHeader
 import cs.trade.scheduler.dashboard.web.presentation.components.SettingsMenu
 import cs.trade.scheduler.dashboard.web.presentation.components.SkeletonBar
 import cs.trade.scheduler.dashboard.web.presentation.components.CopyableText
+import cs.trade.scheduler.shared.JobSortField
 import cs.trade.scheduler.shared.JobState
 import cs.trade.scheduler.shared.dto.BulkActionResponse
 import cs.trade.scheduler.shared.dto.JobView
@@ -168,6 +171,9 @@ public fun JobListContent(component: JobListComponent) {
                                     state.items.all { it.id in state.selectedIds },
                                 anySelected = state.selectedIds.isNotEmpty(),
                                 onToggleAll = component::onSelectAllVisibleClicked,
+                                sortBy = state.sortBy,
+                                sortAscending = state.sortAscending,
+                                onSort = component::onSortChanged,
                             )
                             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                             Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
@@ -512,7 +518,11 @@ private fun JobListHeader(
     allVisibleSelected: Boolean,
     anySelected: Boolean,
     onToggleAll: (Boolean) -> Unit,
+    sortBy: JobSortField?,
+    sortAscending: Boolean,
+    onSort: (JobSortField) -> Unit,
 ) {
+    val dir = if (sortAscending) SortDirection.ASC else SortDirection.DESC
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -530,14 +540,33 @@ private fun JobListHeader(
                 onClick = { onToggleAll(!allVisibleSelected) },
             )
         }
-        HeaderCell("State", Modifier.width(168.dp))
-        HeaderCell("Queue", Modifier.width(120.dp))
-        HeaderCell("Name", Modifier.weight(1f))
-        HeaderCell("Attempts", Modifier.width(80.dp))
-        HeaderCell("Started", Modifier.width(160.dp))
-        HeaderCell("Age", Modifier.width(160.dp))
+        SortHead("State", Modifier.width(168.dp), JobSortField.STATE, sortBy, dir, onSort)
+        SortHead("Queue", Modifier.width(120.dp), JobSortField.QUEUE, sortBy, dir, onSort)
+        SortHead("Name", Modifier.weight(1f), JobSortField.TYPE, sortBy, dir, onSort)
+        SortHead("Attempts", Modifier.width(80.dp), JobSortField.ATTEMPTS, sortBy, dir, onSort)
+        SortHead("Started", Modifier.width(160.dp), JobSortField.STARTED, sortBy, dir, onSort)
+        SortHead("Age", Modifier.width(160.dp), JobSortField.UPDATED, sortBy, dir, onSort)
+        // ID isn't a useful sort key — left as a plain label.
         HeaderCell("ID", Modifier.width(130.dp))
     }
+}
+
+@Composable
+private fun SortHead(
+    label: String,
+    modifier: Modifier,
+    field: JobSortField,
+    sortBy: JobSortField?,
+    direction: SortDirection,
+    onSort: (JobSortField) -> Unit,
+) {
+    SortableHeaderCell(
+        label = label,
+        modifier = modifier,
+        active = sortBy == field,
+        direction = direction,
+        onClick = { onSort(field) },
+    )
 }
 
 // Uppercase, tracked column label — matches the top-nav treatment.

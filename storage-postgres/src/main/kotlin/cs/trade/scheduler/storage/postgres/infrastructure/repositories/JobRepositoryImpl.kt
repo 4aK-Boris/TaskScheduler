@@ -17,6 +17,7 @@ import cs.trade.scheduler.storage.postgres.domain.repositories.JobRepository
 import cs.trade.scheduler.storage.postgres.infrastructure.tables.JobDependencyTable
 import cs.trade.scheduler.storage.postgres.infrastructure.tables.JobTable
 import cs.trade.scheduler.storage.postgres.infrastructure.toKotlinTime
+import cs.trade.scheduler.shared.JobSortField
 import cs.trade.scheduler.storage.postgres.infrastructure.toOffsetDateTimeUtc
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -26,6 +27,7 @@ import org.jetbrains.exposed.v1.core.and
 import org.jetbrains.exposed.v1.core.eq
 import org.jetbrains.exposed.v1.core.Op
 import org.jetbrains.exposed.v1.core.inList
+import org.jetbrains.exposed.v1.core.Expression
 import org.jetbrains.exposed.v1.core.greaterEq
 import org.jetbrains.exposed.v1.core.less
 import org.jetbrains.exposed.v1.core.lessEq
@@ -149,17 +151,33 @@ public class JobRepositoryImpl(
             val total = JobTable.selectAll().where(predicate).count()
 
             val offset = page.toLong() * size.toLong()
-            // Upcoming view → soonest-scheduled first; the default list → newest activity first.
-            val order = if (filter.scheduledWithinMinutes != null) JobTable.scheduledAt to SortOrder.ASC
-            else JobTable.updatedAt to SortOrder.DESC
+            // Upcoming view → soonest-scheduled first. Otherwise an operator-chosen column, falling
+            // back to newest-activity. `id` is a stable tiebreaker so paging is deterministic on ties.
+            val primary: Pair<Expression<*>, SortOrder> = when {
+                filter.scheduledWithinMinutes != null -> JobTable.scheduledAt to SortOrder.ASC
+                filter.sortBy != null ->
+                    sortColumn(filter.sortBy) to (if (filter.sortAscending) SortOrder.ASC else SortOrder.DESC)
+                else -> JobTable.updatedAt to SortOrder.DESC
+            }
             val items = JobTable.selectAll().where(predicate)
-                .orderBy(order)
+                .orderBy(primary, JobTable.id to SortOrder.ASC)
                 .limit(size)
                 .offset(offset)
                 .map { it.toJob() }
 
             PagedResult(items = items, total = total, page = page, size = size)
         }
+    }
+
+    private fun sortColumn(field: JobSortField): Expression<*> = when (field) {
+        JobSortField.CREATED -> JobTable.createdAt
+        JobSortField.UPDATED -> JobTable.updatedAt
+        JobSortField.STARTED -> JobTable.startedAt
+        JobSortField.ATTEMPTS -> JobTable.attempts
+        JobSortField.PRIORITY -> JobTable.priority
+        JobSortField.QUEUE -> JobTable.queue
+        JobSortField.TYPE -> JobTable.payloadType
+        JobSortField.STATE -> JobTable.state
     }
 
     override suspend fun insert(job: Job): Job = withContext(Dispatchers.IO) {

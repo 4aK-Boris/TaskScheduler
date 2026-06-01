@@ -2,6 +2,7 @@ package cs.trade.scheduler.dashboard.web.domain.repositories
 
 import cs.trade.scheduler.shared.CancelResult
 import cs.trade.scheduler.shared.DeleteResult
+import cs.trade.scheduler.shared.JobSortField
 import cs.trade.scheduler.shared.JobState
 import cs.trade.scheduler.shared.RerouteResult
 import cs.trade.scheduler.shared.RetryMode
@@ -29,6 +30,9 @@ public interface JobsRepository {
         attemptsExhausted: Boolean? = null,
         // "Upcoming" window: future-dated jobs scheduled within the next N minutes, soonest-first.
         scheduledWithinMinutes: Int? = null,
+        // Sort column + direction; null = server default (updated_at DESC).
+        sortBy: JobSortField? = null,
+        sortAscending: Boolean = false,
     ): ListJobsResponse
 
     public suspend fun detail(jobId: String): JobDetail?

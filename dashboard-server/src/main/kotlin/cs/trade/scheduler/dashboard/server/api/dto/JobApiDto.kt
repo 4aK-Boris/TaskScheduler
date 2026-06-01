@@ -27,6 +27,10 @@ public data class ListJobsQuery(
      * N minutes, soonest-first. `null` = no scheduling filter.
      */
     val scheduledWithinMinutes: Int?,
+    /** Sort column name (a `JobSortField`); `null` = default `updated_at DESC`. */
+    val sortBy: String?,
+    /** Sort direction — `true` = ascending. Only meaningful when [sortBy] is set. */
+    val sortAscending: Boolean,
 )
 
 /**

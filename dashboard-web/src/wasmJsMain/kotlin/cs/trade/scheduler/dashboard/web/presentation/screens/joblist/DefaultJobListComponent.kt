@@ -14,6 +14,7 @@ import cs.trade.scheduler.dashboard.web.domain.usecases.GetJobsListUseCase
 import cs.trade.scheduler.dashboard.web.domain.usecases.ListKnownTypesUseCase
 import cs.trade.scheduler.dashboard.web.domain.usecases.ListPausedTypesUseCase
 import cs.trade.scheduler.dashboard.web.domain.usecases.ListQueuesHealthUseCase
+import cs.trade.scheduler.shared.JobSortField
 import cs.trade.scheduler.shared.JobState
 import cs.trade.scheduler.shared.dto.BulkActionResponse
 import cs.trade.scheduler.shared.events.WebSocketEvent
@@ -148,6 +149,27 @@ public class DefaultJobListComponent(
         filterChangeSignal.tryEmit(Unit)
     }
 
+    override fun onSortChanged(field: JobSortField) {
+        _model.update { current ->
+            // Three clicks cycle: sort (natural default) → flip → back to the default
+            // (sortBy = null → server's updated_at DESC).
+            val (by, asc) = when {
+                current.sortBy != field -> field to defaultAscending(field)
+                current.sortAscending == defaultAscending(field) -> field to !current.sortAscending
+                else -> null to false
+            }
+            current.copy(sortBy = by, sortAscending = asc, selectedIds = emptySet(), page = 0)
+        }
+        saveFilter()
+        refresh()
+    }
+
+    // Text columns read best A→Z; time/count columns best newest/highest first.
+    private fun defaultAscending(field: JobSortField): Boolean = when (field) {
+        JobSortField.QUEUE, JobSortField.TYPE, JobSortField.STATE -> true
+        else -> false
+    }
+
     override fun onAutoRefreshChanged(seconds: Int?) {
         _model.update { it.copy(autoRefreshSeconds = seconds) }
         saveFilter()
@@ -250,6 +272,8 @@ public class DefaultJobListComponent(
                 page = current.page,
                 size = current.pageSize,
                 attemptsExhausted = dlqFilter,
+                sortBy = current.sortBy,
+                sortAscending = current.sortAscending,
             ).fold(
                 onSuccess = { resp ->
                     _model.update {
@@ -343,6 +367,8 @@ public class DefaultJobListComponent(
             pageSize = state.pageSize,
             autoRefreshSeconds = state.autoRefreshSeconds,
             ageAbsolute = state.ageAbsolute,
+            sortBy = state.sortBy?.name,
+            sortAscending = state.sortAscending,
         )
         BrowserStorage.save(FILTER_KEY, persistedJson.encodeToString(PersistedFilter.serializer(), snapshot))
     }
@@ -363,6 +389,8 @@ public class DefaultJobListComponent(
             pageSize = parsed.pageSize.coerceIn(1, MAX_PAGE_SIZE),
             autoRefreshSeconds = parsed.autoRefreshSeconds,
             ageAbsolute = parsed.ageAbsolute,
+            sortBy = parsed.sortBy?.let { runCatching { JobSortField.valueOf(it) }.getOrNull() },
+            sortAscending = parsed.sortAscending,
             loading = true,
         )
     }
@@ -377,6 +405,8 @@ public class DefaultJobListComponent(
         // Defaults so a filter snapshot persisted before these settings existed still parses.
         val autoRefreshSeconds: Int? = null,
         val ageAbsolute: Boolean = false,
+        val sortBy: String? = null,
+        val sortAscending: Boolean = false,
     )
 
     private companion object {
