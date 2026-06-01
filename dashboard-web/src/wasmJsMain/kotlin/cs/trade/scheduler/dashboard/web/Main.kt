@@ -3,6 +3,8 @@ package cs.trade.scheduler.dashboard.web
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.window.ComposeViewport
 import com.arkivanov.decompose.DefaultComponentContext
+import com.arkivanov.decompose.ExperimentalDecomposeApi
+import com.arkivanov.decompose.router.stack.webhistory.DefaultWebHistoryController
 import com.arkivanov.essenty.lifecycle.LifecycleRegistry
 import cs.trade.scheduler.dashboard.web.data.connection.ConnectionStatusStore
 import cs.trade.scheduler.dashboard.web.data.connection.EventStream
@@ -60,7 +62,7 @@ import kotlinx.coroutines.SupervisorJob
 // Wasm entry point. Composition root: hand-wires repositories and UseCases, then hands
 // them to DefaultRootComponent. No DI container in the browser bundle to keep the wasm
 // output small and the wiring obvious.
-@OptIn(ExperimentalComposeUiApi::class)
+@OptIn(ExperimentalComposeUiApi::class, ExperimentalDecomposeApi::class)
 fun main() {
     val lifecycle = LifecycleRegistry()
 
@@ -82,6 +84,11 @@ fun main() {
     val eventStream = EventStream(connectionStatus)
     val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     eventStream.start(appScope)
+
+    // Browser address-bar sync + Back/Forward. The deep link is the path the page loaded at
+    // (e.g. "/jobs/{id}" after a reload or a shared link); the root uses it for the initial stack.
+    val webHistory = DefaultWebHistoryController()
+    val deepLink = window.location.pathname
 
     val root = DefaultRootComponent(
         componentContext = DefaultComponentContext(lifecycle = lifecycle),
@@ -109,6 +116,8 @@ fun main() {
         listTypeStats = ListTypeStatsUseCase(typeStatsRepository),
         eventStream = eventStream,
         connectionStatus = connectionStatus,
+        webHistoryController = webHistory,
+        deepLinkPath = deepLink,
     )
 
     ComposeViewport(document.body!!) {
