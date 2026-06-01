@@ -10,6 +10,7 @@ import cs.trade.scheduler.dashboard.web.data.persistence.BrowserStorage
 import cs.trade.scheduler.dashboard.web.domain.usecases.DisableRecurringJobUseCase
 import cs.trade.scheduler.dashboard.web.domain.usecases.EnableRecurringJobUseCase
 import cs.trade.scheduler.dashboard.web.domain.usecases.ListRecurringJobsUseCase
+import cs.trade.scheduler.dashboard.web.domain.usecases.TriggerRecurringJobUseCase
 import cs.trade.scheduler.shared.events.WebSocketEvent
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
@@ -24,8 +25,11 @@ public class DefaultRecurringListComponent(
     private val listUseCase: ListRecurringJobsUseCase,
     private val enableUseCase: EnableRecurringJobUseCase,
     private val disableUseCase: DisableRecurringJobUseCase,
+    private val triggerUseCase: TriggerRecurringJobUseCase,
     private val events: EventStream,
     private val onBack: () -> Unit,
+    /** Output: parent should push the JobDetail screen for the job a manual trigger created. */
+    private val onNavigateToJob: (jobId: String) -> Unit,
 ) : BaseComponent(componentContext), RecurringListComponent {
 
     private val _model = MutableValue(
@@ -86,6 +90,24 @@ public class DefaultRecurringListComponent(
             // Refresh the list to pick up the new enabled state.
             refresh(keepLoadingFlag = false)
             _model.update { it.copy(togglingId = null) }
+        }
+    }
+
+    override fun onRunNowClicked(id: String) {
+        if (_model.value.triggeringId != null) return
+        _model.update { it.copy(triggeringId = id, error = null) }
+        scope.launch {
+            triggerUseCase(id).fold(
+                onSuccess = { jobId ->
+                    _model.update { it.copy(triggeringId = null) }
+                    // jobId == null means the definition vanished between list and click (404).
+                    if (jobId != null) onNavigateToJob(jobId)
+                    else _model.update { it.copy(error = "Recurring '$id' not found") }
+                },
+                onFailure = { t ->
+                    _model.update { it.copy(triggeringId = null, error = t.message ?: "Trigger failed") }
+                },
+            )
         }
     }
 

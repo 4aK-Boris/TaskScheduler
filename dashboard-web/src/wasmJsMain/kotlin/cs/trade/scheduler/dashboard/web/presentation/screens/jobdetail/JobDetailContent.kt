@@ -579,7 +579,7 @@ private fun eventColor(type: String): Color = type.uppercase().let { t ->
 @Composable
 private fun ActionsPanel(component: JobDetailComponent, m: JobDetailComponent.Model, job: JobView) {
     Panel("Actions") {
-        val busy = m.cancelling || m.retrying || m.deleting || m.rerouting
+        val busy = m.cancelling || m.retrying || m.deleting || m.rerouting || m.rerunning
         val errorColors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
 
         if (!job.state.isTerminal) {
@@ -619,6 +619,18 @@ private fun ActionsPanel(component: JobDetailComponent, m: JobDetailComponent.Mo
             Box(modifier = Modifier.animateContentSize()) {
                 if (m.rerouteFormOpen) RerouteForm(component, m)
             }
+        }
+
+        // Re-run — clone this job into a fresh ENQUEUED one. Terminal-only in the UI (re-running
+        // an in-flight job would just create a duplicate); the backend allows any state. On
+        // success the component navigates to the new job, so there's no result banner here.
+        if (job.state.isTerminal) {
+            OutlinedButton(
+                onClick = component::onRerunClicked,
+                enabled = !busy,
+                shape = MaterialTheme.shapes.small,
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text(if (m.rerunning) "Re-running…" else "Re-run") }
         }
 
         // Delete — terminal-only, two-step inline confirm.

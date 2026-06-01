@@ -4,6 +4,7 @@ import cs.trade.scheduler.core.frontend.api.ApiClient
 import cs.trade.scheduler.dashboard.web.domain.repositories.RecurringRepository
 import cs.trade.scheduler.shared.dto.ListRecurringJobsResponse
 import cs.trade.scheduler.shared.dto.RecurringJobDto
+import cs.trade.scheduler.shared.dto.TriggerRecurringResponse
 import io.ktor.client.call.body
 import io.ktor.client.request.get
 import io.ktor.client.request.post
@@ -31,6 +32,17 @@ public class RecurringRepositoryImpl : RecurringRepository {
         return when (resp.status) {
             HttpStatusCode.NotFound -> false
             else -> resp.status.isSuccess()
+        }
+    }
+
+    override suspend fun trigger(id: String): String? {
+        val resp = ApiClient.http.post("$BASE/$id/trigger")
+        return when (resp.status) {
+            HttpStatusCode.NotFound -> null
+            else -> {
+                require(resp.status.isSuccess()) { "HTTP ${resp.status.value} ${resp.status.description}" }
+                resp.body<TriggerRecurringResponse>().jobId
+            }
         }
     }
 

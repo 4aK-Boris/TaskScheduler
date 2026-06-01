@@ -589,6 +589,107 @@ public class DefaultScheduler(
         return RerouteResult.CONFLICT
     }
 
+    override suspend fun triggerRecurringNow(id: String): Uuid? {
+        // Read the definition with its own txn (matching cancel()'s findById style). The stored
+        // payload was serialised by the app at registration, so it's reused verbatim — no Job
+        // object, no re-serialisation. Schedule fields are deliberately NOT touched.
+        val row = storage.recurringJobs.findById(id) ?: return null
+        return enqueueStored(
+            payloadType = row.payloadType,
+            payloadJson = row.payloadJson,
+            queue = row.queue,
+            priority = row.priority,
+            targetNode = row.targetNode,
+            targetTag = row.targetTag,
+            timeoutSeconds = row.timeoutSeconds,
+        )
+    }
+
+    override suspend fun rerun(sourceJobId: Uuid): Uuid? {
+        val src = storage.jobs.findById(sourceJobId) ?: return null
+        return enqueueStored(
+            payloadType = src.payloadType,
+            payloadJson = src.payloadJson,
+            queue = src.queue,
+            priority = src.priority.value,
+            targetNode = src.targetNode,
+            targetTag = src.targetTag,
+            timeoutSeconds = src.timeoutSeconds,
+        )
+    }
+
+    /**
+     * Insert a fresh ENQUEUED job + outbox row from an already-serialised payload — the shared
+     * tail of [triggerRecurringNow] and [rerun]. Mirrors [enqueue] (same txn: job row + outbox
+     * row + CREATED audit, then the JobCreated WS event) but skips the kotlinx-serialization
+     * round-trip: the stored `payload_json` is known-good, so we pass it through as-is. The new
+     * job always gets a clean attempt budget ([SchedulerCoreConfig.defaultMaxAttempts]).
+     */
+    private suspend fun enqueueStored(
+        payloadType: String,
+        payloadJson: String,
+        queue: String,
+        priority: Int,
+        targetNode: String?,
+        targetTag: String?,
+        timeoutSeconds: Int?,
+    ): Uuid {
+        val jobId = Uuid.random()
+        val routingKey = when {
+            targetNode != null -> "node.$targetNode"
+            targetTag != null -> "tag.$targetTag"
+            else -> queue
+        }
+        val now = Clock.System.now()
+        val row = JobRow(
+            id = jobId,
+            state = JobState.ENQUEUED,
+            queue = queue,
+            priority = JobPriority(priority),
+            payloadType = payloadType,
+            payloadJson = payloadJson,
+            scheduledAt = null,
+            attempts = 0,
+            maxAttempts = config.defaultMaxAttempts,
+            timeoutSeconds = timeoutSeconds,
+            lockedBy = null,
+            lockedUntil = null,
+            pendingDeps = 0,
+            version = 0,
+            idempotencyKey = null,
+            targetNode = targetNode,
+            targetTag = targetTag,
+            progress = null,
+            progressMsg = null,
+            progressUpdatedAt = null,
+            startedAt = null,
+            durationMs = null,
+            cancelRequestedAt = null,
+            cancelRequestedBy = null,
+            contextJson = null,
+            createdAt = now,
+            updatedAt = now,
+        )
+        withContext(Dispatchers.IO) {
+            suspendTransaction(db = database) {
+                storage.jobs.insert(row)
+                storage.outbox.insert(
+                    NewOutboxEntry(jobId = jobId, routingKey = routingKey, priority = priority, delayMs = 0),
+                )
+                recordCreated(jobId, newState = JobState.ENQUEUED)
+            }
+        }
+        eventBus.publish(
+            WebSocketEvent.JobCreated(
+                id = jobId.toString(),
+                queue = queue,
+                type = payloadType,
+                at = Clock.System.now(),
+            ),
+        )
+        return jobId
+    }
+
     override suspend fun enqueueFunctionRef(
         method: KFunction<*>,
         args: List<Any?>,

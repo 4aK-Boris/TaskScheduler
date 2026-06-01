@@ -14,3 +14,10 @@ public data class ToggleRecurringResponse(
     val id: String,
     val enabled: Boolean,
 )
+
+// Manual "Run now": the recurring id that fired + the id of the one-off job it created.
+@Serializable
+public data class TriggerRecurringResponse(
+    val id: String,
+    val jobId: String,
+)

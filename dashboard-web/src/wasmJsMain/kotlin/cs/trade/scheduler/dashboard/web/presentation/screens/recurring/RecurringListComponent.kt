@@ -8,6 +8,9 @@ public interface RecurringListComponent {
 
     public fun onRefreshClicked()
     public fun onToggleClicked(id: String, enable: Boolean)
+
+    /** "Run now": fire the definition once off-schedule, then jump to the created job's detail. */
+    public fun onRunNowClicked(id: String)
     public fun onBackClicked()
 
     /** Next/Last columns: `false` = relative ("2h ago"), `true` = absolute clock ("14:30:05"). */
@@ -21,6 +24,8 @@ public interface RecurringListComponent {
         val loading: Boolean = false,
         val error: String? = null,
         val togglingId: String? = null,
+        /** Id of the row whose "Run now" is in flight — disables that row's Run button. */
+        val triggeringId: String? = null,
         val ageAbsolute: Boolean = false,
         val autoRefreshSeconds: Int? = null,
     )

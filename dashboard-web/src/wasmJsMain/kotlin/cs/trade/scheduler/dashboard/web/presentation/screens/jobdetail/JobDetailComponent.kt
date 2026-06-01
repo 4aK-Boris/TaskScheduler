@@ -25,6 +25,8 @@ public interface JobDetailComponent {
     public fun onRetryClicked()
     /** "Retry +1" — re-run once more without resetting the attempt budget (DESIGN.md 9.5). */
     public fun onRetryOnceClicked()
+    /** "Re-run" — enqueue a fresh copy of this job (any state), then jump to the new job's detail. */
+    public fun onRerunClicked()
     public fun onDeleteClicked()
     public fun onDeleteConfirmCancelled()
     public fun onNeighbourClicked(jobId: String)
@@ -50,6 +52,7 @@ public interface JobDetailComponent {
         val cancelling: Boolean = false,
         val retryResult: RetryResult? = null,
         val retrying: Boolean = false,
+        val rerunning: Boolean = false,
         val deleteResult: DeleteResult? = null,
         val deleting: Boolean = false,
         /** First click on Delete arms the confirm; second click actually deletes. */

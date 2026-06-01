@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -47,10 +48,10 @@ import kotlin.time.Clock
 import kotlin.time.Duration
 import kotlin.time.Instant
 
-// Fixed columns (640) + floors for the two flexible columns (ID weight 2, Payload weight 1). ID
-// carries the long namespaced keys (marketplace.market_csgo.update_…), so it gets the bigger share
-// and grows with the screen; above this width the table fills the panel, below it the operator pans.
-private val TABLE_MIN_WIDTH = 1150.dp
+// Fixed columns (640 + 96 Actions) + floors for the two flexible columns (ID weight 2, Payload
+// weight 1). ID carries the long namespaced keys (marketplace.market_csgo.update_…), so it gets the
+// bigger share and grows with the screen; above this width the table fills the panel, below it pans.
+private val TABLE_MIN_WIDTH = 1260.dp
 
 @Composable
 public fun RecurringListContent(component: RecurringListComponent) {
@@ -98,8 +99,11 @@ public fun RecurringListContent(component: RecurringListComponent) {
                                         RecurringRow(
                                             job = row,
                                             busy = state.togglingId == row.id,
+                                            triggering = state.triggeringId == row.id,
+                                            runEnabled = state.triggeringId == null,
                                             ageAbsolute = state.ageAbsolute,
                                             onToggle = { enable -> component.onToggleClicked(row.id, enable) },
+                                            onRun = { component.onRunNowClicked(row.id) },
                                         )
                                         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                                     }
@@ -129,6 +133,7 @@ private fun RecurringHeader() {
         HeaderCell("Next", Modifier.width(130.dp))
         HeaderCell("Last", Modifier.width(130.dp))
         HeaderCell("Status", Modifier.width(120.dp))
+        HeaderCell("Run", Modifier.width(96.dp))
     }
 }
 
@@ -146,8 +151,11 @@ private fun HeaderCell(label: String, modifier: Modifier) {
 private fun RecurringRow(
     job: RecurringJobDto,
     busy: Boolean,
+    triggering: Boolean,
+    runEnabled: Boolean,
     ageAbsolute: Boolean,
     onToggle: (Boolean) -> Unit,
+    onRun: () -> Unit,
 ) {
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
@@ -199,6 +207,16 @@ private fun RecurringRow(
                 onCheckedChange = { onToggle(it) },
                 enabled = !busy,
             )
+        }
+        Box(modifier = Modifier.width(96.dp), contentAlignment = Alignment.CenterStart) {
+            // Manual one-off fire — independent of the enabled switch, so even a paused
+            // definition can be run on demand.
+            OutlinedButton(
+                onClick = onRun,
+                enabled = runEnabled,
+                shape = MaterialTheme.shapes.small,
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+            ) { Text(if (triggering) "Running…" else "Run") }
         }
     }
 }
