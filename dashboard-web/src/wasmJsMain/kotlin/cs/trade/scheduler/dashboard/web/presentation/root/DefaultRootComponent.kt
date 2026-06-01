@@ -2,12 +2,14 @@ package cs.trade.scheduler.dashboard.web.presentation.root
 
 import com.arkivanov.decompose.ComponentContext
 import com.arkivanov.decompose.DelicateDecomposeApi
+import com.arkivanov.decompose.ExperimentalDecomposeApi
 import com.arkivanov.decompose.router.stack.ChildStack
 import com.arkivanov.decompose.router.stack.StackNavigation
 import com.arkivanov.decompose.router.stack.childStack
 import com.arkivanov.decompose.router.stack.pop
 import com.arkivanov.decompose.router.stack.push
 import com.arkivanov.decompose.router.stack.replaceAll
+import com.arkivanov.decompose.router.stack.webhistory.WebHistoryController
 import com.arkivanov.decompose.value.MutableValue
 import com.arkivanov.decompose.value.Value
 import com.arkivanov.decompose.value.update
@@ -51,7 +53,8 @@ import cs.trade.scheduler.dashboard.web.presentation.screens.workers.DefaultWork
 // container at runtime; the Root passes everything down explicitly.
 // push/replaceCurrent are @DelicateDecomposeApi (pushing a duplicate config is the caller's
 // responsibility) — we accept that here intentionally; pushNew would throw on a repeat JobDetail.
-@OptIn(DelicateDecomposeApi::class)
+// WebHistoryController is @ExperimentalDecomposeApi (browser address-bar sync — wasm only).
+@OptIn(DelicateDecomposeApi::class, ExperimentalDecomposeApi::class)
 public class DefaultRootComponent(
     componentContext: ComponentContext,
     private val getJobsList: GetJobsListUseCase,
@@ -78,6 +81,12 @@ public class DefaultRootComponent(
     private val listTypeStats: ListTypeStatsUseCase,
     private val eventStream: EventStream,
     connectionStatus: ConnectionStatusStore,
+    // Web-history integration (wasm only): mirrors the stack into the address bar and lets the
+    // browser Back/Forward buttons drive navigation. Null in tests / non-web hosts.
+    private val webHistoryController: WebHistoryController? = null,
+    // window.location.pathname at startup — used to deep-link the initial stack on first load
+    // (and on a full reload), so /jobs/{id} reopens the detail with the list underneath it.
+    deepLinkPath: String? = null,
 ) : BaseComponent(componentContext), RootComponent {
 
     private val navigation = StackNavigation<RootComponent.Config>()
@@ -85,7 +94,7 @@ public class DefaultRootComponent(
     override val stack: Value<ChildStack<RootComponent.Config, RootComponent.Child>> = childStack(
         source = navigation,
         serializer = RootComponent.Config.serializer(),
-        initialConfiguration = RootComponent.Config.JobList,
+        initialStack = { buildInitialStack(deepLinkPath) },
         handleBackButton = true,
         childFactory = ::createChild,
     )
@@ -95,6 +104,19 @@ public class DefaultRootComponent(
     // Dark mode: localStorage > OS preference > false. Toggling persists for survive-reload.
     private val _isDarkTheme: MutableValue<Boolean> = MutableValue(initialDarkPreference())
     override val isDarkTheme: Value<Boolean> = _isDarkTheme
+
+    init {
+        // Sync the stack with browser history. The controller diffs the stack on every change
+        // and pushes/pops/replaces address-bar entries to match, and drives the navigator when
+        // the user hits Back/Forward. No-op when no controller was supplied (tests).
+        webHistoryController?.attach(
+            navigator = navigation,
+            stack = stack,
+            serializer = RootComponent.Config.serializer(),
+            getPath = ::getPathForConfig,
+            getConfiguration = ::getConfigForPath,
+        )
+    }
 
     override fun onToggleTheme() {
         _isDarkTheme.update { current ->
@@ -134,6 +156,48 @@ public class DefaultRootComponent(
     override fun onNavigateToWorkers() = navigation.replaceAll(RootComponent.Config.Workers)
     override fun onNavigateToTypes() = navigation.replaceAll(RootComponent.Config.Types)
     override fun onNavigateToTypeStats() = navigation.replaceAll(RootComponent.Config.TypeStats)
+
+    // ---- web-history mapping (config <-> URL path) ---------------------------------------------
+    // JobList is the root "/" so a fresh load doesn't rewrite the bar to "/jobs". A JobDetail is a
+    // child of the list ("/jobs/{id}"), so a deep-linked reload restores [JobList, JobDetail] and
+    // Back returns to the list rather than dead-ending.
+
+    private fun getPathForConfig(config: RootComponent.Config): String = when (config) {
+        RootComponent.Config.JobList -> "/"
+        is RootComponent.Config.JobDetail -> "/jobs/${config.jobId}"
+        RootComponent.Config.RecurringList -> "/recurring"
+        RootComponent.Config.Stats -> "/stats"
+        RootComponent.Config.Workers -> "/workers"
+        RootComponent.Config.Types -> "/types"
+        RootComponent.Config.TypeStats -> "/type-stats"
+    }
+
+    private fun getConfigForPath(path: String): RootComponent.Config {
+        val segments = path.trim('/').split('/').filter { it.isNotEmpty() }
+        return when (segments.firstOrNull()) {
+            // "/jobs" → list, "/jobs/{id}" → that job's detail.
+            "jobs" -> segments.getOrNull(1)
+                ?.let { RootComponent.Config.JobDetail(it) }
+                ?: RootComponent.Config.JobList
+            "recurring" -> RootComponent.Config.RecurringList
+            "stats" -> RootComponent.Config.Stats
+            "workers" -> RootComponent.Config.Workers
+            "types" -> RootComponent.Config.Types
+            "type-stats" -> RootComponent.Config.TypeStats
+            // Root "/" and anything unrecognised land on the job list.
+            else -> RootComponent.Config.JobList
+        }
+    }
+
+    private fun buildInitialStack(deepLinkPath: String?): List<RootComponent.Config> {
+        val target = deepLinkPath?.let(::getConfigForPath) ?: RootComponent.Config.JobList
+        // A job detail sits on top of the list so Back has somewhere to go after a deep link.
+        return if (target is RootComponent.Config.JobDetail) {
+            listOf(RootComponent.Config.JobList, target)
+        } else {
+            listOf(target)
+        }
+    }
 
     private companion object {
         const val DARK_KEY = "dashboard.dark"
