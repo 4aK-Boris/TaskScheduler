@@ -6,6 +6,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
@@ -38,7 +39,7 @@ public fun SettingsMenu(
     relativeLabel: String,
     timeAbsolute: Boolean,
     onTimeModeChanged: (Boolean) -> Unit,
-    absoluteLabel: String = "Absolute (14:30:05)",
+    absoluteLabel: String = "Absolute (DD.MM.YYYY HH:mm:ss)",
 ) {
     var open by remember { mutableStateOf(false) }
     Box {
@@ -54,7 +55,9 @@ public fun SettingsMenu(
                 else MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+        // Fixed width so the longest item — "Absolute (DD.MM.YYYY HH:mm:ss)" — sits on one line
+        // (the menu otherwise shrink-wraps to a width that wraps that label).
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }, modifier = Modifier.width(300.dp)) {
             MenuSectionLabel("Auto-refresh")
             listOf<Pair<String, Int?>>(
                 "Off" to null, "5 seconds" to 5, "10 seconds" to 10, "30 seconds" to 30, "1 minute" to 60,
@@ -68,12 +71,12 @@ public fun SettingsMenu(
             HorizontalDivider()
             MenuSectionLabel(timeSectionLabel)
             DropdownMenuItem(
-                text = { Text(relativeLabel, style = MaterialTheme.typography.bodyMedium) },
+                text = { Text(relativeLabel, style = MaterialTheme.typography.bodyMedium, maxLines = 1, softWrap = false) },
                 onClick = { onTimeModeChanged(false); open = false },
                 leadingIcon = { CheckMark(selected = !timeAbsolute) },
             )
             DropdownMenuItem(
-                text = { Text(absoluteLabel, style = MaterialTheme.typography.bodyMedium) },
+                text = { Text(absoluteLabel, style = MaterialTheme.typography.bodyMedium, maxLines = 1, softWrap = false) },
                 onClick = { onTimeModeChanged(true); open = false },
                 leadingIcon = { CheckMark(selected = timeAbsolute) },
             )

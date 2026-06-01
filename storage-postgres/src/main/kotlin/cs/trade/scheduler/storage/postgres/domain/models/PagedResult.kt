@@ -29,4 +29,10 @@ public data class JobListFilter(
     val queue: String? = null,
     val payloadType: String? = null,
     val attemptsExhausted: Boolean? = null,
+    /**
+     * "Upcoming" window: when set, restrict to rows whose `scheduled_at` falls in
+     * `[now, now + scheduledWithinMinutes]` (future-dated, not-yet-run jobs) and order them
+     * soonest-first. `null` = no scheduling filter (the default `updated_at DESC` order applies).
+     */
+    val scheduledWithinMinutes: Int? = null,
 )

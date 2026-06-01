@@ -9,6 +9,7 @@ import cs.trade.scheduler.dashboard.web.presentation.screens.recurring.Recurring
 import cs.trade.scheduler.dashboard.web.presentation.screens.stats.StatsComponent
 import cs.trade.scheduler.dashboard.web.presentation.screens.types.TypesComponent
 import cs.trade.scheduler.dashboard.web.presentation.screens.typesstats.TypeStatsComponent
+import cs.trade.scheduler.dashboard.web.presentation.screens.upcoming.UpcomingComponent
 import cs.trade.scheduler.dashboard.web.presentation.screens.workers.WorkersComponent
 import kotlinx.serialization.Serializable
 
@@ -25,6 +26,7 @@ public interface RootComponent {
     public fun onBackClicked()
     public fun onNavigateToJobs()
     public fun onNavigateToRecurring()
+    public fun onNavigateToUpcoming()
     public fun onNavigateToStats()
     public fun onNavigateToWorkers()
     public fun onNavigateToTypes()
@@ -38,6 +40,7 @@ public interface RootComponent {
         public class JobList(public val component: JobListComponent) : Child
         public class JobDetail(public val component: JobDetailComponent) : Child
         public class RecurringList(public val component: RecurringListComponent) : Child
+        public class Upcoming(public val component: UpcomingComponent) : Child
         public class Stats(public val component: StatsComponent) : Child
         public class Workers(public val component: WorkersComponent) : Child
         public class Types(public val component: TypesComponent) : Child
@@ -54,6 +57,9 @@ public interface RootComponent {
 
         @Serializable
         public data object RecurringList : Config
+
+        @Serializable
+        public data object Upcoming : Config
 
         @Serializable
         public data object Stats : Config

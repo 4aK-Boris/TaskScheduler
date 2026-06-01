@@ -45,6 +45,7 @@ public class JobsRepositoryImpl : JobsRepository {
         page: Int,
         size: Int,
         attemptsExhausted: Boolean?,
+        scheduledWithinMinutes: Int?,
     ): ListJobsResponse {
         val resp = ApiClient.http.get(JOBS_PATH) {
             states.forEach { parameter("state", it.name) }
@@ -53,6 +54,7 @@ public class JobsRepositoryImpl : JobsRepository {
             parameter("page", page)
             parameter("size", size)
             attemptsExhausted?.let { parameter("attemptsExhausted", it.toString()) }
+            scheduledWithinMinutes?.let { parameter("scheduledWithinMinutes", it.toString()) }
         }
         return resp.expectSuccess().body()
     }

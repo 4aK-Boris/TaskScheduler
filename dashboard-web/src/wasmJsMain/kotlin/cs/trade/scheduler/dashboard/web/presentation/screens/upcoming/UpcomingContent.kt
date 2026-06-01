@@ -1,6 +1,7 @@
-package cs.trade.scheduler.dashboard.web.presentation.screens.recurring
+package cs.trade.scheduler.dashboard.web.presentation.screens.upcoming
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -12,7 +13,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -20,10 +20,12 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -36,52 +38,49 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.arkivanov.decompose.extensions.compose.subscribeAsState
+import cs.trade.scheduler.dashboard.web.presentation.components.CopyableText
 import cs.trade.scheduler.dashboard.web.presentation.components.DashboardPanel
 import cs.trade.scheduler.dashboard.web.presentation.components.PageHeader
 import cs.trade.scheduler.dashboard.web.presentation.components.SettingsMenu
 import cs.trade.scheduler.dashboard.web.presentation.components.SkeletonBar
-import cs.trade.scheduler.dashboard.web.presentation.components.CopyableText
+import cs.trade.scheduler.dashboard.web.presentation.components.StateChip
 import cs.trade.scheduler.dashboard.web.presentation.components.formatDateTime
-import cs.trade.scheduler.dashboard.web.presentation.components.timeAgo
-import cs.trade.scheduler.shared.dto.RecurringJobDto
-import kotlin.time.Clock
-import kotlin.time.Duration
-import kotlin.time.Instant
+import cs.trade.scheduler.dashboard.web.presentation.components.timeUntil
+import cs.trade.scheduler.shared.dto.JobView
 
-// Fixed columns (700 + 96 Actions) + floors for the two flexible columns (ID weight 2, Payload
-// weight 1). Next/Last are 160 to fit the full absolute "DD.MM.YYYY HH:mm:ss". ID carries the long
-// namespaced keys, so it gets the bigger share; above this width the table fills the panel, below pans.
-private val TABLE_MIN_WIDTH = 1320.dp
+// Fixed columns (scheduled 160 + state 140 + queue 120 + id 130 = 550) + a floor for the flexible
+// Name column. Above this the table fills the panel; below it the operator pans horizontally.
+private val TABLE_MIN_WIDTH = 900.dp
 
 @Composable
-public fun RecurringListContent(component: RecurringListComponent) {
+public fun UpcomingContent(component: UpcomingComponent) {
     val state by component.model.subscribeAsState()
     Column(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-        PageHeader(title = "Recurring", count = state.items.size.toLong()) {
+        PageHeader(title = "Upcoming", count = state.items.size.toLong()) {
+            WindowSegments(current = state.windowMinutes, onSelected = component::onWindowChanged)
             SettingsMenu(
                 autoRefreshSeconds = state.autoRefreshSeconds,
                 onAutoRefreshChanged = component::onAutoRefreshChanged,
-                timeSectionLabel = "Next / Last columns",
-                relativeLabel = "Relative (2h ago)",
-                timeAbsolute = state.ageAbsolute,
-                onTimeModeChanged = component::onAgeModeChanged,
+                timeSectionLabel = "Scheduled column",
+                relativeLabel = "Relative (in 18m)",
+                timeAbsolute = state.timeAbsolute,
+                onTimeModeChanged = component::onTimeModeChanged,
             )
             OutlinedButton(onClick = component::onBackClicked, shape = MaterialTheme.shapes.small) { Text("Back") }
             OutlinedButton(onClick = component::onRefreshClicked, shape = MaterialTheme.shapes.small) { Text("Refresh") }
         }
         DashboardPanel {
             BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-                // Stretch to the panel width, but never below TABLE_MIN_WIDTH (then pan).
                 val tableWidth = maxOf(maxWidth, TABLE_MIN_WIDTH)
                 val scroll = rememberScrollState()
                 Box(modifier = Modifier.fillMaxSize().horizontalScroll(scroll)) {
                     Column(modifier = Modifier.width(tableWidth).fillMaxHeight()) {
-                        RecurringHeader()
+                        UpcomingHeader()
                         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                         Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
                             when {
                                 state.loading && state.items.isEmpty() ->
-                                    RecurringSkeleton(modifier = Modifier.align(Alignment.TopStart))
+                                    UpcomingSkeleton(modifier = Modifier.align(Alignment.TopStart))
                                 state.error != null -> Text(
                                     text = "Error: ${state.error}",
                                     color = MaterialTheme.colorScheme.error,
@@ -89,21 +88,17 @@ public fun RecurringListContent(component: RecurringListComponent) {
                                     modifier = Modifier.align(Alignment.Center).padding(24.dp),
                                 )
                                 state.items.isEmpty() -> Text(
-                                    text = "No recurring jobs registered",
+                                    text = "Nothing scheduled in the selected window",
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     style = MaterialTheme.typography.bodyMedium,
                                     modifier = Modifier.align(Alignment.Center).padding(24.dp),
                                 )
                                 else -> LazyColumn(modifier = Modifier.fillMaxSize()) {
                                     items(state.items, key = { it.id }) { row ->
-                                        RecurringRow(
+                                        UpcomingRow(
                                             job = row,
-                                            busy = state.togglingId == row.id,
-                                            triggering = state.triggeringId == row.id,
-                                            runEnabled = state.triggeringId == null,
-                                            ageAbsolute = state.ageAbsolute,
-                                            onToggle = { enable -> component.onToggleClicked(row.id, enable) },
-                                            onRun = { component.onRunNowClicked(row.id) },
+                                            timeAbsolute = state.timeAbsolute,
+                                            onClick = { component.onJobClicked(row.id) },
                                         )
                                         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                                     }
@@ -117,8 +112,25 @@ public fun RecurringListContent(component: RecurringListComponent) {
     }
 }
 
+// Look-ahead window picker. No "Off" — this screen is the upcoming view; the window only narrows it.
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun RecurringHeader() {
+private fun WindowSegments(current: Int, onSelected: (Int) -> Unit) {
+    val options: List<Pair<String, Int>> = listOf("1h" to 60, "6h" to 360, "24h" to 1440, "3d" to 4320)
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        options.forEach { (label, minutes) ->
+            FilterChip(
+                selected = current == minutes,
+                onClick = { onSelected(minutes) },
+                label = { Text(label) },
+                colors = FilterChipDefaults.filterChipColors(),
+            )
+        }
+    }
+}
+
+@Composable
+private fun UpcomingHeader() {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -126,14 +138,11 @@ private fun RecurringHeader() {
             .padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        HeaderCell("ID", Modifier.weight(2f))
-        HeaderCell("Cron", Modifier.width(150.dp))
-        HeaderCell("Queue", Modifier.width(110.dp))
-        HeaderCell("Payload", Modifier.weight(1f))
-        HeaderCell("Next", Modifier.width(160.dp))
-        HeaderCell("Last", Modifier.width(160.dp))
-        HeaderCell("Status", Modifier.width(120.dp))
-        HeaderCell("Run", Modifier.width(96.dp))
+        HeaderCell("Scheduled", Modifier.width(160.dp))
+        HeaderCell("State", Modifier.width(140.dp))
+        HeaderCell("Queue", Modifier.width(120.dp))
+        HeaderCell("Name", Modifier.weight(1f))
+        HeaderCell("ID", Modifier.width(130.dp))
     }
 }
 
@@ -148,108 +157,61 @@ private fun HeaderCell(label: String, modifier: Modifier) {
 }
 
 @Composable
-private fun RecurringRow(
-    job: RecurringJobDto,
-    busy: Boolean,
-    triggering: Boolean,
-    runEnabled: Boolean,
-    ageAbsolute: Boolean,
-    onToggle: (Boolean) -> Unit,
-    onRun: () -> Unit,
-) {
+private fun UpcomingRow(job: JobView, timeAbsolute: Boolean, onClick: () -> Unit) {
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
-    // Disabled rows read muted so the operator can scan which definitions are paused.
-    val fg = if (job.enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .hoverable(interaction)
+            .clickable(onClick = onClick)
             .background(if (hovered) MaterialTheme.colorScheme.surfaceContainerLow else Color.Transparent)
             .heightIn(min = 48.dp)
             .padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        CopyableText(
-            text = job.id,
+        // The agenda's headline value — when the job is due. Future → "in 18m"; absolute on toggle.
+        Text(
+            text = job.scheduledAt?.let { if (timeAbsolute) formatDateTime(it) else timeUntil(it) } ?: "—",
             style = MaterialTheme.typography.bodyMedium,
-            color = fg,
-            modifier = Modifier.weight(2f),
-        )
-        Text(
-            text = job.cron,
-            style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
-            color = fg,
-            modifier = Modifier.width(150.dp),
-        )
-        Text(job.queue, style = MaterialTheme.typography.bodyMedium, color = fg, modifier = Modifier.width(110.dp))
-        Text(
-            text = job.payloadType.substringAfterLast('.'),
-            style = MaterialTheme.typography.bodySmall,
-            color = fg,
-            modifier = Modifier.weight(1f),
-        )
-        Text(
-            text = if (ageAbsolute) formatDateTime(job.nextTriggerAt) else timeAgoOrSoon(job.nextTriggerAt),
-            style = MaterialTheme.typography.bodySmall,
-            color = fg,
             modifier = Modifier.width(160.dp),
         )
-        Text(
-            text = job.lastTriggeredAt?.let { if (ageAbsolute) formatDateTime(it) else timeAgo(it) } ?: "never",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.width(160.dp),
-        )
-        Box(modifier = Modifier.width(120.dp), contentAlignment = Alignment.CenterStart) {
-            Switch(
-                checked = job.enabled,
-                onCheckedChange = { onToggle(it) },
-                enabled = !busy,
+        Box(modifier = Modifier.width(140.dp)) { StateChip(job.state) }
+        Text(job.queue, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.width(120.dp))
+        Box(modifier = Modifier.weight(1f).padding(end = 16.dp)) {
+            CopyableText(
+                text = job.payloadType.substringAfterLast('.'),
+                copyValue = job.payloadType,
+                tooltip = job.payloadType,
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.fillMaxWidth(),
             )
         }
-        Box(modifier = Modifier.width(96.dp), contentAlignment = Alignment.CenterStart) {
-            // Manual one-off fire — independent of the enabled switch, so even a paused
-            // definition can be run on demand.
-            OutlinedButton(
-                onClick = onRun,
-                enabled = runEnabled,
-                shape = MaterialTheme.shapes.small,
-                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
-            ) { Text(if (triggering) "Running…" else "Run") }
-        }
+        Text(
+            text = job.id.take(8),
+            style = MaterialTheme.typography.bodySmall.copy(
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontFamily = FontFamily.Monospace,
+            ),
+            modifier = Modifier.width(130.dp),
+        )
     }
 }
 
 @Composable
-private fun RecurringSkeleton(modifier: Modifier = Modifier) {
+private fun UpcomingSkeleton(modifier: Modifier = Modifier) {
     Column(
         modifier = modifier.fillMaxWidth().padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         repeat(8) {
             Row(horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                SkeletonBar(200.dp)
                 SkeletonBar(120.dp)
                 SkeletonBar(90.dp)
-                SkeletonBar(240.dp)
                 SkeletonBar(90.dp)
+                SkeletonBar(220.dp)
                 SkeletonBar(90.dp)
             }
         }
     }
-}
-
-@Composable
-private fun timeAgoOrSoon(instant: Instant): String {
-    val now = Clock.System.now()
-    val delta = instant - now
-    return if (delta.isPositive()) "in ${formatDuration(delta)}" else timeAgo(instant, now)
-}
-
-private fun formatDuration(d: Duration): String = when {
-    d.inWholeMinutes < 1 -> "${d.inWholeSeconds}s"
-    d.inWholeHours < 1 -> "${d.inWholeMinutes}m"
-    d.inWholeDays < 1 -> "${d.inWholeHours}h"
-    else -> "${d.inWholeDays}d"
 }

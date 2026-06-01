@@ -74,6 +74,9 @@ private val MOCK_JOBS: List<JobView> = run {
         val hex = (0xC0FFEE00L + i * 977L).toString(16).takeLast(8).padStart(8, '0')
         val running = state == JobState.PROCESSING
         val counting = running && i % 3 == 0
+        // Started once a worker has picked it up; still null for ENQUEUED/SCHEDULED/AWAITING_DEPS.
+        val started = running ||
+            state == JobState.SUCCEEDED || state == JobState.FAILED || state == JobState.AWAITING_RETRY
         JobView(
             id = "$hex-1111-4111-8111-1111deadbeef",
             state = state,
@@ -90,6 +93,7 @@ private val MOCK_JOBS: List<JobView> = run {
             progressFailed = if (counting) (i % 4).toLong() else null,
             progressTotal = if (counting) i * 12L + 240 else null,
             durationMs = if (state == JobState.SUCCEEDED || state == JobState.FAILED) 120L + i * 37 else null,
+            startedAt = if (started) now - (i * 7 + 1).minutes else null,
             createdAt = now - (i * 7 + 3).minutes,
             updatedAt = now - (i + 1).minutes - (i % 5).seconds,
         )
@@ -116,12 +120,19 @@ public class MockJobsRepository : JobsRepository {
         page: Int,
         size: Int,
         attemptsExhausted: Boolean?,
+        scheduledWithinMinutes: Int?,
     ): ListJobsResponse {
         var rows = MOCK_JOBS
         if (states.isNotEmpty()) rows = rows.filter { it.state in states }
         if (!queue.isNullOrBlank()) rows = rows.filter { it.queue.contains(queue, ignoreCase = true) }
         if (!payloadType.isNullOrBlank()) rows = rows.filter { it.payloadType.contains(payloadType, ignoreCase = true) }
         if (attemptsExhausted == true) rows = rows.filter { it.attempts >= it.maxAttempts }
+        if (scheduledWithinMinutes != null) {
+            val now = Clock.System.now()
+            val upper = now + scheduledWithinMinutes.minutes
+            rows = rows.filter { r -> r.scheduledAt?.let { it >= now && it <= upper } == true }
+                .sortedBy { it.scheduledAt }
+        }
         val total = rows.size.toLong()
         val from = (page * size).coerceIn(0, rows.size)
         val to = (from + size).coerceIn(0, rows.size)

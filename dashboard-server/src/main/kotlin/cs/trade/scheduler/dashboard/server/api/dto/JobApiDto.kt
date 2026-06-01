@@ -22,6 +22,11 @@ public data class ListJobsQuery(
      * (`attempts >= max_attempts`). `null` = no filter on the attempts axis.
      */
     val attemptsExhausted: Boolean?,
+    /**
+     * "Upcoming" window in minutes: restrict to future-dated jobs scheduled within the next
+     * N minutes, soonest-first. `null` = no scheduling filter.
+     */
+    val scheduledWithinMinutes: Int?,
 )
 
 /**
