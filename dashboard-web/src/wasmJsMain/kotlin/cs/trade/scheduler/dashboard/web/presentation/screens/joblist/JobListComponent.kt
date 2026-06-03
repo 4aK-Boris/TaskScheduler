@@ -38,6 +38,9 @@ public interface JobListComponent {
     /** Age column: `false` = relative ("3m ago"), `true` = absolute wall-clock ("14:30:05"). */
     public fun onAgeModeChanged(absolute: Boolean)
 
+    /** When true, the list stays pinned to the top on each refresh so new rows don't push the view down. */
+    public fun onStickToTopChanged(enabled: Boolean)
+
     public fun onPrevPageClicked()
     public fun onNextPageClicked()
     public fun onPageSizeChanged(size: Int)
@@ -88,5 +91,8 @@ public interface JobListComponent {
         val autoRefreshSeconds: Int? = null,
         // Age column display: false = relative ("3m ago"), true = absolute clock ("14:30:05").
         val ageAbsolute: Boolean = false,
+        // Keep the list scrolled to the top on each refresh (new rows arrive at the top under the
+        // default newest-first sort) so the operator's view doesn't drift down. Off by default.
+        val stickToTop: Boolean = false,
     )
 }
