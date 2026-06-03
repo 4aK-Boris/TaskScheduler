@@ -181,6 +181,11 @@ public class DefaultJobListComponent(
         saveFilter()
     }
 
+    override fun onStickToTopChanged(enabled: Boolean) {
+        _model.update { it.copy(stickToTop = enabled) }
+        saveFilter()
+    }
+
     override fun onPrevPageClicked() {
         val current = _model.value
         if (current.page <= 0 || current.loading) return
@@ -369,6 +374,7 @@ public class DefaultJobListComponent(
             ageAbsolute = state.ageAbsolute,
             sortBy = state.sortBy?.name,
             sortAscending = state.sortAscending,
+            stickToTop = state.stickToTop,
         )
         BrowserStorage.save(FILTER_KEY, persistedJson.encodeToString(PersistedFilter.serializer(), snapshot))
     }
@@ -391,6 +397,7 @@ public class DefaultJobListComponent(
             ageAbsolute = parsed.ageAbsolute,
             sortBy = parsed.sortBy?.let { runCatching { JobSortField.valueOf(it) }.getOrNull() },
             sortAscending = parsed.sortAscending,
+            stickToTop = parsed.stickToTop,
             loading = true,
         )
     }
@@ -407,6 +414,7 @@ public class DefaultJobListComponent(
         val ageAbsolute: Boolean = false,
         val sortBy: String? = null,
         val sortAscending: Boolean = false,
+        val stickToTop: Boolean = false,
     )
 
     private companion object {

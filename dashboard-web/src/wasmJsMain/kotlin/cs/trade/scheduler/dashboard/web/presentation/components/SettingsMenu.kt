@@ -40,6 +40,10 @@ public fun SettingsMenu(
     timeAbsolute: Boolean,
     onTimeModeChanged: (Boolean) -> Unit,
     absoluteLabel: String = "Absolute (DD.MM.YYYY HH:mm:ss)",
+    // Optional "stick to top" toggle (Jobs only): when both are non-null a List section renders.
+    // Keeps the list pinned to the newest rows so an auto-refresh doesn't push your view down.
+    stickToTop: Boolean? = null,
+    onStickToTopChanged: ((Boolean) -> Unit)? = null,
 ) {
     var open by remember { mutableStateOf(false) }
     Box {
@@ -60,7 +64,8 @@ public fun SettingsMenu(
         DropdownMenu(expanded = open, onDismissRequest = { open = false }, modifier = Modifier.width(300.dp)) {
             MenuSectionLabel("Auto-refresh")
             listOf<Pair<String, Int?>>(
-                "Off" to null, "5 seconds" to 5, "10 seconds" to 10, "30 seconds" to 30, "1 minute" to 60,
+                "Off" to null, "1 second" to 1, "3 seconds" to 3, "5 seconds" to 5,
+                "10 seconds" to 10, "30 seconds" to 30, "1 minute" to 60,
             ).forEach { (label, secs) ->
                 DropdownMenuItem(
                     text = { Text(label, style = MaterialTheme.typography.bodyMedium) },
@@ -80,6 +85,23 @@ public fun SettingsMenu(
                 onClick = { onTimeModeChanged(true); open = false },
                 leadingIcon = { CheckMark(selected = timeAbsolute) },
             )
+            if (stickToTop != null && onStickToTopChanged != null) {
+                HorizontalDivider()
+                MenuSectionLabel("List")
+                DropdownMenuItem(
+                    text = {
+                        Text(
+                            "Stick to top on refresh",
+                            style = MaterialTheme.typography.bodyMedium,
+                            maxLines = 1,
+                            softWrap = false,
+                        )
+                    },
+                    // Toggle in place — leave the menu open so the operator sees the check flip.
+                    onClick = { onStickToTopChanged(!stickToTop) },
+                    leadingIcon = { CheckMark(selected = stickToTop) },
+                )
+            }
         }
     }
 }

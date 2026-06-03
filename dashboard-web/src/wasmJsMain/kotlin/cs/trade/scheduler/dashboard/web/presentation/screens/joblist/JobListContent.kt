@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
@@ -40,6 +41,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TriStateCheckbox
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -106,6 +108,8 @@ public fun JobListContent(component: JobListComponent) {
                 relativeLabel = "Relative (3m ago)",
                 timeAbsolute = state.ageAbsolute,
                 onTimeModeChanged = component::onAgeModeChanged,
+                stickToTop = state.stickToTop,
+                onStickToTopChanged = component::onStickToTopChanged,
             )
             OutlinedButton(onClick = component::onRefreshClicked, shape = MaterialTheme.shapes.small) {
                 Text("Refresh")
@@ -192,17 +196,27 @@ public fun JobListContent(component: JobListComponent) {
                                         style = MaterialTheme.typography.bodyMedium,
                                         modifier = Modifier.align(Alignment.Center).padding(24.dp),
                                     )
-                                    else -> LazyColumn(modifier = Modifier.fillMaxSize()) {
-                                        items(state.items, key = { it.id }) { row ->
-                                            JobRow(
-                                                job = row,
-                                                checked = row.id in state.selectedIds,
-                                                paused = row.payloadType in state.pausedTypes,
-                                                ageAbsolute = state.ageAbsolute,
-                                                onCheckedChange = { component.onJobChecked(row.id, it) },
-                                                onClick = { component.onJobClicked(row.id) },
-                                            )
-                                            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                                    else -> {
+                                        val listState = rememberLazyListState()
+                                        // "Stick to top": under the default newest-first sort a refresh / WS
+                                        // event inserts new rows above the current ones, drifting the view
+                                        // down. Keyed on the top row's id so it snaps back only when the head
+                                        // actually changes — not on every recomposition, and never when off.
+                                        LaunchedEffect(state.stickToTop, state.items.firstOrNull()?.id) {
+                                            if (state.stickToTop) listState.scrollToItem(0)
+                                        }
+                                        LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
+                                            items(state.items, key = { it.id }) { row ->
+                                                JobRow(
+                                                    job = row,
+                                                    checked = row.id in state.selectedIds,
+                                                    paused = row.payloadType in state.pausedTypes,
+                                                    ageAbsolute = state.ageAbsolute,
+                                                    onCheckedChange = { component.onJobChecked(row.id, it) },
+                                                    onClick = { component.onJobClicked(row.id) },
+                                                )
+                                                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                                            }
                                         }
                                     }
                                 }
