@@ -20,13 +20,16 @@ import cs.trade.scheduler.dashboard.server.domain.usecases.GetJobsListUseCase
 import cs.trade.scheduler.dashboard.server.domain.usecases.GetQueuesHealthUseCase
 import cs.trade.scheduler.dashboard.server.domain.usecases.GetStatsOverviewUseCase
 import cs.trade.scheduler.dashboard.server.domain.usecases.GetTypesStatsUseCase
+import cs.trade.scheduler.dashboard.server.domain.usecases.GetUpcomingUseCase
 import cs.trade.scheduler.dashboard.server.domain.usecases.ListJobTypePausesUseCase
 import cs.trade.scheduler.dashboard.server.domain.usecases.ListKnownPayloadTypesUseCase
 import cs.trade.scheduler.dashboard.server.domain.usecases.ListRecurringJobsUseCase
 import cs.trade.scheduler.dashboard.server.domain.usecases.ListWorkersUseCase
 import cs.trade.scheduler.dashboard.server.domain.usecases.PauseJobTypeUseCase
 import cs.trade.scheduler.dashboard.server.domain.usecases.RerouteJobUseCase
+import cs.trade.scheduler.dashboard.server.domain.usecases.RerunJobUseCase
 import cs.trade.scheduler.dashboard.server.domain.usecases.RetryJobUseCase
+import cs.trade.scheduler.dashboard.server.domain.usecases.TriggerRecurringJobUseCase
 import cs.trade.scheduler.dashboard.server.domain.usecases.UnpauseJobTypeUseCase
 import io.ktor.server.application.ApplicationCall
 import org.koin.core.module.Module
@@ -141,6 +144,7 @@ public fun schedulerDashboardModule(configure: SchedulerDashboardConfig.() -> Un
         singleOf(::GetJobDetailUseCase)
         singleOf(::CancelJobUseCase)
         singleOf(::RetryJobUseCase)
+        singleOf(::RerunJobUseCase)
         singleOf(::DeleteJobUseCase)
         singleOf(::RerouteJobUseCase)
         singleOf(::BulkRetryJobsUseCase)
@@ -149,6 +153,8 @@ public fun schedulerDashboardModule(configure: SchedulerDashboardConfig.() -> Un
         singleOf(::ListRecurringJobsUseCase)
         singleOf(::EnableRecurringJobUseCase)
         singleOf(::DisableRecurringJobUseCase)
+        singleOf(::TriggerRecurringJobUseCase)
+        singleOf(::GetUpcomingUseCase)
         singleOf(::GetStatsOverviewUseCase)
         singleOf(::GetTypesStatsUseCase)
         singleOf(::GetQueuesHealthUseCase)
