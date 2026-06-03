@@ -206,16 +206,22 @@ public fun JobListContent(component: JobListComponent) {
                                             if (state.stickToTop) listState.scrollToItem(0)
                                         }
                                         LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
+                                            // animateItem() fades new rows in and slides existing ones to
+                                            // their new spot instead of snapping — so jobs arriving at the
+                                            // top on refresh land smoothly. Keyed by id (above) so Compose
+                                            // can tell a genuine insert from a reorder.
                                             items(state.items, key = { it.id }) { row ->
-                                                JobRow(
-                                                    job = row,
-                                                    checked = row.id in state.selectedIds,
-                                                    paused = row.payloadType in state.pausedTypes,
-                                                    ageAbsolute = state.ageAbsolute,
-                                                    onCheckedChange = { component.onJobChecked(row.id, it) },
-                                                    onClick = { component.onJobClicked(row.id) },
-                                                )
-                                                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                                                Column(modifier = Modifier.animateItem()) {
+                                                    JobRow(
+                                                        job = row,
+                                                        checked = row.id in state.selectedIds,
+                                                        paused = row.payloadType in state.pausedTypes,
+                                                        ageAbsolute = state.ageAbsolute,
+                                                        onCheckedChange = { component.onJobChecked(row.id, it) },
+                                                        onClick = { component.onJobClicked(row.id) },
+                                                    )
+                                                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                                                }
                                             }
                                         }
                                     }
