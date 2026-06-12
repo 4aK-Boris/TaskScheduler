@@ -217,51 +217,55 @@ public class WorkerPool(
     }
 
     /**
-     * Graceful shutdown. Cancels Rabbit consumers (no new pickups), then waits up to
-     * [SchedulerWorkerConfig.shutdownTimeout] for in-flight `handler.execute` calls to
-     * finish naturally. After the deadline the internal scope is forcibly cancelled and
-     * any remaining handlers receive `CancellationException` at their next suspension
-     * point — pure-CPU / blocking handlers won't honour it, but SafetyNetPoller will
-     * recover their rows after [SchedulerWorkerConfig.lockDuration].
+     * Graceful shutdown, four phases:
+     *  1. **Quiesce** — [ConsumerHandle.stopDeliveries] on every consumer: the broker stops
+     *     pushing new messages, but channels and handler scopes stay alive so in-flight
+     *     deliveries can finish and ack normally.
+     *  2. **Drain** — wait up to [SchedulerWorkerConfig.shutdownTimeout] for [inFlight]
+     *     (pickup → finalize) to reach zero. Deliberately NOT a wait on the scope's children:
+     *     [internalScope] hosts eternal service loops (heartbeat / registry / cancel-listener /
+     *     tuners) that never complete — waiting on them burned the full timeout on every
+     *     shutdown even with zero jobs running. The heartbeat loop must stay alive here anyway,
+     *     extending PROCESSING locks while slow handlers finish.
+     *  3. **Teardown** — full [ConsumerHandle.cancel]: closes channels and cancels handler
+     *     scopes. Stragglers past the deadline get `CancellationException` at their next
+     *     suspension point — pure-CPU / blocking handlers won't honour it, but SafetyNetPoller
+     *     recovers their rows after [SchedulerWorkerConfig.lockDuration]. Then the internal
+     *     scope (service loops) is cancelled.
+     *  4. **Deregister** — delete this node's `worker` row. Strictly after the scope cancel:
+     *     WorkerRegistryLoop would otherwise re-upsert the row on its next tick.
      */
     public suspend fun stop() {
         mutex.withLock {
             val scope = internalScope
             log.info(
-                "WorkerPool stopping — cancelling {} consumer(s), grace={}",
-                consumers.size, workerConfig.shutdownTimeout,
+                "WorkerPool stopping — quiescing {} consumer(s), in-flight={}, drain grace={}",
+                consumers.size, inFlight.total(), workerConfig.shutdownTimeout,
             )
-            // Step 1: stop accepting new deliveries. cancel() on Rabbit consumers blocks
-            // the broker from sending more messages to this node.
+            consumers.forEach { runCatching { it.stopDeliveries() } }
+
+            // Drain. The leading delay also covers the small window where a delivery that
+            // arrived just before basicCancel hasn't reached pickup (and the counter) yet.
+            val drained = withTimeoutOrNull(workerConfig.shutdownTimeout.inWholeMilliseconds) {
+                do {
+                    kotlinx.coroutines.delay(POLL_INTERVAL_MS)
+                } while (inFlight.total() > 0)
+                true
+            }
+            if (drained == null) {
+                log.warn(
+                    "WorkerPool: {} in-flight job(s) exceeded shutdown grace {} — hard-cancelling. " +
+                        "SafetyNetPoller will recover them after lockDuration={}.",
+                    inFlight.total(),
+                    workerConfig.shutdownTimeout,
+                    workerConfig.lockDuration,
+                )
+            }
+
             consumers.forEach { runCatching { it.cancel() } }
             consumers.clear()
 
-            // Step 2: wait for in-flight jobs to finish. We don't cancel the scope yet —
-            // a hard cancel would abort handlers mid-execute, leaving rows PROCESSING
-            // until SafetyNetPoller picks them up (slow recovery). Polling the scope's
-            // children gives us a clean exit when they all complete naturally.
-            if (scope != null) {
-                val scopeJob = scope.coroutineContext.job
-                val graceful = withTimeoutOrNull(workerConfig.shutdownTimeout.inWholeMilliseconds) {
-                    // Wait for all children of the scope's job to complete. Note: this
-                    // joins ONLY the existing children; new launches would be observed
-                    // too if they happened, but we already cancelled the consumers.
-                    while (scopeJob.children.any { it.isActive }) {
-                        kotlinx.coroutines.delay(POLL_INTERVAL_MS)
-                    }
-                    true
-                }
-                if (graceful == null) {
-                    log.warn(
-                        "WorkerPool: {} in-flight job(s) exceeded shutdown grace {} — hard-cancelling. " +
-                            "SafetyNetPoller will recover them after lockDuration={}.",
-                        scopeJob.children.count { it.isActive },
-                        workerConfig.shutdownTimeout,
-                        workerConfig.lockDuration,
-                    )
-                }
-                scope.cancel()
-            }
+            scope?.cancel()
             internalScope = null
 
             // Tell the dashboard this node is gone. Best-effort: a kill -9 won't get
