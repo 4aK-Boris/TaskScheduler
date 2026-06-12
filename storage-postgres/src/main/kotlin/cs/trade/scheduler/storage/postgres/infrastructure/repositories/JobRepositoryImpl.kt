@@ -296,8 +296,14 @@ public class JobRepositoryImpl(
     override suspend fun decrementPendingDeps(childId: Uuid): JobRepository.DepDecrementResult =
         withContext(Dispatchers.IO) {
             suspendTransaction(db = database) {
+                // SELECT … FOR UPDATE, not an optimistic snapshot: parents finishing within
+                // the same millisecond all decrement this child, and under a version-CAS the
+                // losers' decrements were silently dropped (counter stuck above zero, child
+                // AWAITING_DEPS forever — prod incident 2026-06-12). The row lock serialises
+                // them: each waits for the previous commit and reads the fresh counter.
                 val current = JobTable.selectAll()
                     .where { JobTable.id eq childId }
+                    .forUpdate()
                     .firstOrNull()
                     ?: return@suspendTransaction JobRepository.DepDecrementResult.NOT_AWAITING
 
@@ -335,8 +341,9 @@ public class JobRepositoryImpl(
                     it[updatedAt] = now
                 }
                 if (rows != 1) {
-                    // Race: someone bumped version between our read and write — treat as
-                    // "we didn't decrement". Caller can retry at the use-case level.
+                    // Unreachable by construction: we hold the FOR UPDATE row lock, so no
+                    // writer can bump version between our read and this write. Kept as a
+                    // defensive guard only.
                     return@suspendTransaction JobRepository.DepDecrementResult.NOT_AWAITING
                 }
 

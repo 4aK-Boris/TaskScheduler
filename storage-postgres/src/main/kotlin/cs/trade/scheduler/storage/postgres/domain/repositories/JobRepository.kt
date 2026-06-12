@@ -130,6 +130,10 @@ public interface JobRepository {
      * State-scoped to AWAITING_DEPS, so a child that was meanwhile cancelled or already
      * promoted by another parent's resolution returns [DepDecrementResult.NOT_AWAITING]
      * and we leave it alone.
+     *
+     * Implementations must serialise concurrent decrements (the Postgres impl takes a
+     * `SELECT … FOR UPDATE` row lock): parents of a fan-in barrier routinely finish within
+     * the same millisecond, and a lost decrement strands the child in AWAITING_DEPS forever.
      */
     public suspend fun decrementPendingDeps(childId: Uuid): DepDecrementResult
 
