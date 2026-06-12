@@ -46,6 +46,23 @@ public interface JobTransport {
 }
 
 public interface ConsumerHandle {
+
+    /**
+     * Phase 1 of graceful shutdown: stop the broker from delivering NEW messages, while the
+     * channel and the handler scope stay alive — deliveries already in flight finish and
+     * ack/nack normally. Follow up with [cancel] for full teardown once they have drained.
+     *
+     * Default delegates to [cancel], so single-phase transports keep their old semantics;
+     * implementations MUST keep `cancel()` safe to call after `stopDeliveries()`.
+     */
+    public suspend fun stopDeliveries() {
+        cancel()
+    }
+
+    /**
+     * Full teardown: stop deliveries (if [stopDeliveries] wasn't called), close the channel
+     * and cancel the handler scope — coroutines still running get CancellationException.
+     */
     public suspend fun cancel()
 
     /**

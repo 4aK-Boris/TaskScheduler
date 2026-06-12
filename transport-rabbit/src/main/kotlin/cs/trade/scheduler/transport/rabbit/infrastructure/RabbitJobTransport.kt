@@ -231,8 +231,11 @@ public class RabbitJobTransport(
             this.consumerTag = consumerTag
         }
 
-        override suspend fun cancel() {
-            // Set before touching the channel so the ShutdownListener fired by close() sees closing=true
+        override suspend fun stopDeliveries() {
+            // Idempotent: WorkerPool.stop() calls this first and cancel() after the drain —
+            // the second pass must not basicCancel an already-cancelled tag.
+            if (closing) return
+            // Set before touching the channel so the ShutdownListener sees closing=true
             // and skips recovery.
             closing = true
             val ch = channel
@@ -242,7 +245,15 @@ public class RabbitJobTransport(
                     runCatching { ch.basicCancel(tag) }
                         .onFailure { log.warn("basicCancel failed for {}", tag, it) }
                 }
-                runCatching { ch?.close() }
+            }
+            // The channel deliberately stays open — in-flight handlers still ack/nack through
+            // it — and the scope stays alive so they finish naturally. Teardown is cancel()'s job.
+        }
+
+        override suspend fun cancel() {
+            stopDeliveries()
+            withContext(Dispatchers.IO) {
+                runCatching { channel?.close() }
                     .onFailure { log.warn("channel close failed for queue {}", queue, it) }
             }
             scope.cancel()

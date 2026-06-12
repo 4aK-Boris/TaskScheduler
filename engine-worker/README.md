@@ -31,9 +31,13 @@ When a user-app boots with `schedulerWorkerModule { … }`, this module:
    so DB load doesn't scale with concurrency.
 4. **Stamps the worker row** every 30s via `WorkerRegistryLoop` so the dashboard's
    `/api/workers` knows we're alive.
-5. **Drains gracefully on `stop()`** — cancel consumers, wait `shutdownTimeout` for
-   in-flight `handler.execute` calls, then hard-cancel. Jobs that don't finish are
-   recovered by `SafetyNetPoller` (in `:engine-infra`) after `lockDuration` (default 90s).
+5. **Drains gracefully on `stop()`** — two-phase: `ConsumerHandle.stopDeliveries()` stops
+   NEW deliveries (channels and handler scopes stay alive), then the in-flight counter is
+   polled up to `shutdownTimeout`; only after the drain do consumers get the full
+   `cancel()` and the service loops stop. An idle worker stops in ~100ms; jobs that don't
+   finish within the grace are hard-cancelled and recovered by `SafetyNetPoller`
+   (in `:engine-infra`) after `lockDuration` (default 90s). The node's `worker` registry
+   row is deleted at the end (after `WorkerRegistryLoop` is stopped, so it can't re-upsert).
 
 ## How user apps consume it
 
