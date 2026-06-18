@@ -401,6 +401,14 @@ public class DefaultScheduler(
 
         withContext(Dispatchers.IO) {
             suspendTransaction(db = database) {
+                // Lock the parents FOR UPDATE *before* wiring edges. This serialises with
+                // FinalizeJobUseCase, which row-locks a parent when marking it terminal and
+                // only THEN reads the dep graph. Without it, a parent that finalises between
+                // our edge INSERT and COMMIT reads no edge → never decrements → child stuck
+                // AWAITING_DEPS forever (prod warmup-gate, 2026-06-18: a fast cache-warmup
+                // parent finished mid-enqueueAfter, leaving CachesWarmedJob at pending_deps=1).
+                val parentStates = storage.jobs.lockStatesForUpdate(parents)
+
                 storage.jobs.insert(row)
                 for (parentId in parents) {
                     storage.jobDependencies.insert(
@@ -410,6 +418,50 @@ public class DefaultScheduler(
                     )
                 }
                 recordCreated(params.jobId, newState = JobState.AWAITING_DEPS)
+
+                // Settle parents that already finished (or were retention-cleaned) before their
+                // edge existed — their finalize missed the decrement, so replay it here (mirrors
+                // FinalizeJobUseCase.resolveCascade). Live parents are left alone: their own
+                // finalize now sees the committed edge and decrements.
+                val finished = parents.filter { parentStates[it]?.isTerminal ?: true }
+                val failingFinished = finished.any {
+                    parentStates[it] == JobState.FAILED || parentStates[it] == JobState.CANCELLED
+                }
+                val cascadeTerminal: JobState? = when {
+                    options.onParentFailure == OnFailure.IGNORE -> null
+                    !failingFinished -> null
+                    options.onParentFailure == OnFailure.PROPAGATE_FAILURE -> JobState.FAILED
+                    options.onParentFailure == OnFailure.CANCEL_CHILD -> JobState.CANCELLED
+                    else -> null
+                }
+                if (cascadeTerminal != null) {
+                    // A non-IGNORE parent already failed before the edge existed — the child
+                    // would never have promoted; cascade it terminal like the worker would.
+                    storage.jobs.cascadeTerminalIfAwaiting(params.jobId, cascadeTerminal)
+                } else {
+                    // Each already-finished parent is satisfied (SUCCEEDED / gone, or any outcome
+                    // under IGNORE) → one decrement apiece; the last one promotes and needs an
+                    // outbox row (mirrors FinalizeJobUseCase's PROMOTED branch). A no-op when
+                    // every parent is still live — the common, race-free path.
+                    var promoted = false
+                    repeat(finished.size) {
+                        if (storage.jobs.decrementPendingDeps(params.jobId) ==
+                            JobRepository.DepDecrementResult.PROMOTED
+                        ) {
+                            promoted = true
+                        }
+                    }
+                    if (promoted) {
+                        storage.outbox.insert(
+                            NewOutboxEntry(
+                                jobId = params.jobId,
+                                routingKey = params.routingKey,
+                                priority = params.priority,
+                                delayMs = 0,
+                            ),
+                        )
+                    }
+                }
             }
         }
         emitCreated(params)

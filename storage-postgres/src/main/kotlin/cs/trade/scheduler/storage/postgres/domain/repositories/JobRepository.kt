@@ -147,6 +147,17 @@ public interface JobRepository {
     public suspend fun cascadeTerminalIfAwaiting(childId: Uuid, terminal: JobState): Boolean
 
     /**
+     * Lock the given rows `FOR UPDATE` (ordered by id, anti-AB-BA) and return their current
+     * states; ids with no row are absent from the map. Used by `enqueueAfter` to wire a
+     * barrier race-free: it serialises with [decrementPendingDeps]'s caller
+     * (`FinalizeJobUseCase` row-locks the parent before reading the dep graph), so a parent is
+     * seen either non-terminal here (counted in `pending_deps`; its later finalize sees the
+     * committed edge and decrements) or already terminal here (its finalize ran before the edge
+     * existed and never decremented, so `enqueueAfter` replays the decrement/cascade itself).
+     */
+    public suspend fun lockStatesForUpdate(ids: List<Uuid>): Map<Uuid, JobState>
+
+    /**
      * Bulk-cancel all descendants in AWAITING_DEPS that transitively depend on [parentId],
      * following only edges whose `on_failure` is one of `PROPAGATE_FAILURE` /
      * `CANCEL_CHILD` (the `IGNORE` case means the child explicitly tolerates parent loss
