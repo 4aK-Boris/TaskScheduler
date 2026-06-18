@@ -368,6 +368,71 @@ class DagIntegrationTest {
     }
 
     @Test
+    fun `enqueueAfter on an already-terminal parent promotes the child immediately`() = runBlocking {
+        // Regression for the prod warmup-gate (2026-06-18): a parent that finished BEFORE its
+        // dependency edge existed never decremented, stranding the child at pending_deps=1
+        // (CachesWarmedJob stuck AWAITING_DEPS). enqueueAfter must lock the parent, see it
+        // terminal, and promote the child itself.
+        val parentId = scheduler.enqueue(StepA(80))
+        finalize(parentId, jobs.findById(parentId)!!.version, JobState.SUCCEEDED).getOrThrow()
+
+        // Parent is terminal BEFORE the dependency is wired.
+        val childId = scheduler.enqueueAfter(
+            job = StepB(80),
+            waitFor = listOf(parentId),
+            options = EnqueueOptions(onParentFailure = OnFailure.IGNORE),
+        )
+
+        val child = jobs.findById(childId)!!
+        assertEquals(0, child.pendingDeps, "already-terminal parent must not leave a pending dep")
+        assertEquals(JobState.ENQUEUED, child.state, "only parent already finished → child promotes on enqueue")
+        assertEquals(1, outbox.findUnpublished(limit = 100).count { it.jobId == childId }, "promoted child needs one outbox row")
+    }
+
+    @Test
+    fun `enqueueAfter counts only still-live parents when some already finished`() = runBlocking {
+        val finishedParent = scheduler.enqueue(StepA(81))
+        val liveParent = scheduler.enqueue(StepA(82))
+        finalize(finishedParent, jobs.findById(finishedParent)!!.version, JobState.SUCCEEDED).getOrThrow()
+
+        // One parent already SUCCEEDED, the other still live, when the barrier is wired.
+        val childId = scheduler.enqueueAfter(
+            job = StepC(81),
+            waitFor = listOf(finishedParent, liveParent),
+            options = EnqueueOptions(onParentFailure = OnFailure.IGNORE),
+        )
+
+        var child = jobs.findById(childId)!!
+        assertEquals(JobState.AWAITING_DEPS, child.state, "still waits on the live parent")
+        assertEquals(1, child.pendingDeps, "only the live parent is pending — the finished one was settled at enqueue")
+        assertTrue(outbox.findUnpublished(limit = 100).none { it.jobId == childId })
+
+        // Finishing the live parent promotes the child.
+        finalize(liveParent, jobs.findById(liveParent)!!.version, JobState.SUCCEEDED).getOrThrow()
+        child = jobs.findById(childId)!!
+        assertEquals(JobState.ENQUEUED, child.state)
+        assertEquals(0, child.pendingDeps)
+        assertEquals(1, outbox.findUnpublished(limit = 100).count { it.jobId == childId })
+    }
+
+    @Test
+    fun `enqueueAfter on an already-FAILED parent cascades terminal under PROPAGATE_FAILURE`() = runBlocking {
+        val parentId = scheduler.enqueue(StepA(83))
+        finalize(parentId, jobs.findById(parentId)!!.version, JobState.FAILED).getOrThrow()
+
+        // Parent already FAILED before the edge — with PROPAGATE_FAILURE the child is born FAILED.
+        val childId = scheduler.enqueueAfter(
+            job = StepB(83),
+            waitFor = listOf(parentId),
+            options = EnqueueOptions(onParentFailure = OnFailure.PROPAGATE_FAILURE),
+        )
+
+        val child = jobs.findById(childId)!!
+        assertEquals(JobState.FAILED, child.state, "already-failed parent + PROPAGATE_FAILURE → child cascaded FAILED")
+        assertTrue(outbox.findUnpublished(limit = 100).none { it.jobId == childId }, "cascaded-failed child gets no outbox row")
+    }
+
+    @Test
     fun `chain builds sequential deps that propagate in order`() = runBlocking {
         val ids = scheduler.chain(StepA(30), StepB(30), StepC(30))
         assertEquals(3, ids.size)

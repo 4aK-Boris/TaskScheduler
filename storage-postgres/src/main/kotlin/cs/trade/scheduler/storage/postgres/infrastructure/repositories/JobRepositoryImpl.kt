@@ -115,6 +115,22 @@ public class JobRepositoryImpl(
         }
     }
 
+    override suspend fun lockStatesForUpdate(ids: List<Uuid>): Map<Uuid, JobState> =
+        withContext(Dispatchers.IO) {
+            suspendTransaction(db = database) {
+                // ORDER BY id: concurrent enqueueAfter calls that share parents must take the
+                // row locks in one global order, or an AB-BA deadlock is possible. FOR UPDATE
+                // serialises us with FinalizeJobUseCase (which row-locks the parent when marking
+                // it terminal, before reading the dep graph) so enqueueAfter can tell whether a
+                // parent will still decrement the new child or already finished without it.
+                JobTable.selectAll()
+                    .where { JobTable.id inList ids }
+                    .orderBy(JobTable.id to SortOrder.ASC)
+                    .forUpdate()
+                    .associate { it[JobTable.id].value to JobState.valueOf(it[JobTable.state]) }
+            }
+        }
+
     override suspend fun findAll(
         filter: JobListFilter,
         page: Int,
