@@ -19,6 +19,10 @@ import cs.trade.scheduler.storage.postgres.infrastructure.repositories.JobRollup
 import cs.trade.scheduler.storage.postgres.infrastructure.repositories.OutboxRepositoryImpl
 import cs.trade.scheduler.storage.postgres.infrastructure.repositories.RecurringJobRepositoryImpl
 import cs.trade.scheduler.storage.postgres.infrastructure.scheduler.DefaultScheduler
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.Serializable
 import org.flywaydb.core.Flyway
@@ -30,6 +34,7 @@ import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeAll
+import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestInstance
 import org.testcontainers.containers.PostgreSQLContainer
@@ -120,6 +125,19 @@ class DagIntegrationTest {
         )
         propagateRollup = PropagateRollupProgressUseCase(jobs, rollups, EventBus.NoOp)
         finalize = FinalizeJobUseCase(database, jobs, outbox, deps, propagateRollup)
+    }
+
+    @BeforeEach
+    fun cleanTables() {
+        // Shared `scheduler-test-pg` accumulates unpublished outbox rows across runs, and
+        // the `findUnpublished(limit = …)` assertions below are only load-bearing on a
+        // clean slate (same pattern as SafetyNetIntegrationTest). CASCADE clears
+        // job_dependency / job_event along with job.
+        runCatching {
+            dataSource.connection.use { conn ->
+                conn.createStatement().use { it.execute("TRUNCATE job, outbox RESTART IDENTITY CASCADE") }
+            }
+        }
     }
 
     @AfterAll
@@ -306,6 +324,47 @@ class DagIntegrationTest {
         assertEquals(JobState.ENQUEUED, child.state)
         assertEquals(0, child.pendingDeps)
         assertEquals(1, outbox.findUnpublished(limit = 100).count { it.jobId == childId })
+    }
+
+    @Test
+    fun `concurrent fan-in finalization promotes the child exactly once — no lost decrement`() = runBlocking {
+        // Regression for the prod incident (2026-06-12): 8 cache-warmup parents finishing
+        // within milliseconds of each other lost one pending_deps decrement, leaving the
+        // barrier child in AWAITING_DEPS forever (pending_deps stuck at 1 of 8). Several
+        // rounds because the race is probabilistic on the unfixed code.
+        val fanIn = 8
+        repeat(10) { round ->
+            val parents = (1..fanIn).map { n -> scheduler.enqueue(StepA(round * 100L + n)) }
+            val childId = scheduler.enqueueAfter(
+                job = StepB(round.toLong()),
+                waitFor = parents,
+                options = EnqueueOptions(onParentFailure = OnFailure.IGNORE),
+            )
+            // Versions BEFORE the concurrent phase — finalize CAS-es on them.
+            val versions = parents.associateWith { jobs.findById(it)!!.version }
+
+            coroutineScope {
+                parents.map { parentId ->
+                    async(Dispatchers.Default) {
+                        finalize(parentId, versions.getValue(parentId), JobState.SUCCEEDED).getOrThrow()
+                    }
+                }.awaitAll()
+            }
+
+            val child = jobs.findById(childId)!!
+            assertEquals(
+                0, child.pendingDeps,
+                "round $round: all $fanIn parents SUCCEEDED but pending_deps=${child.pendingDeps} — lost decrement(s)",
+            )
+            assertEquals(
+                JobState.ENQUEUED, child.state,
+                "round $round: child must promote AWAITING_DEPS → ENQUEUED after the last parent",
+            )
+            assertEquals(
+                1, outbox.findUnpublished(limit = 1000).count { it.jobId == childId },
+                "round $round: exactly one outbox row — promoted once, not zero and not twice",
+            )
+        }
     }
 
     @Test

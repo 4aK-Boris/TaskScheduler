@@ -39,8 +39,13 @@ public class JobDependencyRepositoryImpl(
     override suspend fun findChildrenOfParent(parentId: Uuid): List<JobDependency> =
         withContext(Dispatchers.IO) {
             suspendTransaction(db = database) {
+                // ORDER BY child_id: FinalizeJobUseCase walks this list taking FOR UPDATE
+                // locks on each child — concurrent finalizers of different parents sharing
+                // children must acquire those locks in the same global order, or an AB-BA
+                // deadlock is possible.
                 JobDependencyTable.selectAll()
                     .where { JobDependencyTable.parentId eq parentId }
+                    .orderBy(JobDependencyTable.childId)
                     .map { it.toJobDependency() }
             }
         }
