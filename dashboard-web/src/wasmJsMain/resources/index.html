@@ -2,6 +2,12 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
+    <!-- Anchor every relative asset (the wasm loader, webpack chunks, composeResources) to the
+         site root. Without this a deep-link reload like /jobs/{id} resolves "dashboard-web.js"
+         against /jobs/, the SPA fallback returns index.html as text/html, the browser can't run
+         it as a script, and the page is blank. The router itself already restores /jobs/{id}
+         from window.location.pathname — only asset loading was broken. -->
+    <base href="/">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="theme-color" content="#3B4FD8">
     <title>TaskScheduler Dashboard</title>
