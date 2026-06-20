@@ -515,11 +515,27 @@ public class DefaultScheduler(
                 else CancelResult.ALREADY_TERMINAL
             }
 
-            val won = if (current.state == JobState.PROCESSING) {
-                if (storage.jobs.requestCancellation(jobId, by, Clock.System.now())) {
+            // A PROCESSING row is only truly "in flight" while a worker holds a LIVE lease.
+            // When a node dies mid-job — the common case during a deploy/restart that kills
+            // the worker — the row stays PROCESSING with an expired `locked_until` until
+            // SafetyNetPoller re-queues it: a window of at least `lockDuration` (60–90s),
+            // reopened on every release. A cooperative requestCancellation in that window
+            // stamps `cancel_requested_at` and fires a `job_cancel` NOTIFY at a worker that no
+            // longer exists, so the signal is lost and the job sits uncancellable on the
+            // dashboard. So take the cooperative path ONLY while the lease is live; an orphaned
+            // PROCESSING row is force-cancelled like any other non-terminal state. CAS on
+            // `version` keeps this safe against a worker that's actually still alive (it would
+            // finalize first and our markCancelled would no-op) and against a concurrent
+            // SafetyNet markForRetry (whichever commits first wins; we re-read and converge).
+            val now = Clock.System.now()
+            val workerHoldsLiveLease = current.state == JobState.PROCESSING &&
+                current.lockedUntil != null && current.lockedUntil > now
+
+            if (workerHoldsLiveLease) {
+                if (storage.jobs.requestCancellation(jobId, by, now)) {
                     return CancelResult.CANCEL_REQUESTED
                 }
-                false
+                // CAS lost (row moved past PROCESSING) — re-read and try once more.
             } else {
                 if (storage.jobs.markCancelled(jobId, current.version, errorMsg = null, actor = by)) {
                     // DESIGN.md 8.4 — descendants in AWAITING_DEPS have nothing left
@@ -546,10 +562,8 @@ public class DefaultScheduler(
                     }
                     return CancelResult.CANCELLED
                 }
-                false
+                // CAS lost (version moved) — re-read and try once more.
             }
-            check(!won) { "unreachable" }
-            // CAS lost — re-read and try once more.
         }
 
         // Persistent race — return based on final visible state.
