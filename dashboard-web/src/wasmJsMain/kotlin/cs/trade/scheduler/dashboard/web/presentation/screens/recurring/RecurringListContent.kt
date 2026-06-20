@@ -1,6 +1,7 @@
 package cs.trade.scheduler.dashboard.web.presentation.screens.recurring
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -23,6 +24,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -64,6 +66,10 @@ public fun RecurringListContent(component: RecurringListComponent) {
     // column cycle sort → flip → back to the default.
     var sortKey by remember { mutableStateOf(RC_DEFAULT_SORT) }
     var sortAsc by remember { mutableStateOf(rcDefaultAsc(RC_DEFAULT_SORT)) }
+    // Client-side search over the definition name (the ID column — the key passed to
+    // `recurring(...)`) and its payload type. Held locally like the sort state: a pure view
+    // concern, no server round-trip, no Model/UseCase plumbing.
+    var search by remember { mutableStateOf("") }
     val onSort: (RcSort) -> Unit = { key ->
         when {
             key != sortKey -> { sortKey = key; sortAsc = rcDefaultAsc(key) }
@@ -71,9 +77,20 @@ public fun RecurringListContent(component: RecurringListComponent) {
             else -> { sortKey = RC_DEFAULT_SORT; sortAsc = rcDefaultAsc(RC_DEFAULT_SORT) }
         }
     }
-    val sortedItems = remember(state.items, sortKey, sortAsc) { sortRecurring(state.items, sortKey, sortAsc) }
+    val needle = search.trim()
+    val visibleItems = remember(state.items, sortKey, sortAsc, needle) {
+        val filtered = if (needle.isEmpty()) state.items
+            else state.items.filter {
+                // contains() over the full payload type also matches the short name shown in
+                // the Payload column (it's a suffix of the fully-qualified type).
+                it.id.contains(needle, ignoreCase = true) ||
+                    it.payloadType.contains(needle, ignoreCase = true)
+            }
+        sortRecurring(filtered, sortKey, sortAsc)
+    }
     Column(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-        PageHeader(title = "Recurring", count = state.items.size.toLong()) {
+        // Count reflects what's visible — handy as a live "N matches" while filtering.
+        PageHeader(title = "Recurring", count = visibleItems.size.toLong()) {
             SettingsMenu(
                 autoRefreshSeconds = state.autoRefreshSeconds,
                 onAutoRefreshChanged = component::onAutoRefreshChanged,
@@ -85,6 +102,7 @@ public fun RecurringListContent(component: RecurringListComponent) {
             OutlinedButton(onClick = component::onBackClicked, shape = MaterialTheme.shapes.small) { Text("Back") }
             OutlinedButton(onClick = component::onRefreshClicked, shape = MaterialTheme.shapes.small) { Text("Refresh") }
         }
+        RecurringSearchBar(value = search, onValueChange = { search = it })
         DashboardPanel {
             BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
                 // Stretch to the panel width, but never below TABLE_MIN_WIDTH (then pan).
@@ -110,8 +128,14 @@ public fun RecurringListContent(component: RecurringListComponent) {
                                     style = MaterialTheme.typography.bodyMedium,
                                     modifier = Modifier.align(Alignment.Center).padding(24.dp),
                                 )
+                                visibleItems.isEmpty() -> Text(
+                                    text = "No recurring jobs match \"$needle\"",
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    modifier = Modifier.align(Alignment.Center).padding(24.dp),
+                                )
                                 else -> LazyColumn(modifier = Modifier.fillMaxSize()) {
-                                    items(sortedItems, key = { it.id }) { row ->
+                                    items(visibleItems, key = { it.id }) { row ->
                                         RecurringRow(
                                             job = row,
                                             busy = state.togglingId == row.id,
@@ -130,6 +154,36 @@ public fun RecurringListContent(component: RecurringListComponent) {
                 }
             }
         }
+    }
+}
+
+// Slim filter row under the header (mirrors the JobList filter rows). One free-text field that
+// narrows the table to definitions whose name (ID) or payload type contains the query,
+// case-insensitively.
+@Composable
+private fun RecurringSearchBar(value: String, onValueChange: (String) -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, bottom = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        OutlinedTextField(
+            value = value,
+            onValueChange = onValueChange,
+            singleLine = true,
+            placeholder = { Text("Search by name or type", style = MaterialTheme.typography.bodySmall) },
+            textStyle = MaterialTheme.typography.bodySmall,
+            trailingIcon = if (value.isNotEmpty()) {
+                {
+                    Text(
+                        text = "✕",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.clickable { onValueChange("") }.padding(8.dp),
+                    )
+                }
+            } else null,
+            modifier = Modifier.width(280.dp),
+        )
     }
 }
 

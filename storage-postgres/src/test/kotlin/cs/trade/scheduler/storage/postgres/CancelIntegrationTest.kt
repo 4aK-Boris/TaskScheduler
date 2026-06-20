@@ -30,8 +30,10 @@ import org.testcontainers.containers.PostgreSQLContainer
 import kotlin.uuid.Uuid
 
 /**
- * Covers the non-PROCESSING cancel paths — terminal CANCELLED, ALREADY_TERMINAL,
- * NOT_FOUND. Cancel-during-execution lives in `:engine-worker` since it needs the
+ * Covers the non-live-worker cancel paths — terminal CANCELLED, ALREADY_TERMINAL,
+ * NOT_FOUND, and PROCESSING split by lease liveness (live lease → cooperative
+ * CANCEL_REQUESTED; orphaned lease after a worker death → force CANCELLED).
+ * Cancel-against-a-running-handler lives in `:engine-worker` since it needs the
  * Rabbit + worker pipeline.
  *
  * **PG provisioning.** Honours `EXTERNAL_PG_URL` for the shared scheduler-test-pg
@@ -156,5 +158,53 @@ class CancelIntegrationTest {
     @Test
     fun `cancel unknown id returns NOT_FOUND`() = runBlocking {
         assertEquals(CancelResult.NOT_FOUND, scheduler.cancel(Uuid.random()))
+    }
+
+    @Test
+    fun `cancel orphaned PROCESSING row with expired lease force-cancels it directly`() = runBlocking {
+        val jobId = scheduler.enqueue(Noop(10))
+        // Simulate a worker that picked the row up and then died (deploy/restart): PROCESSING
+        // with a lease that has already lapsed. This is exactly the row SafetyNetPoller would
+        // later re-queue — but the user wants it gone NOW, and there is no live worker to honour
+        // a cooperative request.
+        val moved = jobs.transitionState(
+            id = jobId,
+            expectedVersion = 0,
+            newState = JobState.PROCESSING,
+            lockedBy = "dead-node",
+            lockedUntilMillis = System.currentTimeMillis() - 60_000,
+        )
+        assertEquals(true, moved)
+
+        val result = scheduler.cancel(jobId, by = "alice")
+        // Force-cancel, not a (lost) cooperative request.
+        assertEquals(CancelResult.CANCELLED, result)
+
+        val after = jobs.findById(jobId)!!
+        assertEquals(JobState.CANCELLED, after.state)
+        assertEquals(null, after.lockedBy)
+        assertEquals(null, after.lockedUntil)
+    }
+
+    @Test
+    fun `cancel PROCESSING row with live lease stays cooperative (CANCEL_REQUESTED)`() = runBlocking {
+        val jobId = scheduler.enqueue(Noop(11))
+        // A worker still holds a live lease (locked_until in the future) — the handler is
+        // really running, so we must give it the chance to unwind rather than yanking the row.
+        val moved = jobs.transitionState(
+            id = jobId,
+            expectedVersion = 0,
+            newState = JobState.PROCESSING,
+            lockedBy = "live-node",
+            lockedUntilMillis = System.currentTimeMillis() + 60_000,
+        )
+        assertEquals(true, moved)
+
+        val result = scheduler.cancel(jobId, by = "alice")
+        assertEquals(CancelResult.CANCEL_REQUESTED, result)
+
+        val after = jobs.findById(jobId)!!
+        assertEquals(JobState.PROCESSING, after.state)
+        assertNotNull(after.cancelRequestedAt)
     }
 }
