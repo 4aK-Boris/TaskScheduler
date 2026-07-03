@@ -285,13 +285,6 @@ public interface JobRepository {
     public suspend fun countActiveByQueue(): Map<String, Long>
 
     /**
-     * Bulk lookup of `payload_type` for a set of job ids. Used by the outbox publisher to
-     * filter out paused payload types in one extra query per batch rather than per row.
-     * Missing ids are simply absent from the returned map.
-     */
-    public suspend fun findPayloadTypesByIds(ids: Collection<Uuid>): Map<Uuid, String>
-
-    /**
      * `SELECT DISTINCT payload_type FROM job ORDER BY payload_type LIMIT ?`. Used by the
      * dashboard /api/types endpoint to populate the pause-form's known-types dropdown.
      *

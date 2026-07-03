@@ -2548,7 +2548,7 @@ insert, что и явный `enqueue(Recv::method, …)`. Полученная 
 
 **Реализация:**
 - Таблица `job_type_pause` (см. секцию 6)
-- **Outbox publisher** не публикует jobs где `payload_type IN (paused)`. Накапливаются в outbox с `published_at IS NULL`
+- **Outbox publisher** не публикует jobs где `payload_type IN (paused)`. Накапливаются в outbox с `published_at IS NULL`. Фильтр живёт **в SQL** (`OutboxRepository.findUnpublished` — анти-джойн на `job_type_pause`), а не в коде паблишера: paused-строки лежат в голове id-ordered скана, и как только их накапливается больше batch-size, нефильтрованное `LIMIT`-окно состоит только из них — published=0, все остальные типы тихо голодают (прод-инцидент 2026-07-01: пауза 2 типов остановила весь шедулер за 4 часа). `countUnpublished` / `findOldestUnpublishedCreatedAt` используют тот же фильтр — backlog-WARN и `scheduler_outbox_lag_seconds` меряют *publishable* бэклог, припаркованные паузой строки не держат алерт в вечном breach
 - **Worker** перед execute делает second-line check (race с pause-после-published):
   ```kotlin
   if (storage.isPaused(payload_type)) {

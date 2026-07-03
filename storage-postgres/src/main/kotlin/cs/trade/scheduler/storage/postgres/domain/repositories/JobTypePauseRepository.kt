@@ -7,8 +7,9 @@ import kotlin.time.Instant
  * Pause/unpause job execution by `payload_type`. See DESIGN.md 22.1.
  *
  * Semantics: when a type is paused, two enforcement points block its jobs:
- *  - [PublishOutboxBatchUseCase] in engine-infra skips outbox rows for paused types
- *    (they accumulate with `published_at IS NULL` until unpause)
+ *  - [OutboxRepository.findUnpublished] excludes rows for paused types at SQL level
+ *    (they accumulate with `published_at IS NULL` until unpause, without clogging the
+ *    publisher's batch window — see the head-of-line starvation note there)
  *  - [WorkerPool] in engine-worker does a second-line check after pickup (race window:
  *    pause happened after the row was already in Rabbit) and re-defers the job
  *
