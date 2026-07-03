@@ -17,7 +17,14 @@ public interface OutboxRepository {
      */
     public suspend fun insert(entry: NewOutboxEntry): OutboxEntry
 
-    /** Oldest unpublished entries, FIFO. Limit caps batch size for the publisher loop. */
+    /**
+     * Oldest *publishable* unpublished entries, FIFO. Limit caps batch size for the
+     * publisher loop. Rows whose job's `payload_type` is paused (`job_type_pause`,
+     * DESIGN.md 22.1) are excluded at SQL level — they park in the outbox until unpause.
+     * The exclusion must live in the query, not in caller code: paused rows sit at the
+     * head of the id-ordered scan, and once a batch-size of them accumulates, an
+     * unfiltered LIMIT window contains only paused rows and every other type starves.
+     */
     public suspend fun findUnpublished(limit: Int): List<OutboxEntry>
 
     /** Mark a published entry. Returns true if updated, false if id missing or already marked. */
@@ -31,13 +38,19 @@ public interface OutboxRepository {
      */
     public suspend fun deletePublishedOlderThan(olderThan: kotlin.time.Instant, batchSize: Int): Int
 
-    /** `SELECT COUNT(*) FROM outbox WHERE published_at IS NULL`. Cheap (partial index). */
+    /**
+     * Count of *publishable* unpublished rows (same paused-type exclusion as
+     * [findUnpublished]). Feeds the publisher backlog WARN and the
+     * `scheduler_outbox_unpublished` gauge — rows parked by an operator pause are not
+     * "the publisher falling behind" and would otherwise keep the alert in permanent
+     * breach for the whole life of a long pause.
+     */
     public suspend fun countUnpublished(): Long
 
     /**
-     * `created_at` of the oldest unpublished outbox row, or null if none. Used by the
-     * metrics poller to compute `scheduler_outbox_lag_seconds = now - oldest`. Single-row
-     * read off the `outbox_unpublished_idx` partial index — O(1).
+     * `created_at` of the oldest *publishable* unpublished outbox row (same paused-type
+     * exclusion as [findUnpublished]), or null if none. Used by the metrics poller to
+     * compute `scheduler_outbox_lag_seconds = now - oldest`.
      */
     public suspend fun findOldestUnpublishedCreatedAt(): kotlin.time.Instant?
 }

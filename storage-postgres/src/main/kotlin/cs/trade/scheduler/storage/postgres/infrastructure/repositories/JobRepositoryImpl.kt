@@ -1119,17 +1119,6 @@ public class JobRepositoryImpl(
         }
     }
 
-    override suspend fun findPayloadTypesByIds(ids: Collection<Uuid>): Map<Uuid, String> {
-        if (ids.isEmpty()) return emptyMap()
-        return withContext(Dispatchers.IO) {
-            suspendTransaction(db = database) {
-                JobTable.selectAll()
-                    .where { JobTable.id inList ids }
-                    .associate { it[JobTable.id].value to it[JobTable.payloadType] }
-            }
-        }
-    }
-
     private companion object {
         // Mirrors the partial unique index predicate in V1__initial_schema.sql.
         val ACTIVE_STATE_NAMES: List<String> = JobState.entries

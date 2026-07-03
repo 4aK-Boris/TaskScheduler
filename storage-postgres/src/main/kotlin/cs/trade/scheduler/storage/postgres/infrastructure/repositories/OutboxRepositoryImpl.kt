@@ -5,11 +5,15 @@ package cs.trade.scheduler.storage.postgres.infrastructure.repositories
 import cs.trade.scheduler.storage.postgres.domain.models.NewOutboxEntry
 import cs.trade.scheduler.storage.postgres.domain.models.OutboxEntry
 import cs.trade.scheduler.storage.postgres.domain.repositories.OutboxRepository
+import cs.trade.scheduler.storage.postgres.infrastructure.tables.JobTable
+import cs.trade.scheduler.storage.postgres.infrastructure.tables.JobTypePauseTable
 import cs.trade.scheduler.storage.postgres.infrastructure.tables.OutboxTable
 import cs.trade.scheduler.storage.postgres.infrastructure.toKotlinTime
 import cs.trade.scheduler.storage.postgres.infrastructure.toOffsetDateTimeUtc
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import org.jetbrains.exposed.v1.core.JoinType
+import org.jetbrains.exposed.v1.core.Op
 import org.jetbrains.exposed.v1.core.ResultRow
 import org.jetbrains.exposed.v1.core.SortOrder
 import org.jetbrains.exposed.v1.core.and
@@ -33,6 +37,29 @@ public class OutboxRepositoryImpl(
     private val database: Database,
 ) : OutboxRepository {
 
+    /**
+     * Outbox joined to its job's `payload_type` and the pause table. A row is *publishable*
+     * when its type has no pause row. Filtering MUST happen at SQL level: the previous
+     * in-code skip left paused rows unpublished at the head of the id-ordered scan, and once
+     * more than a batch-size of them accumulated, `findUnpublished(limit)` returned only
+     * paused rows — starving every other type silently (prod incident 2026-07-01).
+     *
+     * LEFT joins keep rows whose job row is gone (shouldn't happen — enqueue writes both
+     * transactionally) so a dangling outbox row degrades to the old "publish it" behaviour
+     * instead of hiding forever.
+     */
+    private val outboxWithPause = OutboxTable
+        .join(JobTable, JoinType.LEFT, onColumn = OutboxTable.jobId, otherColumn = JobTable.id)
+        .join(
+            JobTypePauseTable,
+            JoinType.LEFT,
+            onColumn = JobTable.payloadType,
+            otherColumn = JobTypePauseTable.payloadType,
+        )
+
+    private fun publishable(): Op<Boolean> =
+        OutboxTable.publishedAt.isNull() and JobTypePauseTable.payloadType.isNull()
+
     override suspend fun insert(entry: NewOutboxEntry): OutboxEntry = withContext(Dispatchers.IO) {
         suspendTransaction(db = database) {
             // RETURNING * lets us pick up id + DB-side created_at default in one round-trip.
@@ -49,9 +76,9 @@ public class OutboxRepositoryImpl(
 
     override suspend fun findUnpublished(limit: Int): List<OutboxEntry> = withContext(Dispatchers.IO) {
         suspendTransaction(db = database) {
-            OutboxTable
-                .selectAll()
-                .where { OutboxTable.publishedAt.isNull() }
+            outboxWithPause
+                .select(OutboxTable.columns)
+                .where { publishable() }
                 .orderBy(OutboxTable.id to SortOrder.ASC)
                 .limit(limit)
                 .map { it.toOutboxEntry() }
@@ -90,16 +117,18 @@ public class OutboxRepositoryImpl(
 
     override suspend fun countUnpublished(): Long = withContext(Dispatchers.IO) {
         suspendTransaction(db = database) {
-            OutboxTable.selectAll()
-                .where { OutboxTable.publishedAt.isNull() }
+            outboxWithPause
+                .select(OutboxTable.id)
+                .where { publishable() }
                 .count()
         }
     }
 
     override suspend fun findOldestUnpublishedCreatedAt(): Instant? = withContext(Dispatchers.IO) {
         suspendTransaction(db = database) {
-            OutboxTable.selectAll()
-                .where { OutboxTable.publishedAt.isNull() }
+            outboxWithPause
+                .select(OutboxTable.createdAt)
+                .where { publishable() }
                 .orderBy(OutboxTable.id to SortOrder.ASC)
                 .limit(1)
                 .firstOrNull()

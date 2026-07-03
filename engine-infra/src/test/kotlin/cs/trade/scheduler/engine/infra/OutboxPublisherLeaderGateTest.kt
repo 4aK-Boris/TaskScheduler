@@ -152,8 +152,6 @@ class OutboxPublisherLeaderGateTest {
             publishBatch = PublishOutboxBatchUseCase(
                 outbox = outbox,
                 transport = transport,
-                jobs = jobs,
-                pauses = jobTypePauses,
             ),
             outbox = outbox,
             config = SchedulerInfraConfig().apply {
