@@ -1,0 +1,15 @@
+# Python build + tooling artefacts. The Gradle-oriented root .gitignore doesn't cover these.
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+.venv/
+venv/
+
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/

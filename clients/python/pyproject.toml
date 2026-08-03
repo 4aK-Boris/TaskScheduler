@@ -1,0 +1,64 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "taskscheduler-client"
+version = "0.5.1"
+description = "Async Python SDK for TaskScheduler — durable distributed background jobs on PostgreSQL + RabbitMQ"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "TaskScheduler" }]
+keywords = ["jobs", "scheduler", "background", "postgresql", "rabbitmq", "asyncio"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Framework :: AsyncIO",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: System :: Distributed Computing",
+]
+
+dependencies = [
+    "psycopg[binary,pool]>=3.2",
+    "aio-pika>=9.5",
+    "croniter>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.25",
+    "mypy>=1.14",
+    "ruff>=0.9",
+]
+
+[project.urls]
+Homepage = "https://github.com/4aK-Boris/TaskScheduler"
+Documentation = "https://github.com/4aK-Boris/TaskScheduler/blob/master/clients/python/README.md"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/taskscheduler"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+warn_return_any = true
+
+[[tool.mypy.overrides]]
+module = "croniter.*"
+ignore_missing_imports = true
