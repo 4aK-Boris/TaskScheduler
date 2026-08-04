@@ -254,17 +254,37 @@ never change.
 
 ```bash
 uv venv && uv pip install -e ".[dev]"
-pytest tests/unit                      # no infrastructure needed
-pytest tests/integration               # needs PG + RabbitMQ (see below)
-ruff check src && mypy src
+pytest tests/unit                                    # no infrastructure needed
+ruff check src tests examples scripts && mypy src
 ```
 
-Integration tests expect a database with the migrations applied and a broker with the
-delayed-message plugin. The repo's `docker-compose.yml` at the root provides both:
+Integration tests need a database with the migrations applied and a broker with the
+delayed-message plugin. The whole suite runs in CI on every change under `clients/python`
+(`.github/workflows/python-client.yml`); locally, bring the two up yourself:
 
 ```bash
-docker compose up -d postgres rabbitmq standalone-runner
-export TASKSCHEDULER_TEST_DSN="postgresql://scheduler:scheduler@localhost:5432/scheduler"
-export TASKSCHEDULER_TEST_AMQP="amqp://scheduler:scheduler@localhost:5672/"
-pytest tests/integration
+docker run -d --name ts-pg -e POSTGRES_USER=scheduler -e POSTGRES_PASSWORD=scheduler \
+  -e POSTGRES_DB=scheduler -p 5432:5432 postgres:16-alpine
+
+docker build -t taskscheduler-rabbit ../../docker/rabbitmq
+docker run -d --name ts-rabbit -e RABBITMQ_DEFAULT_USER=scheduler \
+  -e RABBITMQ_DEFAULT_PASS=scheduler -p 5672:5672 taskscheduler-rabbit
+
+python scripts/apply_migrations.py "postgresql://scheduler:scheduler@localhost:5432/scheduler"
+
+TASKSCHEDULER_TEST_DSN="postgresql://scheduler:scheduler@localhost:5432/scheduler" \
+TASKSCHEDULER_TEST_AMQP="amqp://scheduler:scheduler@localhost:5672/" \
+  pytest tests/integration
 ```
+
+`scripts/apply_migrations.py` replays the project's Flyway migrations without a JVM, so the
+tests don't need a built `scheduler-infra` image. It is a development shortcut — in a real
+deployment `scheduler-infra` owns the schema.
+
+No Kotlin process runs during the tests: an `outbox_pump` fixture stands in for the infra
+leader that would otherwise drain the outbox into RabbitMQ. Tests that expect a job to be
+delivered more than once (retries, DAG promotions, paused-type redelivery) request it.
+
+Alternatively `docker compose up -d` at the repo root brings up Postgres, RabbitMQ and a
+real `scheduler-infra` — closer to production, but it needs the Gradle-built image
+(`./gradlew :standalone-runner:dockerImage`).

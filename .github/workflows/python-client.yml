@@ -1,0 +1,149 @@
+# Lint, type-check and test the Python SDK in clients/python.
+#
+# Two jobs, split by what they need:
+#   * checks      — ruff + mypy + unit tests. No infrastructure, seconds to run, matrixed
+#                   across the Python range declared in pyproject (3.10 floor, 3.13 ceiling).
+#   * integration — the same suite against a real Postgres and RabbitMQ, because the parts
+#                   worth testing here (CAS pickup, lease renewal, DAG cascade, delayed-
+#                   exchange retries) only exist in the interaction with those two.
+#
+# Path-filtered: unrelated Kotlin changes don't pay for this. The migration directory is in
+# the filter because the client reads that schema — a migration is exactly the kind of
+# change that should re-run these tests.
+name: python-client
+
+on:
+  pull_request:
+    branches: [master]
+    paths:
+      - 'clients/python/**'
+      - 'storage-postgres/src/main/resources/scheduler/migration/**'
+      - 'docker/rabbitmq/**'
+      - '.github/workflows/python-client.yml'
+  push:
+    branches: [master]
+    paths:
+      - 'clients/python/**'
+      - 'storage-postgres/src/main/resources/scheduler/migration/**'
+      - 'docker/rabbitmq/**'
+      - '.github/workflows/python-client.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: python-client-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: lint + types + unit (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The ends of the supported range; the versions in between rarely break
+        # independently and doubling the matrix buys little.
+        python-version: ['3.10', '3.13']
+    defaults:
+      run:
+        working-directory: clients/python
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: clients/python/pyproject.toml
+
+      - name: Install
+        run: pip install -e ".[dev]"
+
+      - name: Ruff
+        run: ruff check src tests examples scripts
+
+      - name: Mypy
+        run: mypy src
+
+      - name: Unit tests
+        run: pytest tests/unit -q
+
+  integration:
+    name: integration (postgres + rabbitmq)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: clients/python
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: scheduler
+          POSTGRES_PASSWORD: scheduler
+          POSTGRES_DB: scheduler
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U scheduler"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Not a `services:` entry: those can only pull a published image, and the broker needs
+      # the delayed-message plugin baked in (retry backoff and scheduled jobs ride on it).
+      # Same Dockerfile the local compose stack uses.
+      - name: Start RabbitMQ with the delayed-message plugin
+        working-directory: .
+        run: |
+          docker build -t taskscheduler-rabbit:ci docker/rabbitmq
+          docker run -d --name ts-rabbit \
+            -e RABBITMQ_DEFAULT_USER=scheduler -e RABBITMQ_DEFAULT_PASS=scheduler \
+            -p 5672:5672 taskscheduler-rabbit:ci
+          # `-u rabbitmq` matters. This image has no USER, so `docker exec` runs as root, and
+          # rabbitmq-diagnostics creates /var/lib/rabbitmq/.erlang.cookie if it is missing.
+          # Poll during startup and root wins that race: the cookie ends up owned by root,
+          # mode 0400, and the broker — running as `rabbitmq` — dies with
+          # `Error when reading /var/lib/rabbitmq/.erlang.cookie: eacces`. Running the probe
+          # as the same user the broker uses keeps the cookie readable either way.
+          for _ in $(seq 1 60); do
+            if docker exec -u rabbitmq ts-rabbit rabbitmq-diagnostics -q check_running >/dev/null 2>&1; then
+              echo "rabbitmq is up"
+              docker exec -u rabbitmq ts-rabbit rabbitmq-plugins list -e | grep delayed
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::RabbitMQ did not come up within 120s"
+          docker logs ts-rabbit
+          exit 1
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: clients/python/pyproject.toml
+
+      - name: Install
+        run: pip install -e ".[dev]"
+
+      # scheduler-infra owns the schema in production, but building it here would mean a full
+      # Gradle + Wasm build just to create tables. The script replays the same SQL files.
+      - name: Apply migrations
+        run: python scripts/apply_migrations.py "$TASKSCHEDULER_TEST_DSN"
+        env:
+          TASKSCHEDULER_TEST_DSN: postgresql://scheduler:scheduler@localhost:5432/scheduler
+
+      - name: Integration tests
+        run: pytest tests/integration -q
+        env:
+          TASKSCHEDULER_TEST_DSN: postgresql://scheduler:scheduler@localhost:5432/scheduler
+          TASKSCHEDULER_TEST_AMQP: amqp://scheduler:scheduler@localhost:5672/
+
+      - name: RabbitMQ logs on failure
+        if: failure()
+        working-directory: .
+        run: docker logs ts-rabbit | tail -50
