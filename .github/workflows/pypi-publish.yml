@@ -1,0 +1,77 @@
+# Publish the Python SDK to PyPI as `taskscheduler-client`.
+#
+# Uses Trusted Publishing (OIDC): PyPI verifies the workflow's identity directly, so there
+# is no API token to store, rotate, or leak. Nothing here needs a repository secret.
+#
+# One-time setup on pypi.org (Your projects → Publishing → Add a pending publisher):
+#   PyPI project name : taskscheduler-client
+#   Owner             : 4aK-Boris
+#   Repository        : TaskScheduler
+#   Workflow name     : pypi-publish.yml
+#   Environment name  : pypi
+# The environment below must match that last field, or PyPI rejects the upload.
+#
+# Triggers:
+#   * push of a vX.Y.Z tag — the normal path, right after the release PR is merged and tagged
+#   * workflow_dispatch    — manual, for a version whose tag already exists (e.g. the first
+#                            publish of an already-tagged release)
+#
+# The version comes from clients/python/pyproject.toml, which the python-client workflow
+# keeps equal to gradle.properties. PyPI refuses to overwrite an existing version, so a
+# re-run for an already-published version fails loudly rather than silently replacing it.
+name: pypi-publish
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/taskscheduler-client
+    permissions:
+      # Required for Trusted Publishing — this is what mints the OIDC token PyPI checks.
+      id-token: write
+    defaults:
+      run:
+        working-directory: clients/python
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Build sdist + wheel
+        run: |
+          python -m pip install --upgrade build
+          python -m build --outdir dist
+
+      # Catches a malformed long_description before it reaches PyPI, where the rendered
+      # README cannot be fixed without a new version.
+      - name: Check metadata
+        run: |
+          python -m pip install --upgrade twine
+          python -m twine check dist/*
+
+      - name: Refuse to publish a version that is already on PyPI
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' pyproject.toml | head -1)
+          code=$(curl -s -o /dev/null -w '%{http_code}' \
+            "https://pypi.org/pypi/taskscheduler-client/$version/json")
+          echo "taskscheduler-client $version -> HTTP $code"
+          if [ "$code" = "200" ]; then
+            echo "::error::version $version is already published; bump the version first"
+            exit 1
+          fi
+
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: clients/python/dist
