@@ -850,10 +850,21 @@ exchange: jobs.dlx  (type: direct, durable)
 
 ### 11.4. Message format
 
-- Body: только **job_id** (UUID как UTF-8 строка, ~36 байт).
-- Properties: `MessageProperties.PERSISTENT_BASIC` (delivery_mode=2, durable).
-- Header `x-delay`: миллисекунды задержки (отсутствие = немедленная доставка).
+- Body: **ровно 16 сырых байт** — big-endian представление `job_id` (`Uuid.toByteArray()`),
+  **не** текстовый UUID. Consumer проверяет длину строго: тело любого другого размера →
+  `basicNack(requeue = false)` → DLX, handler не вызывается.
+- Properties: `deliveryMode = 2` (persistent) + `priority` (0..10, значение зажимается в
+  диапазон — см. 19.5).
+- Header `x-delay`: миллисекунды задержки, **32-битный int** (ограничение
+  delayed-message-plugin, потолок ~24 дня). Отсутствие заголовка = немедленная доставка.
+  Значение всегда ≤ `fastForwardWindow` (24ч) — это и есть причина гибридной схемы 11.5.
 - Полный payload загружается воркером из PG при pickup — single source of truth.
+
+> **Источник истины по формату кадра — код, а не этот раздел:**
+> `RabbitJobTransport.publish` / `consume` (`:transport-rabbit`) и тест
+> `RabbitJobTransportTest` («malformed body is nacked without invoking handler»).
+> До 2026-08 здесь было написано «UUID как UTF-8 строка, ~36 байт» — неверно с самого MVP;
+> клиент, написанный по той строке, молча уезжал бы в dead-letter.
 
 ### 11.5. Scheduling strategy (hybrid: plugin + PG fast-forward)
 
@@ -2382,39 +2393,55 @@ Boilerplate в нашей либе один раз, пользователь в�
 
 ### 21.3. Payload format
 
-Function-ref jobs хранятся в `job.payload_json` со специальным `kind`:
+Function-ref jobs хранятся в `job.payload_json` как сериализованный `FunctionRefPayload`
+(`core/shared/.../functionref/FunctionRefPayload.kt`):
 ```json
 {
-    "kind": "function_ref",
-    "target_type": "com.example.Mailer",
-    "target_qualifier": null,
-    "method_signature": "send(kotlin.Long,kotlin.String)",
+    "targetType": "com.example.Mailer",
+    "methodSignature": "send(kotlin.Long,kotlin.String)",
     "args": [123, "welcome"]
 }
 ```
 
-`payload_type` column = `"function_ref"` (отличает от sealed-class jobs).
+Три вещи, в которых легко ошибиться, если конструировать такой payload руками:
+
+- **Имена полей — camelCase** (это имена свойств `FunctionRefPayload`, сериализованные
+  kotlinx как есть).
+- **Поля-дискриминатора в теле нет.** Признак function-ref job — колонка
+  `job.payload_type = "function_ref"` (константа `FunctionRefPayload.FUNCTION_REF_PAYLOAD_TYPE`),
+  она же отличает их от sealed-class jobs, где `payload_type` = FQN класса.
+- **`targetQualifier` при `null` в JSON отсутствует**, а не пишется как `null` — глобальный
+  `Json` собран с `encodeDefaults = false` (см. 22.9).
+
+`methodSignature` — `"имя(fqn,fqn,…)"`: без пробелов и без generic-аргументов, типы —
+`qualifiedName` каждого параметра (`FunctionRefEnqueuer.methodSignatureOf`). Именно эта
+строка сопоставляется с методом на воркере, поэтому перегрузки различаются по типам.
 
 ### 21.4. Резолюция target в Koin (на worker-е)
 
 ```kotlin
-// при выполнении на worker-е:
-val payload = parseFunctionRef(job.payload_json)
-val targetClass = Class.forName(payload.target_type).kotlin
+// при выполнении на worker-е — см. engine-worker/.../FunctionRefRunner.kt:
+val payload = json.decodeFromString(FunctionRefPayload.serializer(), job.payload_json)
+val targetClass = Class.forName(payload.targetType).kotlin
 
-val target = if (payload.target_qualifier != null) {
-    koin.get(targetClass, qualifier = named(payload.target_qualifier))
+val target = if (payload.targetQualifier != null) {
+    koin.get(targetClass, qualifier = named(payload.targetQualifier))
 } else {
     koin.get(targetClass)  // throws NoBeanDefFoundException если не найден
 }
 
-val method = targetClass.functions.first { 
-    it.signatureString() == payload.method_signature 
+val method = targetClass.functions.first {
+    FunctionRefEnqueuer.methodSignatureOf(it) == payload.methodSignature
 }
-val args = deserializeArgs(payload.args, method.parameters.drop(1))
+val args = decodeArgs(payload.args, method.parameters.drop(1))
 
 method.callSuspend(target, *args)
 ```
+
+Реализация оборачивает ошибку каждого шага в отдельное сообщение (класс не на classpath /
+нет Koin-binding / сигнатура не совпала / не декодировался аргумент N), чтобы строка
+`job_event` давала достаточно для диагностики. Исключения идут в обычный
+retry / FAILED-механизм — отдельного состояния «function-ref handler not found» нет.
 
 ### 21.5. Multiple bindings: fail-fast + qualifier/subclass
 
@@ -3078,3 +3105,4 @@ NULL = пересылаем всё (default — для local dev). Production do
 - **2026-05-29** — **DAG fan-in / chain-length guardrails** (22.10). New `SchedulerCoreConfig.maxDagFanIn` + `maxChainLength` (default 1000) fail-fast with `IllegalArgumentException` at enqueue — before any DB write — when `enqueueAfter` waits on more than N distinct parents or `chain` is given more than N steps, capping runaway/accidental shapes (a barrier on 100k parents, a 100k-step chain). The fan-in check runs after `waitFor.distinct()` so `after(a, a)` counts as one. `DagIntegrationTest` adds over-cap + at-cap cases for both. Transitive DAG **depth** and per-parent **fan-out** are intentionally left unbounded (they'd cost a graph walk / extra COUNT per enqueue — disproportionate for a guardrail); 22.10's "что НЕ делаем" updated to say so.
 - **2026-05-29** — **Schema-hash drift alerts shipped** (22.9 — the proactive half; the reactive "bad payload → terminal FAILED" was already in). New `SchemaHasher` (`core/backend`) fingerprints a payload type's `SerialDescriptor` — sensitive to add/remove/rename/retype/optional/nullable, insensitive to field reorder (sorted by name), cycle-guarded. New `payload_schema` table (V5 migration) + `PayloadSchemaRepository.recordAndDetect` (first-seen / unchanged / changed, ON CONFLICT DO NOTHING for concurrent fleet startup). `SchemaDriftCheck` runs in `WorkerPool.start()` (new nullable ctor param, so the many direct-construction tests are untouched): for each `HandlerRegistry.knownPayloadTypes` it hashes via `serializer().descriptor`, compares, and on drift WARNs + invokes the optional `SchedulerWorkerConfig.onSchemaDriftAlert(payloadType, prev, cur)` hook. Best-effort (never blocks startup); fleet-dedup is natural (first worker records the change, the rest see it unchanged). Tests: `SchemaHasherTest`, `PayloadSchemaRepositoryIntegrationTest`, `SchemaDriftCheckTest`. "Park" state stays Phase 2 (needs a new JobState + state-machine migration).
 - **2026-08-03** — **Python SDK shipped** (`clients/python`). Non-JVM services now speak the wire protocol directly instead of proxying through a JVM: `Scheduler` writes the same `job` + `outbox` + `job_event` rows in one transaction, `WorkerPool` consumes `q.<name>` (16-byte UUID body), claims rows with the same conditional UPDATE (`ENQUEUED|AWAITING_RETRY` + `pending_deps=0`), renews leases in one bulk statement, and finalises terminal transitions together with the DAG cascade in a single transaction. Covers enqueue / scheduleAt (incl. the 24h fast-forward split) / enqueueOnce (SKIP·REPLACE·ENQUEUE_AFTER over the V8 slot indexes) / chain / barriers / recurring registration / cancel·retry·delete, plus progress reporting, cooperative + push cancellation (`job_cancel` LISTEN), type-pause deferral, worker registry rows and `scheduler_events` NOTIFY envelopes so Python jobs appear live on the dashboard. asyncio throughout (psycopg3 + aio-pika). Deliberately **not** implemented: the outbox publisher, recurring firing, orphan recovery, retention and Flyway migrations — those stay owned by `scheduler-infra`, and the client fail-fasts if the schema is below V8. `payload_type` is a Python FQN by default (`@job_type` pins it), so cross-language execution is opt-in and each language should get its own queues. Note for future work: DESIGN 11.4 still describes the Rabbit body as a 36-byte UTF-8 string — the code has used 16 raw bytes since MVP, and the Python client follows the code.
+- **2026-08-05** — **Исправлены два расхождения документа с кодом** (11.4, 21.3/21.4). **11.4**: тело Rabbit-сообщения — 16 сырых байт `Uuid.toByteArray()`, а не «UUID как UTF-8 строка, ~36 байт»; так было с самого MVP (`RabbitJobTransport`, `UUID_BYTES = 16`, зафиксировано `RabbitJobTransportTest`), и клиент, написанный по старой формулировке, молча уезжал бы в DLX (consumer строго проверяет длину). Заодно дописаны `priority` в properties и 32-битность `x-delay` (потолок плагина ~24 дня — причина, по которой fast-forward окно 11.5 равно 24ч). **21.3/21.4**: `FunctionRefPayload` сериализуется в camelCase (`targetType`/`targetQualifier`/`methodSignature`/`args`), поля `kind` в теле нет вовсе — дискриминатором служит колонка `payload_type = "function_ref"`, а `targetQualifier` при `null` в JSON отсутствует (`encodeDefaults = false`); псевдокод резолюции в 21.4 приведён к реальным именам и указывает на `FunctionRefRunner`. В оба раздела добавлены ссылки на код и тест как на источник истины. Само поведение не менялось — правка только документационная.
