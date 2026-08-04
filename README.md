@@ -43,6 +43,7 @@ end-to-end flow in the dashboard the moment everything boots.
 | `dashboard-web`       | Compose Wasm dashboard (Decompose nav, dark mode, search, bulk actions)  |
 | `standalone-runner`   | Ktor host that boots infra + dashboard; this is the `scheduler-infra` JVM|
 | `app`                 | Demo user app — shows the integration pattern in ~80 lines               |
+| `clients/python`      | Async Python SDK — same wire protocol, for non-JVM services             |
 
 ## Integrating into your application
 
@@ -112,6 +113,29 @@ class SendInvoiceHandler : JobHandler<SendInvoice> {
 ```
 
 For the full demo see [`app/src/main/kotlin/cs/trade/scheduler/demo/DemoApp.kt`](app/src/main/kotlin/cs/trade/scheduler/demo/DemoApp.kt).
+
+## Non-JVM services
+
+Python services join the same job system through [`clients/python`](clients/python/README.md),
+which speaks the wire protocol directly rather than proxying through a JVM: it writes the
+same `job` and `outbox` rows, claims work with the same lease semantics, and appears on the
+same dashboard.
+
+```python
+@job_type
+@dataclass
+class SendInvoice:
+    order_id: int
+
+@registry.handler(SendInvoice)
+async def send_invoice(ctx: JobContext, job: SendInvoice) -> None:
+    await billing.send(job.order_id, idempotency_key=str(ctx.job_id))
+```
+
+A `payload_type` is a Kotlin FQN on one side and a Python class name on the other, and a
+worker that meets a type it does not know fails the job rather than passing it on — so give
+each language its own queues. `scheduler-infra` stays Kotlin either way: it owns the
+migrations and the background loops both clients depend on.
 
 ## Operability
 
