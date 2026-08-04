@@ -51,6 +51,12 @@ pip install taskscheduler-client        # or: uv pip install taskscheduler-clien
 Requires Python 3.10+, and a RabbitMQ with the `rabbitmq_delayed_message_exchange` plugin
 enabled (the same requirement the Kotlin side has — it is how delays and retry backoff work).
 
+**Versioning.** The client shares one version with the rest of the project:
+`taskscheduler-client 0.6.0` is the client for `scheduler-infra 0.6.0`, and the two are
+released together. Run a client older than your infra and it may not know about a newer
+column; newer, and it fails fast on the schema check. CI enforces that
+`pyproject.toml`, `taskscheduler.__version__` and Gradle's `schedulerVersion` agree.
+
 **On Windows**, select the other event loop before starting anything — psycopg cannot run on
 the `ProactorEventLoop` that asyncio uses by default there:
 
