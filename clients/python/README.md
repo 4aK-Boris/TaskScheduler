@@ -1,6 +1,6 @@
 # TaskScheduler — Python SDK
 
-Async Python client for [TaskScheduler](../../README.md). A Python service becomes a
+Async Python client for [TaskScheduler](https://github.com/4aK-Boris/TaskScheduler). A Python service becomes a
 first-class participant in the same job system as your Kotlin services: it enqueues work,
 runs handlers, and shows up on the same dashboard with the same retry, cancellation and
 progress semantics.
@@ -266,7 +266,8 @@ ruff check src tests examples scripts && mypy src
 
 Integration tests need a database with the migrations applied and a broker with the
 delayed-message plugin. The whole suite runs in CI on every change under `clients/python`
-(`.github/workflows/python-client.yml`); locally, bring the two up yourself:
+(`.github/workflows/python-client.yml`); locally, bring the two up yourself. The commands
+below assume a checkout of the repository, run from `clients/python`:
 
 ```bash
 docker run -d --name ts-pg -e POSTGRES_USER=scheduler -e POSTGRES_PASSWORD=scheduler \
