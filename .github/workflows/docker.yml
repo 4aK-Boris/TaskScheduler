@@ -40,13 +40,13 @@ jobs:
           distribution: temurin
           java-version: '21'
 
-      # Caches the Gradle build cache + the Kotlin/Wasm + Node toolchain downloads across runs,
-      # so only the first build pays the full Compose-Wasm-distribution cost.
+      # Caches the Gradle build cache + the Kotlin/JS + Node toolchain downloads across runs,
+      # so only the first build pays the full webpack-distribution cost.
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      # Produces standalone-runner/build/libs/standalone-runner-all.jar (bundles the Wasm dashboard
-      # via processResources -> :dashboard-web:wasmJsBrowserDistribution).
+      # Produces standalone-runner/build/libs/standalone-runner-all.jar (bundles the dashboard
+      # via processResources -> :dashboard-web:jsBrowserDistribution).
       - name: Build infra shadow JAR
         run: ./gradlew --no-daemon :standalone-runner:shadowJar
 

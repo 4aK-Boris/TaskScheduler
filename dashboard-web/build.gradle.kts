@@ -1,13 +1,10 @@
-import org.jetbrains.kotlin.gradle.ExperimentalWasmDsl
-
 plugins {
-    id("buildsrc.convention.compose-multiplatform")
+    id("buildsrc.convention.kotlin-js-react")
     alias(libs.plugins.kotlinPluginSerialization)
 }
 
 kotlin {
-    @OptIn(ExperimentalWasmDsl::class)
-    wasmJs {
+    js(IR) {
         binaries.executable()
         browser {
             commonWebpackConfig {
@@ -17,18 +14,12 @@ kotlin {
     }
 
     sourceSets {
-        wasmJsMain.dependencies {
+        jsMain.dependencies {
             implementation(project(":core:shared"))
+            // :core:frontend re-exports React/Emotion/Ktor/Decompose as `api`, so the SPA only
+            // needs the BOM here to keep the wrapper versions aligned.
             implementation(project(":core:frontend"))
-
-            implementation(libs.composeRuntime)
-            implementation(libs.composeFoundation)
-            implementation(libs.composeMaterial3)
-            implementation(libs.composeUi)
-
-            implementation(libs.bundles.decompose)
-            implementation(libs.bundles.ktorClientWasm)
-            implementation(libs.bundles.kotlinxEcosystem)
+            implementation(project.dependencies.platform(libs.kotlinWrappersBom))
         }
     }
 }

@@ -2,7 +2,7 @@ package cs.trade.scheduler.dashboard.server.api.dto
 
 /**
  * Module-local request DTOs for /api/jobs. Response shapes live in :core:shared so the
- * wasmJs frontend can deserialise them without duplication; request shapes stay server-
+ * browser frontend can deserialise them without duplication; request shapes stay server-
  * side because Konform validators reference them.
  */
 

@@ -10,7 +10,7 @@
 - **Ключевые фичи MVP:** enqueue jobs, scheduled (future-dated), recurring (cron), retry с exp backoff, chains (последовательное выполнение), barriers/dependencies ("выполни C только когда A и B успешно завершатся"), web-dashboard.
 - **Что НЕ JobRunr:**
   - RabbitMQ для push-дисптача (JobRunr только polling DB)
-  - Compose Multiplatform Web вместо стандартного HTML/JS dashboard
+  - Dashboard на Kotlin/JS + React — общие DTO с бэкендом вместо ручной синхронизации типов
   - Sealed-class API вместо lambda-magic (lambda capture — shipped через K2 compiler plugin, см. 21.9)
   - DAG-зависимости (chains + barriers) встроены в core, не Pro-only
 
@@ -31,7 +31,7 @@
 | DI | Koin | лёгкий, Kotlin-нативный |
 | Lambda capture — shipped | K2 compiler plugin (IR rewrite) | стабильнее ASM, compile-time, без runtime-магии |
 | Dashboard backend | KTOR (REST + WebSocket) | стандарт для Kotlin web |
-| Dashboard frontend | Compose Multiplatform Web (Wasm) + Decompose навигация | общий `:core:shared` с бэком, type safety через границу |
+| Dashboard frontend | Kotlin/JS + React 19 (Emotion) + Decompose навигация | общий `:core:shared` с бэком, type safety через границу |
 | Тесты | Testcontainers | реальный PG + Rabbit для интеграции |
 | Логи | SLF4J + Logback | стандарт |
 
@@ -39,20 +39,20 @@
 
 ## 3. Структура модулей
 
-Gradle-модули режутся по **технической границе деплоя** (что в user app, что в scheduler-infra, что KMP wasmJs target). Внутри каждого модуля применяется **3-layer convention** (`api/domain/infrastructure` для backend, `data/domain/presentation` для UI) — там, где это имеет смысл. См. секцию 3.5 о trade-off "Gradle submodule vs пакет".
+Gradle-модули режутся по **технической границе деплоя** (что в user app, что в scheduler-infra, что KMP js target). Внутри каждого модуля применяется **3-layer convention** (`api/domain/infrastructure` для backend, `data/domain/presentation` для UI) — там, где это имеет смысл. См. секцию 3.5 о trade-off "Gradle submodule vs пакет".
 
 ### 3.1. Gradle-модули — обзор
 
 ```
 :core
-├── :core:shared       — KMP (jvm + wasmJs). @Serializable API DTO, enums,
+├── :core:shared       — KMP (jvm + js). @Serializable API DTO, enums,
 │                        value classes, публичные exceptions. Видимо с обеих сторон.
 ├── :core:backend      — JVM-only. BaseUseCase, runCatchingWithLogging,
 │                        ApiResponse, Ktor *Handle helpers, TimeProvider,
 │                        метрики (Micrometer), BaseValidation.
-└── :core:frontend     — wasmJs-only. BaseComponent (Decompose), theme,
-                         ApiClient (Ktor client), WS subscriber base, общие
-                         Composable примитивы.
+└── :core:frontend     — js-only. BaseComponent (Decompose), дизайн-система
+                         (тема + UI-kit на Emotion), ApiClient (Ktor client),
+                         WS subscriber base, хук useValue.
 
 :storage-postgres      — StorageProvider impl + Flyway миграции
 :transport-rabbit      — JobTransport impl, Rabbit topology, consumer/publisher
@@ -60,7 +60,7 @@ Gradle-модули режутся по **технической границе 
 :engine-infra          — Outbox publisher, recurring scheduler, fast-forward,
                          safety-net polling (ТОЛЬКО в scheduler-infra)
 :dashboard-server      — KTOR REST + WebSocket (в составе scheduler-infra)
-:dashboard-web         — Compose Wasm SPA с Decompose навигацией (bundle,
+:dashboard-web         — React SPA (Kotlin/JS) с Decompose навигацией (bundle,
                          подключается к :dashboard-server как resources)
 :standalone-runner     — main() + Docker image, биндит engine-infra + dashboard
 :app                   — demo user app
@@ -75,7 +75,7 @@ Gradle-модули режутся по **технической границе 
 | **User app** (enqueue + опц. worker) | `:core:shared`, `:core:backend`, `:storage-postgres`, `:transport-rabbit`, `:engine-worker` (опц.), handler-классы пользователя | container(s) пользователя |
 | **scheduler-infra** | `:core:shared`, `:core:backend`, `:core:frontend`*, `:storage-postgres`, `:transport-rabbit`, `:engine-infra`, `:dashboard-server`, `:dashboard-web`, `:standalone-runner` | наш Docker image (`taskscheduler/infra:latest`) |
 
-*`:core:frontend` подключается транзитивно через `:dashboard-web` (как KMP wasmJs target).
+*`:core:frontend` подключается транзитивно через `:dashboard-web` (как KMP js target).
 
 **Ключевой инвариант:** handler-классы пользователя — ВСЕГДА в user app, НИКОГДА в infra container. Infra container не знает про типы payload — оперирует на уровне `payload_type` (строка) + `payload_json`.
 
@@ -120,12 +120,12 @@ dashboard-web/
     ├── root/
     │   ├── RootComponent.kt          — interface + sealed Config (Decompose)
     │   ├── DefaultRootComponent.kt   — childStack(...) + создание child component'ов
-    │   └── RootContent.kt            — @Composable, рендерит Children(stack)
+    │   └── RootContent.kt            — React FC, рендерит активного child стека
     ├── screens/
     │   ├── joblist/
     │   │   ├── JobListComponent.kt        — interface: val model: Value<Model>; intent-функции
     │   │   ├── DefaultJobListComponent.kt — реализация (роль ViewModel)
-    │   │   └── JobListContent.kt          — @Composable, читает component.model.subscribeAsState()
+    │   │   └── JobListContent.kt          — React FC, читает useValue(component.model)
     │   ├── jobdetail/
     │   ├── recurring/
     │   ├── workers/
@@ -137,7 +137,7 @@ dashboard-web/
 
 **Decompose-нюансы:**
 - **Component** = бизнес-логика экрана + lifecycle + state preservation. Аналог ViewModel, но с навигацией внутри. Получает `ComponentContext` в конструктор (lifecycle/state/instanceKeeper).
-- **`Value<T>`** — observable Decompose-овский, замена `StateFlow` на стороне Compose. В Composable: `component.model.subscribeAsState()`.
+- **`Value<T>`** — observable Decompose-овский, замена `StateFlow` на стороне UI. В React-компоненте: `useValue(component.model)`.
 - **ChildStack** — стек навигации, sealed class `Config` описывает экраны (`Config.JobList`, `Config.JobDetail(id)`, ...).
 - DI: Koin резолвится внутри `DefaultXxxComponent` через конструктор (`get()` из global Koin) — Component сам пробрасывает зависимости в state.
 - `viewmodels/` и `state/` отдельных папок **нет** — нативно для Decompose Component играет роль ViewModel, а `data class Model` — nested в interface Component.
@@ -149,7 +149,7 @@ dashboard-web/
 В основном проекте (`cs.trade.*`) модули — это **подпакеты одного Gradle-модуля**. У нас разделение **Gradle submodule** обусловлено тремя реальными причинами:
 
 1. **Разный classpath по деплою.** `user-app` подключает `:engine-worker` (выполняет handler-ы), но не подключает `:engine-infra` (там outbox/recurring/dashboard) — handler-классы пользователя не должны утечь в infra-образ.
-2. **Разный target compile.** `:core:shared` — KMP (jvm + wasmJs). `:dashboard-web` — wasmJs-only. `:engine-*` — jvm-only. Это технически разные source sets с разными compiler plugins.
+2. **Разный target compile.** `:core:shared` — KMP (jvm + js). `:dashboard-web` — js-only. `:engine-*` — jvm-only. Это технически разные source sets с разными compiler plugins.
 3. **Independent versioning потенциально.** Если будет публикация на Maven Central — каждый модуль имеет свой artifactId.
 
 Внутри одного Gradle-модуля разделение на пакеты `api/domain/infrastructure` — чистая convention, проверяется на code-review (никаких Module dependency analyser tool в MVP — overkill).
@@ -216,16 +216,20 @@ scheduler.enqueue(mailer::send, 123L, "welcome")
 
 **Shipped (см. 21.9):** полный lambda capture — но через **K2 compiler plugin** (IR-переписывание call-site), не KSP (KSP не умеет переписывать call-site). `enqueueLambda { mailer.send(123, "welcome") }` на этапе компиляции транслируется в эквивалент function-ref enqueue. Стабильнее JobRunr'овского ASM-подхода.
 
-### 4.4. Compose Multiplatform Web (Wasm) для UI
+### 4.4. Kotlin/JS + React для UI
 
 **Плюсы:**
 - Общий `:core:shared` модуль (KMP) — `@Serializable` типы шарятся между бэкендом (REST responses) и фронтом (UI state). Type safety через всю границу.
 - Один язык по всему стеку.
-- Reactive через Flow → live updates job-ов.
+- Reactive через Flow -> live updates job-ов.
+- Рендер в DOM: настоящие `<table>` / `<button>` / `<input>` -> нативный скроллинг, поиск по странице, доступность и клавиатура работают без нашего участия.
+- Bundle ~1.7 МБ вместо ~13 МБ у прежней Compose/Wasm-сборки (см. 15.8).
 
 **Минусы (приняли):**
-- Bundle size ~5-15 МБ (Skiko + рантайм). Для внутреннего dashboard'а — норм.
-- Большие таблицы (10k+ rows) — требуют LazyColumn виртуализации.
+- Дизайн-систему (тема, контролы, таблицы) держим свою — готовый Material-компонентный набор не берём (см. 15.3).
+- Версия `kotlin-wrappers` жёстко связана с версией Kotlin — обновлять только парой (см. 15.2).
+
+**История:** до этого дашборд был на Compose Multiplatform (Wasm). Переехали на React ради размера бандла и DOM-семантики; Decompose-слой (навигация + стейт экранов) при переезде не менялся.
 
 ### 4.5. Timeout: 3-уровневая конфигурация, дефолт 5 минут
 
@@ -638,7 +642,7 @@ INSERT'ов под одним CAS на `last_triggered_at` (проигравша
 
 ## 9. Dashboard
 
-Живёт только в scheduler-infra container (см. секцию 14). KTOR-сервер с REST + WebSocket, отдаёт Compose Wasm SPA как статику.
+Живёт только в scheduler-infra container (см. секцию 14). KTOR-сервер с REST + WebSocket, отдаёт React SPA как статику.
 
 ### 9.1. REST endpoints
 
@@ -757,7 +761,7 @@ RETURNING *;
 - **Retry** — `POST /api/jobs/{id}/retry` (mode по умолчанию `FRESH_BUDGET`). `attempts = 0` → полный свежий бюджет. Event `MANUAL_RETRY`.
 - **Retry +1** — `POST /api/jobs/{id}/retry?mode=once`. `attempts = max_attempts - 1`: следующий pickup поднимет счётчик до `max_attempts`, и worker-гейт `attempts < max_attempts` провалится в момент падения → **ровно одна** попытка, затем снова FAILED, без авто-ретрай-шторма. Event `MANUAL_RETRY_ONCE`. Семантика "похоже на транзиентный сбой, дай один шанс без полного бюджета". Детерминированно независимо от того, как job попал в FAILED (исчерпал бюджет ИЛИ non-retriable/schema-ошибка). UI — вторая (OutlinedButton) кнопка в JobDetail, только на FAILED. Один CAS-UPDATE; `max_attempts` иммутабелен после enqueue, поэтому чтение его в той же транзакции race-free.
 
-### 9.6. Frontend (Compose Wasm)
+### 9.6. Frontend (Kotlin/JS + React)
 
 Подаётся dashboard-server-ом как статика. SPA с router-ом, все routes под `/`:
 
@@ -766,7 +770,7 @@ RETURNING *;
 - **/recurring** — RecurringList (cron-таблица, manual trigger, enable/disable)
 - **/workers** — WorkerList (heartbeat, in-flight count, host, статус alive)
 - **/** — Overview (`/api/stats/overview` cards + recent failures)
-- **DependencyGraph — shipped** — транзитивный DAG-граф конкретного job-а (все достижимые предки/потомки), инлайн в JobDetail между Payload и Timeline. Сервер обходит компонент BFS в обе стороны по `JobDependencyRepository` (лимит 100 узлов, флаг `truncated`); `JobDetail.graph: JobGraph{nodes, edges, truncated}` заменил плоские списки `parents`/`children`. `DependencyGraph` Composable рисует слоевую топологическую раскладку (longest-path layering + barycenter-упорядочивание): узлы — карточки со `StateChip`, фокус-узел подсвечен, клик по узлу → его detail; рёбра parent→child рисуются на `Canvas` со стрелками, цвет по `on_failure`. Граф показывается только если есть рёбра (одиночная джоба → секция скрыта).
+- **DependencyGraph — shipped** — транзитивный DAG-граф конкретного job-а (все достижимые предки/потомки), инлайн в JobDetail между Payload и Timeline. Сервер обходит компонент BFS в обе стороны по `JobDependencyRepository` (лимит 100 узлов, флаг `truncated`); `JobDetail.graph: JobGraph{nodes, edges, truncated}` заменил плоские списки `parents`/`children`. `DependencyGraph` рисует слоевую топологическую раскладку (longest-path layering + barycenter-упорядочивание): узлы — абсолютно спозиционированные карточки со `StateChip`, фокус-узел подсвечен, клик по узлу -> его detail; рёбра parent->child рисуются на SVG-слое под карточками со стрелками, цвет по `on_failure`. Граф показывается только если есть рёбра (одиночная джоба → секция скрыта).
 
 WS-клиент подключается один раз на `/api/events`, диспатчит по типу события в state локального ViewModel.
 
@@ -1215,7 +1219,7 @@ suspend fun stop(timeout: Duration = 30.seconds) {
 │   │ + scheduler library:         │    │    │   - Fast-forward (≥24ч)            │
 │   │   • schedulerCoreModule      │    │    │   - Safety-net polling             │
 │   │   • schedulerPostgresModule  │    │    │   - Dashboard backend (KTOR)       │
-│   │   • schedulerRabbitModule    │    │    │   - Dashboard frontend (Wasm)      │
+│   │   • schedulerRabbitModule    │    │    │   - Dashboard frontend (JS)        │
 │   │   • schedulerWorkerModule    │    │    │   - Flyway migrations on start     │
 │   │ + handler-классы пользователя│    │    │                                    │
 │   └─────────────────────────────┘    │    │                                    │
@@ -1362,7 +1366,7 @@ EXPOSE 8080
 ENTRYPOINT ["java", "-jar", "app.jar"]
 ```
 
-Java 21 LTS — соответствует `jvmToolchain(21)` в `buildSrc/src/main/kotlin/buildsrc/convention/kotlin-jvm.gradle.kts`. Понизили с Java 24 после того как Compose MP 1.11.0 потребовал JDK 24 в Gradle classpath; LTS более безопасен для prod.
+Java 21 LTS — соответствует `jvmToolchain(21)` в `buildSrc/src/main/kotlin/buildsrc/convention/kotlin-jvm.gradle.kts`. LTS-версия, безопасный выбор для prod.
 
 Gradle: `:standalone-runner` собирается через Shadow plugin в fat-jar со всеми deps (engine-infra, dashboard-server, dashboard-web статика как resources, transport-rabbit, storage-postgres).
 
@@ -1370,151 +1374,127 @@ CI публикует `taskscheduler/infra:${version}` в registry.
 
 ---
 
-## 15. Compose Multiplatform Web setup
+## 15. Kotlin/JS + React frontend setup
 
 ### 15.1. `:core:shared` как Kotlin Multiplatform
 
-Главное архитектурное решение для шаринга типов между JVM-сервером и Wasm-клиентом — `:core:shared` это KMP-модуль:
+Главное архитектурное решение для шаринга типов между JVM-сервером и браузерным клиентом — `:core:shared` это KMP-модуль:
 
 ```kotlin
-// core/shared/build.gradle.kts
-plugins {
-    alias(libs.plugins.kotlinMultiplatform)
-    alias(libs.plugins.kotlinPluginSerialization)
-}
-
+// core/shared/build.gradle.kts (через buildsrc.convention.kotlin-multiplatform)
 kotlin {
     jvm()                          // для :core:backend, :storage-postgres, :engine-*, :dashboard-server
-    wasmJs {                       // для :core:frontend, :dashboard-web
+    js(IR) {                       // для :core:frontend, :dashboard-web
         browser()
         binaries.library()
     }
-    
+
     sourceSets {
         commonMain.dependencies {
-            implementation(libs.kotlinxSerialization)
-            implementation(libs.kotlinxDatetime)
-            implementation(libs.kotlinxCoroutines)
+            implementation(libs.bundles.kotlinxEcosystem)
         }
     }
 }
 ```
 
-`@Serializable data class JobView(...)` живёт в `commonMain` → автоматически доступно везде. **Type safety через всю границу сервер↔клиент** — главная мотивация выбора Compose Wasm vs HTML/JS-стек.
+`@Serializable data class JobView(...)` живёт в `commonMain` -> автоматически доступно везде. **Type safety через всю границу сервер<->клиент** — главная мотивация писать фронт на Kotlin, а не на TypeScript.
 
-JVM-модули используют стандартно: `implementation(project(":core:shared"))` — Gradle резолвит JVM target. wasmJs-модули — тот же синтаксис, Gradle резолвит wasmJs target.
+JVM-модули используют стандартно: `implementation(project(":core:shared"))` — Gradle резолвит JVM target. js-модули — тот же синтаксис, Gradle резолвит js target.
+
+**Почему `js(IR)`, а не `wasmJs`:** React-обёртки JetBrains (`kotlin-react`, `kotlin-emotion`) публикуют только `js`-варианты. Wasm для DOM-фреймворка и не нужен — узкое место дашборда это сеть и рендер DOM, а не вычисления.
 
 ### 15.2. `:dashboard-web` структура
 
 ```kotlin
 // dashboard-web/build.gradle.kts
 plugins {
-    alias(libs.plugins.kotlinMultiplatform)
-    alias(libs.plugins.composeMultiplatform)
-    alias(libs.plugins.composeCompiler)
+    id("buildsrc.convention.kotlin-js-react")
     alias(libs.plugins.kotlinPluginSerialization)
 }
 
 kotlin {
-    wasmJs {
+    js(IR) {
+        binaries.executable()
         browser {
             commonWebpackConfig {
                 outputFileName = "dashboard-web.js"
-                devServer = (devServer ?: KotlinWebpackConfig.DevServer()).copy(
-                    port = 8080,
-                    proxy = mutableMapOf(
-                        "/api" to "http://localhost:8081",
-                        "/api/events" to mutableMapOf(
-                            "target" to "ws://localhost:8081",
-                            "ws" to true
-                        )
-                    )
-                )
             }
         }
-        binaries.executable()
     }
-    
+
     sourceSets {
-        wasmJsMain.dependencies {
+        jsMain.dependencies {
             implementation(project(":core:shared"))
+            // :core:frontend реэкспортит React / Emotion / Ktor / Decompose как `api`
             implementation(project(":core:frontend"))
-            
-            implementation(compose.runtime)
-            implementation(compose.foundation)
-            implementation(compose.material3)
-            implementation(compose.ui)
-            implementation(compose.components.resources)
-            
-            implementation(libs.ktorClientCore)
-            implementation(libs.ktorClientJs)               // wasmJs engine
-            implementation(libs.ktorClientContentNegotiation)
-            implementation(libs.ktorSerializationKotlinxJson)
-            implementation(libs.ktorClientWebsockets)
-            
-            // Decompose: навигация + жизненный цикл + state preservation
-            implementation(libs.decompose)                  // com.arkivanov.decompose:decompose
-            implementation(libs.decomposeExtensionsCompose) // com.arkivanov.decompose:extensions-compose
-            implementation(libs.essentyLifecycle)           // com.arkivanov.essenty:lifecycle (для DefaultComponentContext)
+            implementation(project.dependencies.platform(libs.kotlinWrappersBom))
         }
     }
 }
 ```
 
-**Plugins нюанс:** с Kotlin 2.0+ Compose Compiler — отдельный плагин (`org.jetbrains.kotlin.plugin.compose`), не часть Compose Multiplatform. Подключаем оба.
+**Версии wrappers пинятся жёстко.** Каждый релиз `kotlin-wrappers` собран одной конкретной версией Kotlin, и его klib нечитаем более старым компилятором. `2026.6.1` — последний на Kotlin 2.3.21 (начиная с `2026.6.2` пошёл 2.4.0). Поднимать эту версию можно только вместе с версией Kotlin.
 
-Структура исходников (`presentation/root/...`, `presentation/screens/{name}/...`) — см. секцию 3.4.
+Структура исходников (`presentation/root/...`, `presentation/screens/{name}/...`) — см. секцию 3.4. Слои `data/` и `domain/`, а также весь Component-слой Decompose, к UI-фреймворку не привязаны.
 
 ### 15.3. Технологические выборы
 
 | Слой | Технология |
 |---|---|
-| UI | Compose Multiplatform `material3` (`compose.material3`) |
-| Routing | **Decompose 3.x** (`com.arkivanov.decompose`) — KMP-нативный, проверенная либа для CMP, с поддержкой sealed-class config + state preservation + child components |
-| HTTP client | `ktor-client` с `wasmJs` engine + content-negotiation kotlinx-serialization |
+| UI | **React 19** через `kotlin-react` / `kotlin-react-dom` |
+| Стилизация | **Emotion** (`kotlin-emotion-react`) — CSS-in-Kotlin, типизированный через `web.cssom` |
+| Дизайн-система | Собственная (`:core:frontend/ui` + `theme`) — палитра "Graphite", IBM Plex Sans, набор контролов и табличных примитивов |
+| Routing | **Decompose 3.x** (`com.arkivanov.decompose`) — sealed-class config + web history + child components |
+| HTTP client | `ktor-client` с `js` engine + content-negotiation kotlinx-serialization |
 | WebSocket | `ktor-client-websockets` |
-| State | **Decompose `Value<T>`** (заменяет StateFlow на стороне Compose) + Compose `State` + `MutableValue` внутри Component. ViewModel-pattern — Component сам играет роль ViewModel, отдельной либы lifecycle-viewmodel-compose НЕ нужно. |
-| Theme | Material3 ColorScheme, **auto-detect + persistent override** |
+| State | **Decompose `Value<T>`** внутри Component (роль ViewModel), в React читается хуком `useValue` |
+| Theme | CSS custom properties + `data-theme` на `<html>`, **auto-detect + persistent override** |
 
-**Почему Decompose вместо androidx.navigation-compose:**
-- KMP-native (Decompose был задуман для CMP). androidx.navigation для wasmJs появился в 2.8, но всё ещё догоняет в фичах.
-- Built-in lifecycle и state preservation на back navigation — без separate lib.
-- Sealed-class Config для type-safe навигации (вместо string routes).
-- Component-структура естественно делит экран на бизнес-логику (Component) и UI (Content) — симметрично нашему правилу разделения по смыслу.
+**Почему Decompose остался при переходе на React:** его core UI-агностичен. Весь навигационный стек, стейт экранов, фильтры, сортировка и web-history переехали с wasm-сборки без единой правки — переписывался только слой рендера.
 
-### 15.4. Theme — auto + toggle с persistence
+**Почему своя дизайн-система, а не готовая UI-библиотека:** вся поверхность дашборда — это кнопки, поля, чипы и таблицы. Владеть ими дешевле, чем тянуть зависимость с собственным циклом релизов, и это единственный способ повторить "Graphite" точь-в-точь.
+
+### 15.4. Мост Decompose -> React
+
+`useValue` — единственная точка связи между Decompose и React:
 
 ```kotlin
-@Composable
-fun DashboardApp() {
-    val systemDark = isSystemInDarkTheme()
-    var override by rememberSaveable { mutableStateOf<Boolean?>(null) }  // null = follow system
-    val isDark = override ?: systemDark
-    
-    MaterialTheme(
-        colorScheme = if (isDark) darkColorScheme() else lightColorScheme()
-    ) {
-        DashboardLayout(
-            isDark = isDark,
-            onThemeToggle = { override = !isDark }
-        )
-    }
+public fun <T : Any> useValue(value: Value<T>): T {
+    val subscribe: (() -> Unit) -> Cleanup = useMemo(value) { /* value.subscribe(...) */ }
+    return useSyncExternalStore(subscribe, { value.value })
 }
 ```
 
-Persistence в `localStorage` через wasmJs interop (`window.localStorage`). При следующей загрузке — читаем сохранённое значение.
+Построен на `useSyncExternalStore` — штатном примитиве React для внешнего мутабельного стора: читает снапшот прямо во время рендера (первый кадр уже с актуальными данными) и корректен при конкурентном рендеринге.
 
-### 15.5. Build coupling: copy task
+### 15.5. Theme — auto + toggle с persistence
 
-`:dashboard-server` подключает Wasm-bundle через копирование из `:dashboard-web` build output:
+Обе палитры всегда присутствуют в стилях как CSS-переменные; какая победит — решает атрибут `data-theme` на `<html>`:
 
 ```kotlin
-// dashboard-server/build.gradle.kts
+// SchedulerGlobalStyles монтируется один раз в корне
+":root"               { paletteVariables(LightPalette) }
+"[data-theme='dark']" { paletteVariables(DarkPalette) }
+
+// переключение — одна запись атрибута, без ре-рендера React-дерева
+public fun applyThemeMode(isDark: Boolean) {
+    document.documentElement.setAttribute("data-theme", if (isDark) "dark" else "light")
+}
+```
+
+Компоненты читают токены как `SchedulerColors.primary` -> `var(--sch-primary)`. Persistence в `localStorage` (`dashboard.dark`); дефолт при первом заходе — системная тема.
+
+### 15.6. Build coupling: copy task
+
+`:standalone-runner` подключает JS-бандл через копирование из `:dashboard-web` build output:
+
+```kotlin
+// standalone-runner/build.gradle.kts
 tasks.processResources {
-    from(project(":dashboard-web").layout.buildDirectory.dir("dist/wasmJs/productionExecutable")) {
+    from(project(":dashboard-web").layout.buildDirectory.dir("dist/js/productionExecutable")) {
         into("dashboard-web")
     }
-    dependsOn(":dashboard-web:wasmJsBrowserDistribution")
+    dependsOn(":dashboard-web:jsBrowserDistribution")
 }
 ```
 
@@ -1531,46 +1511,39 @@ routing {
 }
 ```
 
-Same origin → нет CORS в prod. Bundle и API оба на порту 8080 (или другой что задан в `DASHBOARD_PORT`).
+Same origin -> нет CORS в prod. Bundle и API оба на порту 8080 (или другой что задан в `DASHBOARD_PORT`).
 
-### 15.6. Dev workflow
+### 15.7. Dev workflow
 
-**Производственная сборка** через `./gradlew :dashboard-server:run` — собирает Wasm, копирует в resources, поднимает KTOR. Полный цикл.
+**Производственная сборка** через `./gradlew :standalone-runner:run` — собирает JS, копирует в resources, поднимает KTOR. Полный цикл.
 
 **Dev итерация** (быстрее):
 1. Запускаем `scheduler-infra` (без dashboard) на 8081: `docker compose up -d postgres rabbitmq` + `./gradlew :standalone-runner:run -PdashboardEnabled=false` (или через env)
-2. Запускаем dashboard-web в dev-режиме: `./gradlew :dashboard-web:wasmJsBrowserDevelopmentRun` → webpack-dev-server на 8080 с **HMR**
-3. Webpack проксирует `/api/*` → `localhost:8081` (см. конфиг в 15.2)
-4. Открываем `http://localhost:8080` → правим Compose-код → видим в браузере без полной пересборки
+2. Запускаем dashboard-web в dev-режиме: `./gradlew :dashboard-web:jsBrowserDevelopmentRun --continuous` -> webpack-dev-server на 8080 с HMR
+3. Webpack проксирует `/api/*` -> `localhost:8081`
+4. Открываем `http://localhost:8080` -> правим Kotlin-код -> видим в браузере без полной пересборки
 
-Same-origin в браузере → нет CORS, prod-path чистый.
+**Без бэкенда вообще:** `http://localhost:8080/?mock` подменяет REST-репозитории на in-memory сэмплы (`data/mock/MockRepositories.kt`) — все экраны рендерятся заполненными. Для работы над UI этого достаточно.
 
-### 15.7. Bundle size и оптимизации
+### 15.8. Bundle size
 
-| Компонент | Размер (gzipped) |
+| Компонент | Размер |
 |---|---|
-| Skiko WASM (графический движок) | ~3-5 МБ |
-| Kotlin/Wasm рантайм | ~500 КБ |
-| Compose runtime + ui + material3 + foundation | ~1-2 МБ |
-| Наш код | ~50-200 КБ |
-| **Итого первая загрузка** | **~5-8 МБ gzipped** |
+| `dashboard-web.js` (minified) | ~1.7 МБ |
+| IBM Plex Sans (4 начертания, ttf) | ~800 КБ |
+| **Итого первая загрузка** | **~2.5 МБ** (~700 КБ gzipped) |
 
-Для **внутреннего dashboard** приемлемо (1-3 сек на 100Мб/с). Для публичного сайта — нет. У нас внутренний.
+Для сравнения, предыдущая Compose/Wasm-сборка весила ~13 МБ на тех же экранах: Skiko рисовал UI на canvas и тянул собственный графический движок. Переход на DOM убрал эту статью расхода целиком.
 
 **Оптимизации в prod build:**
-- `wasm-opt` (binaryen) — встроено в production task
+- webpack production mode (минификация + tree shaking) — встроено в `jsBrowserDistribution`
 - `install(Compression)` в KTOR — gzip/brotli на static
 - HTTP cache headers (`Cache-Control: immutable`) для версионированных asset-ов
-- Skiko + рантайм кэшируются браузером → повторные визиты быстрые
+- Шрифты кэшируются браузером -> повторные визиты быстрые
 
-### 15.8. Browser support
+### 15.9. Browser support
 
-Kotlin/Wasm требует **Wasm GC** — поддерживается:
-- Chrome 119+ (Oct 2023)
-- Firefox 120+ (Nov 2023)  
-- Safari 18.2+ (Dec 2024)
-
-На начало 2026 — все актуальные браузеры. Для legacy — не поддерживаем, явно документируем в README.
+Обычный ES2015-бандл + DOM: работает во всех актуальных браузерах, включая те, где Wasm GC (требование прежней сборки) недоступен. Отдельного ограничения по версиям больше нет.
 
 ---
 
@@ -3106,3 +3079,4 @@ NULL = пересылаем всё (default — для local dev). Production do
 - **2026-05-29** — **Schema-hash drift alerts shipped** (22.9 — the proactive half; the reactive "bad payload → terminal FAILED" was already in). New `SchemaHasher` (`core/backend`) fingerprints a payload type's `SerialDescriptor` — sensitive to add/remove/rename/retype/optional/nullable, insensitive to field reorder (sorted by name), cycle-guarded. New `payload_schema` table (V5 migration) + `PayloadSchemaRepository.recordAndDetect` (first-seen / unchanged / changed, ON CONFLICT DO NOTHING for concurrent fleet startup). `SchemaDriftCheck` runs in `WorkerPool.start()` (new nullable ctor param, so the many direct-construction tests are untouched): for each `HandlerRegistry.knownPayloadTypes` it hashes via `serializer().descriptor`, compares, and on drift WARNs + invokes the optional `SchedulerWorkerConfig.onSchemaDriftAlert(payloadType, prev, cur)` hook. Best-effort (never blocks startup); fleet-dedup is natural (first worker records the change, the rest see it unchanged). Tests: `SchemaHasherTest`, `PayloadSchemaRepositoryIntegrationTest`, `SchemaDriftCheckTest`. "Park" state stays Phase 2 (needs a new JobState + state-machine migration).
 - **2026-08-03** — **Python SDK shipped** (`clients/python`). Non-JVM services now speak the wire protocol directly instead of proxying through a JVM: `Scheduler` writes the same `job` + `outbox` + `job_event` rows in one transaction, `WorkerPool` consumes `q.<name>` (16-byte UUID body), claims rows with the same conditional UPDATE (`ENQUEUED|AWAITING_RETRY` + `pending_deps=0`), renews leases in one bulk statement, and finalises terminal transitions together with the DAG cascade in a single transaction. Covers enqueue / scheduleAt (incl. the 24h fast-forward split) / enqueueOnce (SKIP·REPLACE·ENQUEUE_AFTER over the V8 slot indexes) / chain / barriers / recurring registration / cancel·retry·delete, plus progress reporting, cooperative + push cancellation (`job_cancel` LISTEN), type-pause deferral, worker registry rows and `scheduler_events` NOTIFY envelopes so Python jobs appear live on the dashboard. asyncio throughout (psycopg3 + aio-pika). Deliberately **not** implemented: the outbox publisher, recurring firing, orphan recovery, retention and Flyway migrations — those stay owned by `scheduler-infra`, and the client fail-fasts if the schema is below V8. `payload_type` is a Python FQN by default (`@job_type` pins it), so cross-language execution is opt-in and each language should get its own queues. Note for future work: DESIGN 11.4 still describes the Rabbit body as a 36-byte UTF-8 string — the code has used 16 raw bytes since MVP, and the Python client follows the code.
 - **2026-08-05** — **Исправлены два расхождения документа с кодом** (11.4, 21.3/21.4). **11.4**: тело Rabbit-сообщения — 16 сырых байт `Uuid.toByteArray()`, а не «UUID как UTF-8 строка, ~36 байт»; так было с самого MVP (`RabbitJobTransport`, `UUID_BYTES = 16`, зафиксировано `RabbitJobTransportTest`), и клиент, написанный по старой формулировке, молча уезжал бы в DLX (consumer строго проверяет длину). Заодно дописаны `priority` в properties и 32-битность `x-delay` (потолок плагина ~24 дня — причина, по которой fast-forward окно 11.5 равно 24ч). **21.3/21.4**: `FunctionRefPayload` сериализуется в camelCase (`targetType`/`targetQualifier`/`methodSignature`/`args`), поля `kind` в теле нет вовсе — дискриминатором служит колонка `payload_type = "function_ref"`, а `targetQualifier` при `null` в JSON отсутствует (`encodeDefaults = false`); псевдокод резолюции в 21.4 приведён к реальным именам и указывает на `FunctionRefRunner`. В оба раздела добавлены ссылки на код и тест как на источник истины. Само поведение не менялось — правка только документационная.
+- **2026-08-05** — **Dashboard переехал с Compose Multiplatform (Wasm) на Kotlin/JS + React** (секция 15 переписана, 4.4 и 9.6 обновлены). `:core:shared` и оба фронтовых модуля сменили target `wasmJs` -> `js(IR)`; UI рендерится в DOM через `kotlin-react` 19 + `kotlin-emotion`, версии wrappers пинятся BOM'ом `2026.6.1` (последний релиз на Kotlin 2.3.21 — klib более новых нечитаем нашим компилятором). **Что не менялось:** слои `data/` + `domain/` и весь Component-слой Decompose (~1300 строк: навигационный стек, стейт экранов, фильтры, сортировка, web-history) переехали дословно — Decompose core UI-агностичен, а связка с React это один хук `useValue` на `useSyncExternalStore`. **Что переписано:** `*Content.kt` всех восьми экранов, общие компоненты и тема (~4400 строк). Material3 заменён собственной дизайн-системой в `:core:frontend` (`theme/` — палитра "Graphite" как CSS-переменные + типографика на IBM Plex; `ui/` — Button/Input/Select/Checkbox/Switch/Chip/ToggleChip/Menu/Panel/Spinner/EmptyState + табличные примитивы + SVG-иконки). Тема переключается записью `data-theme` на `<html>` — без ре-рендера дерева. Compose-`Canvas` (иконки, донат статистики, DependencyGraph, прогресс-бары) стал inline-SVG и CSS. Сборка: `dist/wasmJs/productionExecutable` -> `dist/js/productionExecutable`, `wasmJsBrowserDistribution` -> `jsBrowserDistribution`, `kotlin-js-store/wasm/yarn.lock` -> `kotlin-js-store/yarn.lock`; из каталога и buildSrc удалены Compose-плагины и артефакты, `compose-multiplatform.gradle.kts` заменён на `kotlin-js-react.gradle.kts`. Бандл: **~13 МБ -> ~2.5 МБ** (1.7 МБ JS + 0.8 МБ шрифтов), требование Wasm GC к браузеру снято. Шрифты IBM Plex переехали из `composeResources` в `jsMain/resources/fonts` и подключаются `@font-face` из `index.html` (грузятся параллельно с бандлом). Экранных изменений не задумывалось: набор экранов, фильтры, действия и REST/WS-контракты те же.

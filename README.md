@@ -3,7 +3,7 @@
 A JobRunr-alternative, written in Kotlin, for JVM applications that need durable,
 distributed background jobs with a built-in web dashboard. PostgreSQL holds the
 canonical job state; RabbitMQ delivers work to consumer nodes; an optional
-Compose Wasm dashboard provides operator visibility.
+A Kotlin/JS React dashboard provides operator visibility.
 
 Designed to be embedded in your existing application: you pull in the Gradle
 modules you need, register your `JobHandler`s via Koin, and stand the
@@ -40,7 +40,7 @@ end-to-end flow in the dashboard the moment everything boots.
 | `engine-infra`        | Outbox publisher, leader election, recurring scheduler, fast-forward     |
 | `engine-worker`       | Worker pool that pulls from Rabbit and invokes `JobHandler`s             |
 | `dashboard-server`    | REST + WS endpoints (`/api/jobs/*`, `/api/ws/events`, …)                 |
-| `dashboard-web`       | Compose Wasm dashboard (Decompose nav, dark mode, search, bulk actions)  |
+| `dashboard-web`       | React dashboard on Kotlin/JS (Decompose nav, dark mode, search, bulk actions) |
 | `standalone-runner`   | Ktor host that boots infra + dashboard; this is the `scheduler-infra` JVM|
 | `app`                 | Demo user app — shows the integration pattern in ~80 lines               |
 | `clients/python`      | Async Python SDK — same wire protocol, for non-JVM services             |
@@ -155,8 +155,8 @@ replica.
 ## Build
 
 ```bash
-# Full assembly + Wasm distribution bundle
-./gradlew assemble :dashboard-web:wasmJsBrowserDistribution
+# Full assembly + browser distribution bundle
+./gradlew assemble :dashboard-web:jsBrowserDistribution
 
 # Tests
 ./gradlew check
@@ -181,7 +181,7 @@ The `scheduler-infra` process ships as a Docker image. There are two ways to get
 ./gradlew :standalone-runner:dockerImage -Pimage.tag=rc1 -Pimage.name=myorg/scheduler-infra
 ```
 
-The task builds the shadow JAR (bundling the Wasm dashboard) and then reuses
+The task builds the shadow JAR (bundling the dashboard bundle) and then reuses
 [`docker/infra/Dockerfile`](docker/infra/Dockerfile) — the same Dockerfile CI uses, so local and
 published images are identical.
 

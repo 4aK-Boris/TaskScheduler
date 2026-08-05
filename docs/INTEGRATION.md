@@ -71,7 +71,7 @@ TaskScheduler разворачивается **двумя процессами**
 ## 2. Зависимости
 
 Библиотека публикуется в **GitHub Packages** (релизы) под группой `cs.trade.scheduler`,
-текущая версия `0.6.0` — фиксированный релиз без `-SNAPSHOT` (новая версия выходит с бампом
+текущая версия `0.7.0` — фиксированный релиз без `-SNAPSHOT` (новая версия выходит с бампом
 `schedulerVersion` в `gradle.properties`). Для локальной разработки рядом с проектом подойдёт
 **mavenLocal**. artifactId = путь модуля через дефис (`core-backend`, `engine-worker`, …).
 Настроено в `buildSrc/src/main/kotlin/buildsrc/convention/publish.gradle.kts`.
@@ -81,7 +81,7 @@ TaskScheduler разворачивается **двумя процессами**
 ./gradlew publishToMavenLocal
 ```
 Кладёт 8 библиотечных модулей в `~/.m2/repository/cs/trade/scheduler/`. Версия фиксированная
-(не SNAPSHOT): после правок в библиотеке либо перезалей тот же `0.6.0` (mavenLocal перезапишет),
+(не SNAPSHOT): после правок в библиотеке либо перезалей тот же `0.7.0` (mavenLocal перезапишет),
 либо бампни `schedulerVersion` и переключись на новую версию.
 
 ### Шаг 2 — подключить в основном проекте
@@ -97,10 +97,10 @@ dependencyResolutionManagement {
 В `build.gradle.kts`:
 ```kotlin
 dependencies {
-    implementation("cs.trade.scheduler:core-backend:0.6.0")
-    implementation("cs.trade.scheduler:storage-postgres:0.6.0")
-    implementation("cs.trade.scheduler:transport-rabbit:0.6.0")
-    implementation("cs.trade.scheduler:engine-worker:0.6.0")
+    implementation("cs.trade.scheduler:core-backend:0.7.0")
+    implementation("cs.trade.scheduler:storage-postgres:0.7.0")
+    implementation("cs.trade.scheduler:transport-rabbit:0.7.0")
+    implementation("cs.trade.scheduler:engine-worker:0.7.0")
     // core-shared подтянется транзитивно (KMP — JVM-вариант резолвится по Gradle-метаданным)
 }
 ```
@@ -113,7 +113,7 @@ dependencies {
 > **Релизы (GitHub Packages)** — уже настроено: `publish.gradle.kts` публикует в
 > `https://maven.pkg.github.com/4aK-Boris/CsTradeService` через `./gradlew publish` (креды
 > `gpr.user`/`gpr.token` с `write:packages` в `~/.gradle/gradle.properties`). Потребитель
-> добавляет этот maven-репозиторий и тянет `cs.trade.scheduler:*:0.6.0`; в CI того же
+> добавляет этот maven-репозиторий и тянет `cs.trade.scheduler:*:0.7.0`; в CI того же
 > репозитория он резолвится штатным `GITHUB_TOKEN` (same-repo, без отдельного PAT).
 
 ### Что именно нужно воркер-приложению
@@ -522,7 +522,7 @@ scrape_configs:
 
 **Нюансы:** браузерный WebSocket-файрхоуз (`/api/ws/events`) под чистым bearer не
 аутентифицируется (нельзя выставить заголовок из JS) — поэтому путь со шлюзом + cookie
-самый гладкий для всей UI. Сам wasm-SPA не содержит OIDC-login-флоу (redirect/PKCE) —
+самый гладкий для всей UI. Сам SPA не содержит OIDC-login-флоу (redirect/PKCE) —
 SSO-вход в UI в браузере = либо шлюз, либо доп. фронтенд-работа. Защитить **API** дашборда
 Keycloak'ом — поддерживается уже сейчас. Подробности — в обсуждении выше по этому вопросу.
 

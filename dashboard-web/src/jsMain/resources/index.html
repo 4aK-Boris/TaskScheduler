@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <!-- Anchor every relative asset (the bundle, webpack chunks, fonts) to the site root. Without
+         this a deep-link reload like /jobs/{id} resolves "dashboard-web.js" against /jobs/, the SPA
+         fallback returns index.html as text/html, the browser can't run it as a script, and the
+         page is blank. The router itself already restores /jobs/{id} from window.location.pathname
+         — only asset loading was broken. -->
+    <base href="/">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#2348E0">
+    <title>TaskScheduler Dashboard</title>
+    <!-- Inline SVG favicon: cobalt tile + white clock (a scheduler). No binary asset, scales crisply. -->
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%232348E0'/%3E%3Ccircle cx='16' cy='16' r='8.5' fill='none' stroke='white' stroke-width='2.5'/%3E%3Cpath d='M16 11V16l3.5 2.5' fill='none' stroke='white' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+    <style>
+        /* IBM Plex Sans, self-hosted. Declared here rather than in the Emotion global styles so the
+           browser starts fetching the files while the bundle is still parsing. `swap` paints the
+           system fallback immediately and re-flows once Plex lands — never a blank page. */
+        @font-face {
+            font-family: 'IBM Plex Sans';
+            font-style: normal;
+            font-weight: 400;
+            font-display: swap;
+            src: url('fonts/IBMPlexSans-Regular.ttf') format('truetype');
+        }
+        @font-face {
+            font-family: 'IBM Plex Sans';
+            font-style: normal;
+            font-weight: 500;
+            font-display: swap;
+            src: url('fonts/IBMPlexSans-Medium.ttf') format('truetype');
+        }
+        @font-face {
+            font-family: 'IBM Plex Sans';
+            font-style: normal;
+            font-weight: 600;
+            font-display: swap;
+            src: url('fonts/IBMPlexSans-SemiBold.ttf') format('truetype');
+        }
+        @font-face {
+            font-family: 'IBM Plex Sans';
+            font-style: normal;
+            font-weight: 700;
+            font-display: swap;
+            src: url('fonts/IBMPlexSans-Bold.ttf') format('truetype');
+        }
+
+        /* Pre-JS paint only — the palette itself comes from SchedulerGlobalStyles once the bundle
+           runs. These two values just avoid a white flash before that happens, and follow the OS
+           preference because the persisted choice lives in localStorage the bundle hasn't read yet. */
+        html, body { margin: 0; padding: 0; height: 100%; background: #F1F3F5; }
+        @media (prefers-color-scheme: dark) {
+            html, body { background: #121419; }
+        }
+        html[data-theme='light'], html[data-theme='light'] body { background: #F1F3F5; }
+        html[data-theme='dark'], html[data-theme='dark'] body { background: #121419; }
+
+        #root { height: 100%; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+    <script src="dashboard-web.js"></script>
+</body>
+</html>
