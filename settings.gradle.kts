@@ -25,8 +25,6 @@ dependencyResolutionManagement {
                 includeGroupAndSubgroups("com.google")
             }
         }
-        // Compose Multiplatform dev artifacts (если понадобятся pre-releases)
-        maven("https://maven.pkg.jetbrains.space/public/p/compose/dev")
     }
 }
 
@@ -57,7 +55,7 @@ include(":engine-infra")   // ТОЛЬКО в scheduler-infra container
 
 // Dashboard
 include(":dashboard-server")  // Ktor backend, в scheduler-infra
-include(":dashboard-web")     // Compose Wasm SPA с Decompose
+include(":dashboard-web")     // React SPA (Kotlin/JS) с Decompose
 
 // Standalone runner — main() для scheduler-infra Docker image
 include(":standalone-runner")

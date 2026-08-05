@@ -1,31 +1,21 @@
 plugins {
-    id("buildsrc.convention.compose-multiplatform")
+    id("buildsrc.convention.kotlin-js-react")
     alias(libs.plugins.kotlinPluginSerialization)
 }
 
 kotlin {
     sourceSets {
-        wasmJsMain.dependencies {
+        jsMain.dependencies {
             api(project(":core:shared"))
 
-            api(libs.composeRuntime)
-            api(libs.composeFoundation)
-            api(libs.composeMaterial3)
-            api(libs.composeUi)
-            api(libs.composeComponentsResources)
+            // The BOM pins React / Emotion / browser-wrapper versions; the bundle entries are
+            // version-less on purpose (see gradle/libs.versions.toml).
+            api(project.dependencies.platform(libs.kotlinWrappersBom))
+            api(libs.bundles.react)
 
-            api(libs.bundles.ktorClientWasm)
+            api(libs.bundles.ktorClientJs)
             api(libs.bundles.decompose)
             api(libs.bundles.kotlinxEcosystem)
         }
     }
-}
-
-// Bundle the IBM Plex font files (src/commonMain/composeResources/font) and generate the typed
-// `Res` accessor used by SchedulerTheme. Explicit package — this module has no `group` set, so
-// the default-derived package would be unstable.
-compose.resources {
-    publicResClass = false
-    packageOfResClass = "cs.trade.scheduler.core.frontend.generated.resources"
-    generateResClass = always
 }

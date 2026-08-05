@@ -8,14 +8,16 @@ kotlinxDatetime = "0.8.0"
 kotlinxSerialization = "1.11.0"
 kotlinxCoroutines = "1.11.0"
 
-# Compose Multiplatform (Web/wasmJs) — 1.10.1 runs on Java 21 LTS;
-# 1.11.x requires Java 24 in the Gradle plugin classpath.
-composeMultiplatform = "1.10.1"
-# Material3 ships on its own cadence — Compose MP 1.10.1 bundles material3 1.9.0 (exactly what the
-# deprecated `compose.material3` accessor resolved to). Kept separate so each tracks its real version.
-composeMaterial3 = "1.9.0"
+# Kotlin wrappers (React / Emotion / browser APIs for the Kotlin/JS dashboard).
+# PIN CAREFULLY: each wrappers release is built against one exact Kotlin version and its klibs
+# are unreadable by an older compiler. 2026.6.1 is the LAST release compiled with Kotlin 2.3.21
+# — 2026.6.2 onwards moved to 2.4.0. Bump this only together with the `kotlin` version above.
+# The BOM pins the per-artifact versions (React 19.2.7, Emotion 11.14.0), so the library
+# entries below are deliberately version-less.
+kotlinWrappers = "2026.6.1"
 
-# Decompose (navigation + lifecycle for Compose MP)
+# Decompose (navigation + lifecycle — the core artifact is UI-framework agnostic and
+# runs on Kotlin/JS; components are bridged into React via the `useValue` hook)
 decompose = "3.5.0"
 essenty = "2.5.0"
 
@@ -65,16 +67,16 @@ mockk = "1.14.9"
 [libraries]
 # --- Build-time plugin dependencies (used in buildSrc) ---
 kotlinGradlePlugin = { module = "org.jetbrains.kotlin:kotlin-gradle-plugin", version.ref = "kotlin" }
-composeGradlePlugin = { module = "org.jetbrains.compose:compose-gradle-plugin", version.ref = "composeMultiplatform" }
-composeCompilerGradlePlugin = { module = "org.jetbrains.kotlin:compose-compiler-gradle-plugin", version.ref = "kotlin" }
 
-# --- Compose Multiplatform UI (direct coords; the `compose.*` DSL accessors are deprecated in 1.10
-# because the artifact versions diverge — material3 lags the umbrella version) ---
-composeRuntime = { module = "org.jetbrains.compose.runtime:runtime", version.ref = "composeMultiplatform" }
-composeFoundation = { module = "org.jetbrains.compose.foundation:foundation", version.ref = "composeMultiplatform" }
-composeMaterial3 = { module = "org.jetbrains.compose.material3:material3", version.ref = "composeMaterial3" }
-composeUi = { module = "org.jetbrains.compose.ui:ui", version.ref = "composeMultiplatform" }
-composeComponentsResources = { module = "org.jetbrains.compose.components:components-resources", version.ref = "composeMultiplatform" }
+# --- React / Emotion / browser wrappers (:core:frontend, :dashboard-web) ---
+# Version-less by design — `kotlinWrappersBom` supplies the versions (see the note on the
+# `kotlinWrappers` version above).
+kotlinWrappersBom = { module = "org.jetbrains.kotlin-wrappers:kotlin-wrappers-bom", version.ref = "kotlinWrappers" }
+kotlinReact = { module = "org.jetbrains.kotlin-wrappers:kotlin-react" }
+kotlinReactDom = { module = "org.jetbrains.kotlin-wrappers:kotlin-react-dom" }
+kotlinEmotionReact = { module = "org.jetbrains.kotlin-wrappers:kotlin-emotion-react" }
+kotlinEmotionCss = { module = "org.jetbrains.kotlin-wrappers:kotlin-emotion-css" }
+kotlinBrowser = { module = "org.jetbrains.kotlin-wrappers:kotlin-browser" }
 
 # --- Kotlin ecosystem ---
 kotlinReflect = { module = "org.jetbrains.kotlin:kotlin-reflect", version.ref = "kotlin" }
@@ -89,9 +91,8 @@ kotlinxSerialization = { module = "org.jetbrains.kotlinx:kotlinx-serialization-j
 kotlinxCoroutinesCore = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "kotlinxCoroutines" }
 kotlinxCoroutinesSlf4j = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-slf4j", version.ref = "kotlinxCoroutines" }
 
-# --- Decompose ---
+# --- Decompose (core only — `extensions-compose` dropped with the Compose UI) ---
 decompose = { module = "com.arkivanov.decompose:decompose", version.ref = "decompose" }
-decomposeExtensionsCompose = { module = "com.arkivanov.decompose:extensions-compose", version.ref = "decompose" }
 essentyLifecycle = { module = "com.arkivanov.essenty:lifecycle", version.ref = "essenty" }
 essentyLifecycleCoroutines = { module = "com.arkivanov.essenty:lifecycle-coroutines", version.ref = "essenty" }
 
@@ -117,7 +118,7 @@ ktorServerCors = { module = "io.ktor:ktor-server-cors", version.ref = "ktor" }
 
 # --- Ktor client (для :core:frontend / :dashboard-web) ---
 ktorClientCore = { module = "io.ktor:ktor-client-core", version.ref = "ktor" }
-ktorClientWasmJs = { module = "io.ktor:ktor-client-js", version.ref = "ktor" } # для wasmJs target
+ktorClientJs = { module = "io.ktor:ktor-client-js", version.ref = "ktor" } # js(IR) target engine
 ktorClientContentNegotiation = { module = "io.ktor:ktor-client-content-negotiation", version.ref = "ktor" }
 ktorClientWebsockets = { module = "io.ktor:ktor-client-websockets", version.ref = "ktor" }
 
@@ -188,16 +189,19 @@ ktorServer = [
     "ktorServerCallLogging",
     "ktorServerCompression",
 ]
-# wasmJs client для :core:frontend
-ktorClientWasm = [
+# js(IR) client для :core:frontend
+ktorClientJs = [
     "ktorClientCore",
-    "ktorClientWasmJs",
+    "ktorClientJs",
     "ktorClientContentNegotiation",
     "ktorSerializationKotlinxJson",
     "ktorClientWebsockets",
 ]
-# Decompose + extensions для UI
-decompose = ["decompose", "decomposeExtensionsCompose", "essentyLifecycle", "essentyLifecycleCoroutines"]
+# Decompose core + lifecycle для навигации/стейта (UI-агностично)
+decompose = ["decompose", "essentyLifecycle", "essentyLifecycleCoroutines"]
+# React + Emotion + browser API wrappers. Versions come from `kotlinWrappersBom`, which the
+# consuming module must add as a platform() dependency alongside this bundle.
+react = ["kotlinReact", "kotlinReactDom", "kotlinEmotionReact", "kotlinEmotionCss", "kotlinBrowser"]
 # Exposed для PG
 exposed = ["exposedCore", "exposedJdbc", "exposedDao", "exposedJavaTime", "exposedJson"]
 # Flyway для миграций
@@ -211,7 +215,5 @@ integrationTest = ["testcontainers", "testcontainersPostgres", "testcontainersRa
 kotlinJvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
 kotlinMultiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }
 kotlinPluginSerialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
-kotlinPluginCompose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
-composeMultiplatform = { id = "org.jetbrains.compose", version.ref = "composeMultiplatform" }
 koinCompiler = { id = "io.insert-koin.compiler.plugin", version.ref = "koinCompilerPlugin" }
 shadow = { id = "com.gradleup.shadow", version = "9.0.0-beta12" }

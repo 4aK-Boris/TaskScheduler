@@ -339,7 +339,7 @@ private fun Application.configureKtor(
         } else {
             configureDashboardRouting()
         }
-        // SPA fallback for the wasm bundle. /api/* routes above win because they're
+        // SPA fallback for the dashboard bundle. /api/* routes above win because they're
         // registered first; everything else falls through to index.html so the client-
         // side router can take over.
         //

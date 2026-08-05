@@ -39,15 +39,15 @@ application {
     mainClass = "cs.trade.scheduler.runner.ApplicationKt"
 }
 
-// Copy :dashboard-web wasmJs bundle into our resources so Ktor can serve it as static.
+// Copy the :dashboard-web JS bundle into our resources so Ktor can serve it as static.
 // See DESIGN.md section 15.5.
 tasks.processResources {
     val webDistDir = project(":dashboard-web")
-        .layout.buildDirectory.dir("dist/wasmJs/productionExecutable")
+        .layout.buildDirectory.dir("dist/js/productionExecutable")
     from(webDistDir) {
         into("dashboard-web")
     }
-    dependsOn(":dashboard-web:wasmJsBrowserDistribution")
+    dependsOn(":dashboard-web:jsBrowserDistribution")
 }
 
 // Fat-jar built by `./gradlew :standalone-runner:shadowJar` — the Dockerfile in
