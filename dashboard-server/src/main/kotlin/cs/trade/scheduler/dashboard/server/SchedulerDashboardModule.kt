@@ -24,6 +24,7 @@ import cs.trade.scheduler.dashboard.server.domain.usecases.GetUpcomingUseCase
 import cs.trade.scheduler.dashboard.server.domain.usecases.ListJobTypePausesUseCase
 import cs.trade.scheduler.dashboard.server.domain.usecases.ListKnownPayloadTypesUseCase
 import cs.trade.scheduler.dashboard.server.domain.usecases.ListRecurringJobsUseCase
+import cs.trade.scheduler.dashboard.server.domain.usecases.ListRecurringRunsUseCase
 import cs.trade.scheduler.dashboard.server.domain.usecases.ListWorkersUseCase
 import cs.trade.scheduler.dashboard.server.domain.usecases.PauseJobTypeUseCase
 import cs.trade.scheduler.dashboard.server.domain.usecases.RerouteJobUseCase
@@ -151,6 +152,7 @@ public fun schedulerDashboardModule(configure: SchedulerDashboardConfig.() -> Un
         singleOf(::BulkCancelJobsUseCase)
         singleOf(::BulkDeleteJobsUseCase)
         singleOf(::ListRecurringJobsUseCase)
+        singleOf(::ListRecurringRunsUseCase)
         singleOf(::EnableRecurringJobUseCase)
         singleOf(::DisableRecurringJobUseCase)
         singleOf(::TriggerRecurringJobUseCase)

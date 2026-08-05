@@ -1,5 +1,6 @@
 package cs.trade.scheduler.dashboard.web.presentation.screens.joblist
 
+import cs.trade.scheduler.core.frontend.react.useSettled
 import cs.trade.scheduler.core.frontend.react.useValue
 import cs.trade.scheduler.core.frontend.theme.SchedulerColors
 import cs.trade.scheduler.core.frontend.theme.SchedulerRadius
@@ -163,7 +164,7 @@ public val JobListContent: FC<JobListContentProps> = FC { props ->
                     }
                     // ID isn't a useful sort key — left as a plain label.
                     TableHeaderCell {
-                        width = 140.px
+                        width = 155.px
                         +"ID"
                     }
                 }
@@ -197,16 +198,13 @@ public val JobListContent: FC<JobListContentProps> = FC { props ->
                         }
                     }
 
-                    else -> model.items.forEach { row ->
-                        JobRow {
-                            key = Key(row.id)
-                            job = row
-                            checked = row.id in model.selectedIds
-                            paused = row.payloadType in model.pausedTypes
-                            ageAbsolute = model.ageAbsolute
-                            onCheckedChange = { checked -> component.onJobChecked(row.id, checked) }
-                            onOpen = { component.onJobClicked(row.id) }
-                        }
+                    else -> JobRows {
+                        // Keyed on the query, so changing page / filter / sort remounts the block
+                        // and its first paint stays still. Rows arriving into an unchanged query —
+                        // a WS event or an auto-refresh — animate in.
+                        key = Key(model.queryKey())
+                        this.model = model
+                        this.component = component
                     }
                 }
             }
@@ -225,6 +223,57 @@ public val JobListContent: FC<JobListContentProps> = FC { props ->
         }
     }
 }
+
+private external interface JobRowsProps : Props {
+    var model: JobListComponent.Model
+    var component: JobListComponent
+}
+
+/**
+ * The result rows, split out so they can carry a `key` of their own.
+ *
+ * Under the default newest-first sort a job created right now lands at the TOP of the table, and
+ * before this it simply materialised there mid-scan. Now it slides down into place with a brief
+ * cobalt wash, so the operator sees where the list changed.
+ *
+ * [useSettled] suppresses that on the block's first paint — otherwise every row of a freshly loaded
+ * page would animate at once.
+ */
+private val JobRows: FC<JobRowsProps> = FC { props ->
+    val model = props.model
+    val component = props.component
+    val animateArrivals = useSettled()
+
+    model.items.forEach { row ->
+        JobRow {
+            // React mounts a node only for an id it hasn't rendered yet, so the animation lands
+            // exactly on the new rows without us tracking which those are.
+            key = Key(row.id)
+            job = row
+            checked = row.id in model.selectedIds
+            paused = row.payloadType in model.pausedTypes
+            ageAbsolute = model.ageAbsolute
+            arriving = animateArrivals
+            onCheckedChange = { checked -> component.onJobChecked(row.id, checked) }
+            onOpen = { component.onJobClicked(row.id) }
+        }
+    }
+}
+
+/**
+ * Identity of the current query. Two renders sharing it are looking at the same list, so a row that
+ * appears between them genuinely arrived; a change means the operator asked for a different list.
+ */
+private fun JobListComponent.Model.queryKey(): String = listOf(
+    page,
+    pageSize,
+    sortBy?.name ?: "-",
+    sortAscending,
+    dlqOnly,
+    queueFilter,
+    payloadTypeFilter,
+    stateFilter.map { it.name }.sorted().joinToString("+"),
+).joinToString("|")
 
 private external interface JobListActionsProps : Props {
     var component: JobListComponent
@@ -509,6 +558,7 @@ private external interface JobRowProps : Props {
     var checked: Boolean
     var paused: Boolean
     var ageAbsolute: Boolean
+    var arriving: Boolean?
     var onCheckedChange: (Boolean) -> Unit
     var onOpen: () -> Unit
 }
@@ -519,6 +569,7 @@ private val JobRow: FC<JobRowProps> = FC { props ->
     TableRow {
         onClick = props.onOpen
         selected = props.checked
+        arriving = props.arriving
 
         TableCell {
             width = 44.px
@@ -637,15 +688,17 @@ private val MiniBar: FC<MiniBarProps> = FC { props ->
             backgroundColor = SchedulerColors.surfaceContainerHigh
         }
         var consumed = 0.0
-        props.segments.forEach { (fraction, fill) ->
+        props.segments.forEachIndexed { index, (fraction, fill) ->
             val clamped = fraction.coerceIn(0.0, (1.0 - consumed).coerceAtLeast(0.0))
-            if (clamped > 0.0) {
-                div {
-                    css {
-                        width = (clamped * 100).pct
-                        height = 100.pct
-                        backgroundColor = fill
-                    }
+            // Kept mounted at zero width and transitioned, same as the detail screen's bar — a
+            // PROCESSING row reports progress every few seconds and should grow, not jump.
+            div {
+                key = Key("seg-$index")
+                css {
+                    width = (clamped * 100).pct
+                    height = 100.pct
+                    backgroundColor = fill
+                    asDynamic().transition = "width 0.45s cubic-bezier(0.4, 0, 0.2, 1)"
                 }
             }
             consumed += clamped
@@ -659,11 +712,11 @@ private const val COLUMN_COUNT = 9
 private class SortableColumn(val label: String, val width: Length?, val field: JobSortField)
 
 private val SORTABLE_COLUMNS: List<SortableColumn> = listOf(
-    SortableColumn("State", 180.px, JobSortField.STATE),
-    SortableColumn("Queue", 130.px, JobSortField.QUEUE),
+    SortableColumn("State", 195.px, JobSortField.STATE),
+    SortableColumn("Queue", 140.px, JobSortField.QUEUE),
     // Name takes the flexible width — it holds the longest values.
     SortableColumn("Name", null, JobSortField.TYPE),
-    SortableColumn("Attempts", 90.px, JobSortField.ATTEMPTS),
-    SortableColumn("Started", 170.px, JobSortField.STARTED),
-    SortableColumn("Age", 170.px, JobSortField.UPDATED),
+    SortableColumn("Attempts", 100.px, JobSortField.ATTEMPTS),
+    SortableColumn("Started", 195.px, JobSortField.STARTED),
+    SortableColumn("Age", 195.px, JobSortField.UPDATED),
 )

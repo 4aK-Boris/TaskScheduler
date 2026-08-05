@@ -7,6 +7,7 @@ import cs.trade.scheduler.dashboard.server.api.mappers.RecurringApiMapper
 import cs.trade.scheduler.dashboard.server.domain.usecases.DisableRecurringJobUseCase
 import cs.trade.scheduler.dashboard.server.domain.usecases.EnableRecurringJobUseCase
 import cs.trade.scheduler.dashboard.server.domain.usecases.ListRecurringJobsUseCase
+import cs.trade.scheduler.dashboard.server.domain.usecases.ListRecurringRunsUseCase
 import cs.trade.scheduler.dashboard.server.domain.usecases.TriggerRecurringJobUseCase
 import cs.trade.scheduler.shared.dto.ListRecurringJobsResponse
 import cs.trade.scheduler.shared.dto.ToggleRecurringResponse
@@ -24,6 +25,7 @@ public fun Route.configureRecurringRouting() {
     val extractor by inject<RecurringExtractor>()
     val mapper by inject<RecurringApiMapper>()
     val list by inject<ListRecurringJobsUseCase>()
+    val listRuns by inject<ListRecurringRunsUseCase>()
     val enable by inject<EnableRecurringJobUseCase>()
     val disable by inject<DisableRecurringJobUseCase>()
     val trigger by inject<TriggerRecurringJobUseCase>()
@@ -34,9 +36,14 @@ public fun Route.configureRecurringRouting() {
         get {
             list().fold(
                 onSuccess = { rows ->
+                    // Second query attaches each definition's live-or-latest run, so the screen can
+                    // show what's running and link straight to it. Best-effort: a failure here
+                    // leaves the runs out rather than failing the whole listing, which is still
+                    // useful on its own.
+                    val runs = listRuns(rows.map { it.id }).getOrDefault(emptyMap())
                     call.respond(
                         HttpStatusCode.OK,
-                        ListRecurringJobsResponse(items = rows.map(mapper::toDto)),
+                        ListRecurringJobsResponse(items = rows.map { mapper.toDto(it, runs[it.id]) }),
                     )
                 },
                 onFailure = { call.respond(HttpStatusCode.InternalServerError, it.message ?: "error") },

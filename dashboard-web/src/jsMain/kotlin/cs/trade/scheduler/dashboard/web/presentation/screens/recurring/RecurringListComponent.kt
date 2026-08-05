@@ -11,6 +11,13 @@ public interface RecurringListComponent {
 
     /** "Run now": fire the definition once off-schedule, then jump to the created job's detail. */
     public fun onRunNowClicked(id: String)
+
+    /**
+     * Row click → open the definition's current run, or its last finished one when nothing is in
+     * flight. The row carries the id (see [RecurringJobDto.lastRun]); a definition that has never
+     * fired has nothing to open and its row isn't clickable.
+     */
+    public fun onRunClicked(jobId: String)
     public fun onBackClicked()
 
     /** Next/Last columns: `false` = relative ("2h ago"), `true` = absolute clock ("14:30:05"). */

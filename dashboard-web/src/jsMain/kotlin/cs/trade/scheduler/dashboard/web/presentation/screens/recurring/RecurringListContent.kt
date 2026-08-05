@@ -2,6 +2,7 @@ package cs.trade.scheduler.dashboard.web.presentation.screens.recurring
 
 import cs.trade.scheduler.core.frontend.react.useValue
 import cs.trade.scheduler.core.frontend.theme.SchedulerColors
+import cs.trade.scheduler.core.frontend.theme.SchedulerRadius
 import cs.trade.scheduler.core.frontend.theme.SchedulerText
 import cs.trade.scheduler.core.frontend.ui.Button
 import cs.trade.scheduler.core.frontend.ui.ButtonSize
@@ -16,16 +17,19 @@ import cs.trade.scheduler.core.frontend.ui.TableHeaderCell
 import cs.trade.scheduler.core.frontend.ui.TableMessageRow
 import cs.trade.scheduler.core.frontend.ui.TableRow
 import cs.trade.scheduler.core.frontend.ui.TextInput
+import cs.trade.scheduler.core.frontend.ui.flexColumn
 import cs.trade.scheduler.core.frontend.ui.flexRow
 import cs.trade.scheduler.dashboard.web.presentation.components.CopyableText
 import cs.trade.scheduler.dashboard.web.presentation.components.ListScreen
 import cs.trade.scheduler.dashboard.web.presentation.components.SettingsMenu
 import cs.trade.scheduler.dashboard.web.presentation.components.SkeletonRows
 import cs.trade.scheduler.dashboard.web.presentation.components.SortableHeaderCell
+import cs.trade.scheduler.dashboard.web.presentation.components.StateChip
 import cs.trade.scheduler.dashboard.web.presentation.components.formatDateTime
 import cs.trade.scheduler.dashboard.web.presentation.components.timeAgo
 import cs.trade.scheduler.dashboard.web.presentation.components.useTableSort
 import cs.trade.scheduler.shared.dto.RecurringJobDto
+import cs.trade.scheduler.shared.dto.RecurringRunDto
 import emotion.react.css
 import react.FC
 import react.Key
@@ -37,7 +41,9 @@ import react.dom.html.ReactHTML.tr
 import react.useMemo
 import react.useState
 import web.cssom.Color
+import web.cssom.Overflow
 import web.cssom.Padding
+import web.cssom.pct
 import web.cssom.px
 import kotlin.time.Clock
 import kotlin.time.Duration
@@ -111,48 +117,53 @@ public val RecurringListContent: FC<RecurringListContentProps> = FC { props ->
                     }
                     SortableHeaderCell {
                         label = "Cron"
-                        width = 160.px
+                        width = 175.px
                         active = sort.isActive(RcSort.CRON)
                         direction = sort.directionOf(RcSort.CRON)
                         onClick = sort.onSort(RcSort.CRON)
                     }
                     SortableHeaderCell {
                         label = "Queue"
-                        width = 120.px
+                        width = 130.px
                         active = sort.isActive(RcSort.QUEUE)
                         direction = sort.directionOf(RcSort.QUEUE)
                         onClick = sort.onSort(RcSort.QUEUE)
                     }
                     SortableHeaderCell {
                         label = "Payload"
-                        width = 220.px
+                        width = 230.px
                         active = sort.isActive(RcSort.PAYLOAD)
                         direction = sort.directionOf(RcSort.PAYLOAD)
                         onClick = sort.onSort(RcSort.PAYLOAD)
                     }
                     SortableHeaderCell {
                         label = "Next"
-                        width = 170.px
+                        width = 195.px
                         active = sort.isActive(RcSort.NEXT)
                         direction = sort.directionOf(RcSort.NEXT)
                         onClick = sort.onSort(RcSort.NEXT)
                     }
                     SortableHeaderCell {
                         label = "Last"
-                        width = 170.px
+                        width = 195.px
                         active = sort.isActive(RcSort.LAST)
                         direction = sort.directionOf(RcSort.LAST)
                         onClick = sort.onSort(RcSort.LAST)
                     }
+                    // Not sortable: it reflects a joined-in run, not a column of the definition.
+                    TableHeaderCell {
+                        width = 210.px
+                        +"Last run"
+                    }
                     SortableHeaderCell {
                         label = "Status"
-                        width = 110.px
+                        width = 115.px
                         active = sort.isActive(RcSort.STATUS)
                         direction = sort.directionOf(RcSort.STATUS)
                         onClick = sort.onSort(RcSort.STATUS)
                     }
                     TableHeaderCell {
-                        width = 110.px
+                        width = 120.px
                         +"Run"
                     }
                 }
@@ -201,6 +212,7 @@ public val RecurringListContent: FC<RecurringListContentProps> = FC { props ->
                             ageAbsolute = state.ageAbsolute
                             onToggle = { enable -> component.onToggleClicked(row.id, enable) }
                             onRun = { component.onRunNowClicked(row.id) }
+                            onOpenRun = row.lastRun?.let { run -> { component.onRunClicked(run.jobId) } }
                         }
                     }
                 }
@@ -243,6 +255,9 @@ private external interface RecurringRowProps : Props {
     var ageAbsolute: Boolean
     var onToggle: (Boolean) -> Unit
     var onRun: () -> Unit
+
+    /** Opens the definition's current-or-last run; `null` when it has never fired. */
+    var onOpenRun: (() -> Unit)?
 }
 
 private val RecurringRow: FC<RecurringRowProps> = FC { props ->
@@ -251,6 +266,9 @@ private val RecurringRow: FC<RecurringRowProps> = FC { props ->
     val fg: Color = if (job.enabled) SchedulerColors.onSurface else SchedulerColors.onSurfaceVariant
 
     TableRow {
+        // Only clickable when the definition has actually run — otherwise there is nothing to open.
+        props.onOpenRun?.let { open -> onClick = open }
+
         TableCell {
             CopyableText {
                 text = job.id
@@ -295,27 +313,127 @@ private val RecurringRow: FC<RecurringRowProps> = FC { props ->
             }
         }
         TableCell {
-            Switch {
-                checked = job.enabled
+            LastRunCell { run = job.lastRun }
+        }
+        TableCell {
+            // The row opens the run; the switch must only toggle.
+            div {
+                onClick = { event -> event.stopPropagation() }
+                Switch {
+                    checked = job.enabled
                 disabled = props.busy
-                title = if (job.enabled) "Disable this definition" else "Enable this definition"
-                onCheckedChange = props.onToggle
+                    title = if (job.enabled) "Disable this definition" else "Enable this definition"
+                    onCheckedChange = props.onToggle
+                }
             }
         }
         TableCell {
             // Manual one-off fire — independent of the enabled switch, so even a paused
             // definition can be run on demand.
-            Button {
-                size = ButtonSize.SMALL
-                disabled = !props.runEnabled
-                onClick = props.onRun
-                +if (props.triggering) "Running…" else "Run"
+            div {
+                onClick = { event -> event.stopPropagation() }
+                Button {
+                    size = ButtonSize.SMALL
+                    disabled = !props.runEnabled
+                    onClick = props.onRun
+                    +if (props.triggering) "Running…" else "Run"
+                }
             }
         }
     }
 }
 
-private const val COLUMN_COUNT = 8
+private external interface LastRunCellProps : Props {
+    var run: RecurringRunDto?
+}
+
+/**
+ * What this definition is doing right now: the state of its live run, or of the last one that
+ * finished. A running job also shows its progress, so an operator can see how far along it is
+ * without opening it.
+ */
+private val LastRunCell: FC<LastRunCellProps> = FC { props ->
+    val run = props.run
+    if (run == null) {
+        span {
+            css { color = SchedulerColors.onSurfaceVariant }
+            +"never run"
+        }
+    } else {
+        div {
+            css { flexColumn(gap = 6.px) }
+            div {
+                css { flexRow(gap = 8.px) }
+                StateChip { state = run.state }
+                if (run.isLive) {
+                    // A definition can be mid-run for a long time; "how long" is the useful part.
+                    run.startedAt?.let { started ->
+                        span {
+                            css { color = SchedulerColors.onSurfaceVariant }
+                            +timeAgo(started)
+                        }
+                    }
+                }
+            }
+            if (run.isLive) {
+                RunProgress { this.run = run }
+            }
+        }
+    }
+}
+
+private external interface RunProgressProps : Props {
+    var run: RecurringRunDto
+}
+
+/**
+ * Progress strip for a live run — green/red split when the handler reported counts, a single
+ * cobalt fill when it only reported a fraction, and nothing at all when it reported neither.
+ * Widths transition so the bar grows instead of jumping between refreshes.
+ */
+private val RunProgress: FC<RunProgressProps> = FC { props ->
+    val run = props.run
+    val succeeded = run.progressSucceeded
+    val failed = run.progressFailed
+    val total = run.progressTotal
+    val counting = succeeded != null && failed != null && total != null && total > 0L
+    val fraction = run.progress?.toDouble()
+
+    if (counting || fraction != null) {
+        div {
+            css {
+                flexRow()
+                width = 100.pct
+                height = 4.px
+                borderRadius = SchedulerRadius.extraSmall
+                overflow = Overflow.hidden
+                backgroundColor = SchedulerColors.surfaceContainerHigh
+            }
+            if (counting) {
+                val succeededFrac = (succeeded!!.toDouble() / total!!).coerceIn(0.0, 1.0)
+                val failedFrac = (failed!!.toDouble() / total).coerceIn(0.0, 1.0 - succeededFrac)
+                runSegment("succeeded", succeededFrac, SchedulerColors.success)
+                runSegment("failed", failedFrac, SchedulerColors.error)
+            } else {
+                runSegment("progress", fraction!!.coerceIn(0.0, 1.0), SchedulerColors.primary)
+            }
+        }
+    }
+}
+
+private fun react.ChildrenBuilder.runSegment(key: String, fraction: Double, fill: Color) {
+    div {
+        this.key = Key(key)
+        css {
+            width = (fraction * 100).pct
+            height = 100.pct
+            backgroundColor = fill
+            asDynamic().transition = "width 0.45s cubic-bezier(0.4, 0, 0.2, 1)"
+        }
+    }
+}
+
+private const val COLUMN_COUNT = 9
 
 /** Next-run column: future reads "in 5m", a missed/overdue run falls back to "3m ago". */
 private fun timeAgoOrSoon(instant: Instant): String {

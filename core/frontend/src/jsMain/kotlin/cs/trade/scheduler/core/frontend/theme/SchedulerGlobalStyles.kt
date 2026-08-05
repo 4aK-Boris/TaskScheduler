@@ -81,6 +81,38 @@ public val SchedulerGlobalStyles: FC<Props> = FC {
                 asDynamic()["to"] = jsObject("opacity" to "1")
             }
 
+            // A row arriving in a live table. Under the default newest-first sort a new job lands
+            // at the TOP, and without this it just appears mid-scan with no hint that anything
+            // happened. Sliding it down into place, with a brief cobalt wash, makes the insertion
+            // legible: the operator sees WHERE the list changed.
+            "@keyframes sch-row-in" {
+                asDynamic()["from"] = jsObject(
+                    "opacity" to "0",
+                    "transform" to "translateY(-10px)",
+                    "background-color" to "var(--sch-primary-container)",
+                )
+                asDynamic()["60%"] = jsObject(
+                    "opacity" to "1",
+                    "transform" to "translateY(0)",
+                    "background-color" to "var(--sch-primary-container)",
+                )
+                asDynamic()["to"] = jsObject(
+                    "opacity" to "1",
+                    "transform" to "translateY(0)",
+                    "background-color" to "transparent",
+                )
+            }
+
+            // Respect the OS "reduce motion" setting — the wash still marks the new row, but
+            // nothing moves.
+            "@media (prefers-reduced-motion: reduce)" {
+                asDynamic()["*"] = jsObject(
+                    "animation-duration" to "0.01ms",
+                    "animation-iteration-count" to "1",
+                    "transition-duration" to "0.01ms",
+                )
+            }
+
             // Dense operator tables scroll a lot; the default chrome scrollbar is a light-mode
             // artefact that stays pale on the dark canvas.
             "::-webkit-scrollbar" {

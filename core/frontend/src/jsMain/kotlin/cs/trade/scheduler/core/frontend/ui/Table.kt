@@ -65,6 +65,12 @@ public val TableBody: FC<PropsWithChildren> = FC { props ->
 external interface TableRowProps : PropsWithChildren {
     var onClick: (() -> Unit)?
     var selected: Boolean?
+
+    /**
+     * Play the arrival animation (slide down from above + a brief cobalt wash). Set only for rows
+     * that genuinely just appeared in a live list — see `useArrivingRows`.
+     */
+    var arriving: Boolean?
 }
 
 public val TableRow: FC<TableRowProps> = FC { props ->
@@ -74,6 +80,7 @@ public val TableRow: FC<TableRowProps> = FC { props ->
         css {
             borderBottom = web.cssom.Border(1.px, web.cssom.LineStyle.solid, SchedulerColors.outlineVariant)
             if (props.selected == true) backgroundColor = SchedulerColors.primaryContainer
+            if (props.arriving == true) asDynamic().animation = "sch-row-in 0.5s ease-out"
             if (clickable) {
                 cursor = Cursor.pointer
                 hover {

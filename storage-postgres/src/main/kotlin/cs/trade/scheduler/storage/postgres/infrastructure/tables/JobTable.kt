@@ -66,4 +66,7 @@ public object JobTable : UuidTable("job") {
 
     public val createdAt: Column<OffsetDateTime> = timestampWithTimeZone("created_at")
     public val updatedAt: Column<OffsetDateTime> = timestampWithTimeZone("updated_at")
+
+    /** Recurring definition that fired this job; NULL for one-off enqueues. See V9 migration. */
+    public val recurringId: Column<String?> = text("recurring_id").nullable()
 }

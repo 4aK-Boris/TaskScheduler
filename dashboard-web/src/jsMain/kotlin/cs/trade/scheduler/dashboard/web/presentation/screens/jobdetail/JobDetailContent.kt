@@ -433,10 +433,10 @@ private val ProgressBlock: FC<ProgressBlockProps> = FC { props ->
             if (counting) {
                 val succeededFrac = (succeeded!!.toDouble() / total!!).coerceIn(0.0, 1.0)
                 val failedFrac = (failed!!.toDouble() / total).coerceIn(0.0, 1.0 - succeededFrac)
-                progressSegment(succeededFrac, SchedulerColors.success)
-                progressSegment(failedFrac, SchedulerColors.error)
+                progressSegment(succeededFrac, SchedulerColors.success, key = "succeeded")
+                progressSegment(failedFrac, SchedulerColors.error, key = "failed")
             } else {
-                progressSegment(fraction.toDouble(), SchedulerColors.primary)
+                progressSegment(fraction.toDouble(), SchedulerColors.primary, key = "progress")
             }
         }
 
@@ -470,14 +470,22 @@ private val ProgressBlock: FC<ProgressBlockProps> = FC { props ->
     }
 }
 
-private fun react.ChildrenBuilder.progressSegment(fraction: Double, fill: Color) {
-    if (fraction > 0.0) {
-        div {
-            css {
-                width = (fraction * 100).pct
-                height = 100.pct
-                backgroundColor = fill
-            }
+/**
+ * One fill of the progress bar.
+ *
+ * Rendered even at zero width, and always with a width transition: a running job reports progress
+ * every few seconds, and without this the bar teleports to its new length on each update. Keeping
+ * the element mounted at zero matters too — a segment that only appears once its count goes above
+ * zero (the failed one, typically) would otherwise pop in at full size instead of growing.
+ */
+private fun react.ChildrenBuilder.progressSegment(fraction: Double, fill: Color, key: String) {
+    div {
+        this.key = Key(key)
+        css {
+            width = (fraction.coerceIn(0.0, 1.0) * 100).pct
+            height = 100.pct
+            backgroundColor = fill
+            asDynamic().transition = "width 0.45s cubic-bezier(0.4, 0, 0.2, 1)"
         }
     }
 }

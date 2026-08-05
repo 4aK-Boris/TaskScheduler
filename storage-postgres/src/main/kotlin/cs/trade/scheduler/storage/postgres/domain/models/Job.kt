@@ -58,4 +58,14 @@ public data class Job(
     val progressSucceeded: Long? = null,
     val progressFailed: Long? = null,
     val progressTotal: Long? = null,
+
+    /**
+     * The recurring definition this job was fired from, or `null` for a one-off enqueue.
+     *
+     * Lets a definition find its own runs — the dashboard shows whether it is running right now
+     * and opens the current (or last) run from the Recurring screen. Before V9 the only trace was
+     * the derived idempotency key, and only under the SKIP / REPLACE overlap policies; jobs fired
+     * before that migration carry `null` and cannot be attributed after the fact.
+     */
+    val recurringId: String? = null,
 )

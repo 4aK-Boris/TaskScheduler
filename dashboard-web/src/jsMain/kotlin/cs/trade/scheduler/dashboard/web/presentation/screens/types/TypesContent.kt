@@ -94,14 +94,14 @@ public val TypesContent: FC<TypesContentProps> = FC { props ->
                     }
                     SortableHeaderCell {
                         label = "Since"
-                        width = 170.px
+                        width = 195.px
                         active = sort.isActive(TpSort.SINCE)
                         direction = sort.directionOf(TpSort.SINCE)
                         onClick = sort.onSort(TpSort.SINCE)
                     }
                     SortableHeaderCell {
                         label = "Paused By"
-                        width = 200.px
+                        width = 210.px
                         active = sort.isActive(TpSort.BY)
                         direction = sort.directionOf(TpSort.BY)
                         onClick = sort.onSort(TpSort.BY)
@@ -114,7 +114,7 @@ public val TypesContent: FC<TypesContentProps> = FC { props ->
                         onClick = sort.onSort(TpSort.REASON)
                     }
                     // Last column is the Unpause action — not sortable.
-                    TableHeaderCell { width = 130.px }
+                    TableHeaderCell { width = 140.px }
                 }
             }
             TableBody {
