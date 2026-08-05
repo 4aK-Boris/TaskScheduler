@@ -87,7 +87,7 @@ public val WorkersContent: FC<WorkersContentProps> = FC { props ->
                         columns = COLUMNS.size
                         SkeletonRows {
                             rows = 6
-                            widths = listOf(70.px, 200.px, 160.px, 160.px, 70.px, 80.px)
+                            widths = listOf(80.px, 210.px, 170.px, 170.px, 80.px, 90.px)
                         }
                     }
 
@@ -238,14 +238,14 @@ private enum class WkSort { STATUS, NODE, HOST, INFLIGHT, LASTHB, UPTIME }
 private class WorkerColumn(val label: String, val width: Int?, val sortKey: WkSort?)
 
 private val COLUMNS: List<WorkerColumn> = listOf(
-    WorkerColumn("Status", 110, WkSort.STATUS),
-    WorkerColumn("Node ID", 240, WkSort.NODE),
-    WorkerColumn("Host", 190, WkSort.HOST),
+    WorkerColumn("Status", 120, WkSort.STATUS),
+    WorkerColumn("Node ID", 260, WkSort.NODE),
+    WorkerColumn("Host", 200, WkSort.HOST),
     // Tags is a list — not a useful single sort key. It also takes the flexible width.
     WorkerColumn("Tags", null, null),
-    WorkerColumn("In flight", 170, WkSort.INFLIGHT),
-    WorkerColumn("Last HB", 170, WkSort.LASTHB),
-    WorkerColumn("Uptime", 170, WkSort.UPTIME),
+    WorkerColumn("In flight", 180, WkSort.INFLIGHT),
+    WorkerColumn("Last HB", 195, WkSort.LASTHB),
+    WorkerColumn("Uptime", 195, WkSort.UPTIME),
 )
 
 // Text columns ascending; status (alive-first), in-flight and last-HB descending;

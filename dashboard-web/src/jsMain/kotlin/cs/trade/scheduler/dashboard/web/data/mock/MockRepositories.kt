@@ -12,6 +12,7 @@ import cs.trade.scheduler.dashboard.web.domain.repositories.TypesRepository
 import cs.trade.scheduler.dashboard.web.domain.repositories.WorkersRepository
 import cs.trade.scheduler.shared.MisfirePolicy
 import cs.trade.scheduler.shared.dto.RecurringJobDto
+import cs.trade.scheduler.shared.dto.RecurringRunDto
 import cs.trade.scheduler.shared.dto.WorkerDto
 import cs.trade.scheduler.shared.CancelResult
 import cs.trade.scheduler.shared.DeleteResult
@@ -345,6 +346,7 @@ private val MOCK_RECURRING: List<RecurringJobDto> = run {
         lastAgoMin: Int?,
         nextInMin: Int,
         priority: Int,
+        lastRun: RecurringRunDto? = null,
     ) = RecurringJobDto(
         id = id,
         cron = cron,
@@ -358,19 +360,58 @@ private val MOCK_RECURRING: List<RecurringJobDto> = run {
         lastTriggeredAt = lastAgoMin?.let { now - it.minutes },
         nextTriggerAt = now + nextInMin.minutes,
         enabled = enabled,
+        lastRun = lastRun,
     )
+
+    // A live run (with progress), a plain-fraction run, finished runs and a never-fired
+    // definition — one of each shape the Recurring screen has to render.
+    fun run(
+        state: JobState,
+        agoMin: Int,
+        progress: Float? = null,
+        succeeded: Long? = null,
+        failed: Long? = null,
+        total: Long? = null,
+    ) = RecurringRunDto(
+        jobId = MOCK_JOBS[agoMin % MOCK_JOBS.size].id,
+        state = state,
+        progress = progress,
+        progressSucceeded = succeeded,
+        progressFailed = failed,
+        progressTotal = total,
+        startedAt = now - agoMin.minutes,
+        durationMs = if (state.isTerminal) (agoMin * 900L) else null,
+        updatedAt = now - (agoMin / 2).minutes,
+    )
+
     listOf(
         row(
             "marketplace.market_csgo.update_market_cs_go_item_buy_order_prises_task",
             "*/30 * * * *", "marketplace", "com.acme.marketplace.UpdateBuyOrderPrices", "UTC", true, 12, 18, 6,
+            lastRun = run(JobState.PROCESSING, agoMin = 3, succeeded = 640, failed = 12, total = 1000),
         ),
-        row("nightly-report", "0 3 * * *", "reports", "com.acme.report.GenerateReport", "Europe/Berlin", true, 600, 720, 5),
-        row("hourly-inventory-sync", "0 * * * *", "default", "com.acme.inventory.SyncInventory", null, true, 35, 25, 0),
+        row(
+            "nightly-report", "0 3 * * *", "reports", "com.acme.report.GenerateReport", "Europe/Berlin", true, 600, 720, 5,
+            lastRun = run(JobState.SUCCEEDED, agoMin = 600),
+        ),
+        row(
+            "hourly-inventory-sync", "0 * * * *", "default", "com.acme.inventory.SyncInventory", null, true, 35, 25, 0,
+            lastRun = run(JobState.PROCESSING, agoMin = 7, progress = 0.42f),
+        ),
         row("healthcheck-10s", "*/10 * * * * *", "default", "com.acme.webhook.DeliverWebhook", null, true, 0, 0, 0),
-        row("weekly-billing", "0 6 * * MON", "billing", "com.acme.billing.ChargeCard", "America/New_York", true, 4320, 5760, 8),
-        row("daily-cleanup", "30 2 * * *", "heavy", "com.acme.imports.ImportCsv", null, false, 1440, 90, 2),
+        row(
+            "weekly-billing", "0 6 * * MON", "billing", "com.acme.billing.ChargeCard", "America/New_York", true, 4320, 5760, 8,
+            lastRun = run(JobState.FAILED, agoMin = 4320),
+        ),
+        row(
+            "daily-cleanup", "30 2 * * *", "heavy", "com.acme.imports.ImportCsv", null, false, 1440, 90, 2,
+            lastRun = run(JobState.CANCELLED, agoMin = 1440),
+        ),
         row("monthly-rollup", "0 0 1 * *", "reports", "com.acme.rollup.NightlyRollup", "UTC", true, null, 86400, 3),
-        row("email-digest", "0 9 * * 1-5", "email", "com.acme.email.SendEmail", "Europe/Berlin", false, 180, 240, 4),
+        row(
+            "email-digest", "0 9 * * 1-5", "email", "com.acme.email.SendEmail", "Europe/Berlin", false, 180, 240, 4,
+            lastRun = run(JobState.ENQUEUED, agoMin = 2),
+        ),
     )
 }
 

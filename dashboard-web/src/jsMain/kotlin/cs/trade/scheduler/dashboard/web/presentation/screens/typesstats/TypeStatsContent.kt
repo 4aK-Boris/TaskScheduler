@@ -253,17 +253,17 @@ private class StatsColumn(
 private val COLUMNS: List<StatsColumn> = listOf(
     // Type takes the flexible width; everything else is fixed so the numbers line up.
     StatsColumn("Type", null, TsSort.TYPE),
-    StatsColumn("Queue", 130.px, TsSort.QUEUE),
+    StatsColumn("Queue", 140.px, TsSort.QUEUE),
     // Outcome is a proportion bar, not a value — left unsortable.
-    StatsColumn("Outcome", 160.px, null),
-    StatsColumn("Success", 96.px, TsSort.SUCCESS, numeric = true),
-    StatsColumn("Failed", 96.px, TsSort.FAILED, numeric = true),
-    StatsColumn("Cancel", 100.px, TsSort.CANCELLED, numeric = true),
-    StatsColumn("Retries", 92.px, TsSort.RETRIES, numeric = true),
-    StatsColumn("Avg ms", 96.px, TsSort.AVG, numeric = true),
-    StatsColumn("Min ms", 92.px, TsSort.MIN, numeric = true),
-    StatsColumn("Max ms", 92.px, TsSort.MAX, numeric = true),
-    StatsColumn("P95 ms", 96.px, TsSort.P95, numeric = true),
+    StatsColumn("Outcome", 170.px, null),
+    StatsColumn("Success", 105.px, TsSort.SUCCESS, numeric = true),
+    StatsColumn("Failed", 100.px, TsSort.FAILED, numeric = true),
+    StatsColumn("Cancel", 105.px, TsSort.CANCELLED, numeric = true),
+    StatsColumn("Retries", 100.px, TsSort.RETRIES, numeric = true),
+    StatsColumn("Avg ms", 100.px, TsSort.AVG, numeric = true),
+    StatsColumn("Min ms", 100.px, TsSort.MIN, numeric = true),
+    StatsColumn("Max ms", 100.px, TsSort.MAX, numeric = true),
+    StatsColumn("P95 ms", 100.px, TsSort.P95, numeric = true),
 )
 
 private fun Long?.fmt(): String = this?.toString() ?: "—"

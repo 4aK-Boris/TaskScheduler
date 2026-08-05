@@ -204,6 +204,9 @@ public class FireDueRecurringJobsUseCase(
             contextJson = null,
             createdAt = now,
             updatedAt = now,
+            // Tagged for every overlap policy, not just SKIP/REPLACE: the derived idempotency key
+            // only exists under those two, so it can't serve as the link (V9 migration).
+            recurringId = row.id,
         )
         jobs.insert(jobRow)
         outbox.insert(

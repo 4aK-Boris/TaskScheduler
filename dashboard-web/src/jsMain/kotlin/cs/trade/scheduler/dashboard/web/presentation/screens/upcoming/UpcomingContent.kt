@@ -72,20 +72,20 @@ public val UpcomingContent: FC<UpcomingContentProps> = FC { props ->
             TableHead {
                 tr {
                     TableHeaderCell {
-                        width = 160.px
+                        width = 185.px
                         +"When"
                     }
                     TableHeaderCell {
-                        width = 130.px
+                        width = 140.px
                         +"Kind"
                     }
                     TableHeaderCell {
-                        width = 130.px
+                        width = 140.px
                         +"Queue"
                     }
                     TableHeaderCell { +"Name" }
                     TableHeaderCell {
-                        width = 210.px
+                        width = 225.px
                         +"Cron / ID"
                     }
                 }

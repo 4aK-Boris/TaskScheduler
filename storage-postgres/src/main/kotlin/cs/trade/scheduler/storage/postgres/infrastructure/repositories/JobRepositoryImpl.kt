@@ -12,6 +12,7 @@ import cs.trade.scheduler.storage.postgres.domain.models.Job
 import cs.trade.scheduler.storage.postgres.domain.models.JobListFilter
 import cs.trade.scheduler.storage.postgres.domain.models.NewJobEvent
 import cs.trade.scheduler.storage.postgres.domain.models.PagedResult
+import cs.trade.scheduler.storage.postgres.domain.models.RecurringRun
 import cs.trade.scheduler.storage.postgres.domain.repositories.JobEventRepository
 import cs.trade.scheduler.storage.postgres.domain.repositories.JobRepository
 import cs.trade.scheduler.storage.postgres.infrastructure.tables.JobDependencyTable
@@ -19,6 +20,7 @@ import cs.trade.scheduler.storage.postgres.infrastructure.tables.JobTable
 import cs.trade.scheduler.storage.postgres.infrastructure.toKotlinTime
 import cs.trade.scheduler.shared.JobSortField
 import cs.trade.scheduler.storage.postgres.infrastructure.toOffsetDateTimeUtc
+import java.time.OffsetDateTime
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.jetbrains.exposed.v1.core.ResultRow
@@ -232,6 +234,7 @@ public class JobRepositoryImpl(
                 row[cancelRequestedAt] = job.cancelRequestedAt?.toOffsetDateTimeUtc()
                 row[cancelRequestedBy] = job.cancelRequestedBy
                 row[contextJson] = job.contextJson
+                row[recurringId] = job.recurringId
                 row[createdAt] = now
                 row[updatedAt] = now
             }
@@ -1056,6 +1059,60 @@ public class JobRepositoryImpl(
             }
         }
 
+    override suspend fun findLatestRunsByRecurringIds(
+        recurringIds: Collection<String>,
+    ): Map<String, RecurringRun> {
+        if (recurringIds.isEmpty()) return emptyMap()
+        return withContext(Dispatchers.IO) {
+            suspendTransaction(db = database) {
+                // DISTINCT ON keeps one row per definition, and the ORDER BY decides WHICH one:
+                // live runs sort ahead of terminal ones (a boolean orders false < true), then the
+                // newest first. That gives "the run in flight, else the last finished run" in a
+                // single index-backed pass — no N+1, no second query for the fallback.
+                //
+                // Ids are inlined rather than bound: Exposed's `exec(sql, args)` has no clean way
+                // to pass a varying-length IN-list, and these are registration keys from the app's
+                // own code. Quotes are still escaped — an id is a plain string, and nothing
+                // upstream promises it is free of them.
+                val inList = recurringIds.joinToString(",") { "'${it.replace("'", "''")}'" }
+                val terminal = JobState.entries
+                    .filter { it.isTerminal }
+                    .joinToString(",") { "'${it.name}'" }
+                val sql = """
+                    SELECT DISTINCT ON (recurring_id)
+                           recurring_id, id, state, progress,
+                           progress_succeeded, progress_failed, progress_total,
+                           started_at, duration_ms, updated_at
+                    FROM job
+                    WHERE recurring_id IN ($inList)
+                    ORDER BY recurring_id, (state IN ($terminal)), created_at DESC
+                """.trimIndent()
+
+                val out = mutableMapOf<String, RecurringRun>()
+                exec(sql) { rs ->
+                    while (rs.next()) {
+                        val state = runCatching { JobState.valueOf(rs.getString("state")) }.getOrNull()
+                            ?: continue
+                        val recurringId = rs.getString("recurring_id")
+                        out[recurringId] = RecurringRun(
+                            recurringId = recurringId,
+                            jobId = Uuid.parse(rs.getString("id")),
+                            state = state,
+                            progress = rs.getFloat("progress").takeUnless { rs.wasNull() },
+                            progressSucceeded = rs.getLong("progress_succeeded").takeUnless { rs.wasNull() },
+                            progressFailed = rs.getLong("progress_failed").takeUnless { rs.wasNull() },
+                            progressTotal = rs.getLong("progress_total").takeUnless { rs.wasNull() },
+                            startedAt = rs.getObject("started_at", OffsetDateTime::class.java)?.toKotlinTime(),
+                            durationMs = rs.getLong("duration_ms").takeUnless { rs.wasNull() },
+                            updatedAt = rs.getObject("updated_at", OffsetDateTime::class.java).toKotlinTime(),
+                        )
+                    }
+                }
+                out
+            }
+        }
+    }
+
     override suspend fun statsByPayloadType(windowHours: Int): List<JobRepository.TypeStatsRow> {
         require(windowHours > 0) { "windowHours must be positive, got $windowHours" }
         return withContext(Dispatchers.IO) {
@@ -1168,6 +1225,7 @@ private fun ResultRow.toJob(): Job = Job(
     cancelRequestedAt = this[JobTable.cancelRequestedAt]?.toKotlinTime(),
     cancelRequestedBy = this[JobTable.cancelRequestedBy],
     contextJson = this[JobTable.contextJson],
+    recurringId = this[JobTable.recurringId],
     createdAt = this[JobTable.createdAt].toKotlinTime(),
     updatedAt = this[JobTable.updatedAt].toKotlinTime(),
 )

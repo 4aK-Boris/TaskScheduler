@@ -89,31 +89,36 @@ public object SchedulerColors {
  * Type scale on IBM Plex Sans. Firmer title weights and tighter tracking than a stock Material
  * scale so dense operator tables and nav read crisply.
  *
+ * Every role sits **two points above** the equivalent Material size: the wasm build inherited
+ * Material's mobile-first scale, which read cramped on the desktop screens this dashboard actually
+ * runs on — 12px body text in a table an operator scans all day is too small. Line heights moved
+ * with the sizes to keep the rhythm.
+ *
  * Each role is a bag of CSS properties applied with `+`, which merges it into the surrounding
  * `css { }` block — put it FIRST if the block then overrides a single property (e.g. colour).
  */
 public object SchedulerText {
-    public val displaySmall: Properties = textStyle(36.px, 44.px, 400)
-    public val headlineMedium: Properties = textStyle(28.px, 36.px, 400)
-    public val headlineSmall: Properties = textStyle(24.px, 32.px, 400)
+    public val displaySmall: Properties = textStyle(38.px, 46.px, 400)
+    public val headlineMedium: Properties = textStyle(30.px, 38.px, 400)
+    public val headlineSmall: Properties = textStyle(26.px, 34.px, 400)
 
-    public val titleLarge: Properties = textStyle(22.px, 28.px, 600, (-0.2).px)
-    public val titleMedium: Properties = textStyle(16.px, 24.px, 600, 0.15.px)
-    public val titleSmall: Properties = textStyle(14.px, 20.px, 600, 0.1.px)
+    public val titleLarge: Properties = textStyle(24.px, 32.px, 600, (-0.2).px)
+    public val titleMedium: Properties = textStyle(18.px, 26.px, 600, 0.15.px)
+    public val titleSmall: Properties = textStyle(16.px, 22.px, 600, 0.1.px)
 
-    public val bodyLarge: Properties = textStyle(16.px, 24.px, 400, 0.5.px)
-    public val bodyMedium: Properties = textStyle(14.px, 20.px, 400, 0.25.px)
-    public val bodySmall: Properties = textStyle(12.px, 16.px, 400, 0.4.px)
+    public val bodyLarge: Properties = textStyle(18.px, 26.px, 400, 0.5.px)
+    public val bodyMedium: Properties = textStyle(16.px, 24.px, 400, 0.25.px)
+    public val bodySmall: Properties = textStyle(14.px, 20.px, 400, 0.4.px)
 
-    public val labelLarge: Properties = textStyle(14.px, 20.px, 500, 0.1.px)
-    public val labelMedium: Properties = textStyle(12.px, 16.px, 500, 0.3.px)
-    public val labelSmall: Properties = textStyle(11.px, 16.px, 600, 0.4.px)
+    public val labelLarge: Properties = textStyle(16.px, 22.px, 500, 0.1.px)
+    public val labelMedium: Properties = textStyle(14.px, 20.px, 500, 0.3.px)
+    public val labelSmall: Properties = textStyle(13.px, 18.px, 600, 0.4.px)
 
     /** Monospace slot — job ids, payload JSON, stack traces. Same size as [bodySmall]. */
     public val mono: Properties = unsafeJso {
         fontFamily = MONO_STACK
-        fontSize = 12.px
-        lineHeight = 16.px
+        fontSize = 14.px
+        lineHeight = 20.px
         letterSpacing = 0.px
     }
 }

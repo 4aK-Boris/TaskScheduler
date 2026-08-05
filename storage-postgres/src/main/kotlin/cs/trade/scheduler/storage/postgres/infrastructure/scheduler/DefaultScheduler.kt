@@ -668,6 +668,9 @@ public class DefaultScheduler(
             targetNode = row.targetNode,
             targetTag = row.targetTag,
             timeoutSeconds = row.timeoutSeconds,
+            // A manual fire is still a run OF this definition — it belongs in its run history and
+            // in the "is it running now?" indicator, exactly like a scheduled one.
+            recurringId = row.id,
         )
     }
 
@@ -699,6 +702,7 @@ public class DefaultScheduler(
         targetNode: String?,
         targetTag: String?,
         timeoutSeconds: Int?,
+        recurringId: String? = null,
     ): Uuid {
         val jobId = Uuid.random()
         val routingKey = when {
@@ -735,6 +739,7 @@ public class DefaultScheduler(
             contextJson = null,
             createdAt = now,
             updatedAt = now,
+            recurringId = recurringId,
         )
         withContext(Dispatchers.IO) {
             suspendTransaction(db = database) {

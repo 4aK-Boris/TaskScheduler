@@ -5,6 +5,7 @@ import cs.trade.scheduler.shared.RetryMode
 import cs.trade.scheduler.storage.postgres.domain.models.Job
 import cs.trade.scheduler.storage.postgres.domain.models.JobListFilter
 import cs.trade.scheduler.storage.postgres.domain.models.PagedResult
+import cs.trade.scheduler.storage.postgres.domain.models.RecurringRun
 import kotlin.time.Duration
 import kotlin.time.Instant
 import kotlin.uuid.ExperimentalUuidApi
@@ -293,6 +294,19 @@ public interface JobRepository {
      * apps with > 1000 distinct types should filter client-side anyway.
      */
     public suspend fun findDistinctPayloadTypes(limit: Int = 1000): List<String>
+
+    /**
+     * For each of [recurringIds], the run the Recurring screen should show: the live one if the
+     * definition is running (or queued to run), otherwise its most recent finished run. Definitions
+     * with no runs at all are absent from the result.
+     *
+     * One query for the whole page — a per-definition lookup would be an N+1 against a table that
+     * holds every job ever fired. Served by `job_recurring_id_created_at_idx` (V9).
+     *
+     * Only jobs fired after the V9 migration carry the link, so a definition that last ran before
+     * the upgrade reports nothing until its next fire.
+     */
+    public suspend fun findLatestRunsByRecurringIds(recurringIds: Collection<String>): Map<String, RecurringRun>
 
     /**
      * Persist a handler-reported progress sample on a PROCESSING row. Single UPDATE,

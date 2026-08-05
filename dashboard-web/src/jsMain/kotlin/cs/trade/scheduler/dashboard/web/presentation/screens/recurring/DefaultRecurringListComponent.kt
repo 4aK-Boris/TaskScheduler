@@ -93,6 +93,12 @@ public class DefaultRecurringListComponent(
         }
     }
 
+    // The row already knows which job to open (the server sends it with the definition), so this
+    // is a straight hand-off to the parent — no lookup, no extra request.
+    override fun onRunClicked(jobId: String) {
+        onNavigateToJob(jobId)
+    }
+
     override fun onRunNowClicked(id: String) {
         if (_model.value.triggeringId != null) return
         _model.update { it.copy(triggeringId = id, error = null) }
