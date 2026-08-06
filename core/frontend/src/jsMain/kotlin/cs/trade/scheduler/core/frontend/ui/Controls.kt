@@ -30,6 +30,7 @@ import web.cssom.None
 import web.cssom.number
 import web.cssom.Padding
 import web.cssom.TextTransform
+import web.cssom.pct
 import web.cssom.px
 import web.html.ButtonType
 import web.html.HTMLInputElement
@@ -225,6 +226,9 @@ public val Select: FC<SelectProps> = FC { props ->
 /** Checkbox with an optional label — bulk-select columns, "only failed" filters. */
 external interface CheckboxProps : Props {
     var checked: Boolean
+
+    /** Stretch the clickable area to the container — used in table cells, which own the padding. */
+    var fillArea: Boolean?
     var onCheckedChange: ((Boolean) -> Unit)?
     var label: String?
     var disabled: Boolean?
@@ -234,17 +238,36 @@ external interface CheckboxProps : Props {
 }
 
 public val Checkbox: FC<CheckboxProps> = FC { props ->
+    val isDisabled = props.disabled == true
+    // The `<label>` IS the hit target — clicking anywhere inside it toggles the input, for free,
+    // because they're associated by nesting. So the padding here is not decoration: it is how big
+    // the thing is to click. A bare 16px box is a miss-magnet in a dense table.
     label {
         css {
-            inlineRow(gap = 6.px)
-            cursor = if (props.disabled == true) Cursor.notAllowed else Cursor.pointer
+            inlineRow(gap = 8.px)
+            justifyContent = JustifyContent.center
+            // Comfortably past the 24px minimum for a pointer target, and it grows to fill a
+            // table cell that gives it room (see `fillArea`).
+            minWidth = HIT_TARGET
+            minHeight = HIT_TARGET
+            if (props.fillArea == true) {
+                width = 100.pct
+                height = 100.pct
+            } else {
+                padding = Padding(0.px, 4.px)
+            }
+            borderRadius = SchedulerRadius.small
+            cursor = if (isDisabled) Cursor.notAllowed else Cursor.pointer
             +SchedulerText.bodySmall
             color = SchedulerColors.onSurface
+            // Shows where that area actually is — without it the enlarged target is invisible and
+            // the operator keeps aiming at the little square.
+            if (!isDisabled) hover { backgroundColor = SchedulerColors.surfaceContainerHigh }
         }
         input {
             type = InputType.checkboxInput
             checked = props.checked
-            disabled = props.disabled == true
+            disabled = isDisabled
             onChange = { event -> props.onCheckedChange?.invoke(event.target.checked) }
             // `indeterminate` is a DOM property with no HTML attribute, so React cannot set it
             // declaratively — a ref callback is the only way in.
@@ -252,16 +275,20 @@ public val Checkbox: FC<CheckboxProps> = FC { props ->
                 element.indeterminate = props.indeterminate == true
             }
             css {
-                width = 14.px
-                height = 14.px
+                width = 16.px
+                height = 16.px
                 accentColor = SchedulerColors.primary
-                cursor = Cursor.pointer
+                cursor = if (isDisabled) Cursor.notAllowed else Cursor.pointer
                 margin = 0.px
+                flexShrink = number(0.0)
             }
         }
         props.label?.let { +it }
     }
 }
+
+/** Minimum comfortable pointer target for the checkbox's clickable area. */
+private val HIT_TARGET = 32.px
 
 /**
  * On/off toggle for a persisted setting (a recurring definition's enabled flag). A real `<button

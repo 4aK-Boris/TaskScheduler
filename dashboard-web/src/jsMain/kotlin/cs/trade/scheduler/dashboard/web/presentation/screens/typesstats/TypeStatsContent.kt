@@ -18,6 +18,7 @@ import cs.trade.scheduler.core.frontend.ui.flexRow
 import cs.trade.scheduler.dashboard.web.presentation.components.CopyableText
 import cs.trade.scheduler.dashboard.web.presentation.components.ListScreen
 import cs.trade.scheduler.dashboard.web.presentation.components.RangeSegments
+import cs.trade.scheduler.dashboard.web.presentation.components.formatDurationMs
 import cs.trade.scheduler.dashboard.web.presentation.components.SkeletonRows
 import cs.trade.scheduler.dashboard.web.presentation.components.SortableHeaderCell
 import cs.trade.scheduler.dashboard.web.presentation.components.useTableSort
@@ -260,13 +261,17 @@ private val COLUMNS: List<StatsColumn> = listOf(
     StatsColumn("Failed", 100.px, TsSort.FAILED, numeric = true),
     StatsColumn("Cancel", 105.px, TsSort.CANCELLED, numeric = true),
     StatsColumn("Retries", 100.px, TsSort.RETRIES, numeric = true),
-    StatsColumn("Avg ms", 100.px, TsSort.AVG, numeric = true),
-    StatsColumn("Min ms", 100.px, TsSort.MIN, numeric = true),
-    StatsColumn("Max ms", 100.px, TsSort.MAX, numeric = true),
-    StatsColumn("P95 ms", 100.px, TsSort.P95, numeric = true),
+    StatsColumn("Avg", 110.px, TsSort.AVG, numeric = true),
+    StatsColumn("Min", 110.px, TsSort.MIN, numeric = true),
+    StatsColumn("Max", 110.px, TsSort.MAX, numeric = true),
+    StatsColumn("P95", 110.px, TsSort.P95, numeric = true),
 )
 
-private fun Long?.fmt(): String = this?.toString() ?: "—"
+/**
+ * Latency cell. Sorting still happens on the raw millisecond value (the column's comparator reads
+ * the DTO), so switching units here changes only what's rendered.
+ */
+private fun Long?.fmt(): String = this?.let { formatDurationMs(it) } ?: "—"
 
 private enum class TsSort { TYPE, QUEUE, SUCCESS, FAILED, CANCELLED, RETRIES, AVG, MIN, MAX, P95 }
 

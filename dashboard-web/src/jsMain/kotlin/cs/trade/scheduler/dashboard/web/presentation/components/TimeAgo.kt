@@ -65,3 +65,50 @@ public fun formatDateTime(instant: Instant): String {
     val (year, month, day) = dt.date.toString().split("-")
     return "$day.$month.$year ${formatClock(instant)}"
 }
+
+/**
+ * A duration in the largest unit that still says something: `870ms`, `5.2s`, `42s`, `3m 20s`,
+ * `1h 12m`, `2d 3h`.
+ *
+ * Raw milliseconds stop being readable almost immediately — `22000ms` forces the reader to count
+ * digits to learn it is twenty-two seconds, and `86_400_000ms` is hopeless. Below a second the
+ * millisecond IS the meaningful unit, so it stays; above it we switch and keep one companion unit
+ * for precision (`3m 20s`, not a bare `3m` that hides a third of a minute). The companion is
+ * dropped when it would be zero, so a clean value reads `5m`, not `5m 0s`.
+ *
+ * Sub-10-second values keep one decimal (`5.2s`): at that scale a tenth is often the difference
+ * between "fine" and "needs a look", and rounding to `5s` would throw it away.
+ */
+public fun formatDurationMs(millis: Long): String {
+    if (millis < 0) return "—"
+    if (millis < 1_000) return "${millis}ms"
+
+    val totalSeconds = millis / 1_000
+    return when {
+        // One decimal, but never a pointless ".0".
+        totalSeconds < 10 -> {
+            val tenths = (millis + 50) / 100          // round to the nearest tenth of a second
+            if (tenths % 10 == 0L) "${tenths / 10}s" else "${tenths / 10}.${tenths % 10}s"
+        }
+
+        totalSeconds < 60 -> "${totalSeconds}s"
+
+        totalSeconds < 3_600 -> {
+            val minutes = totalSeconds / 60
+            val seconds = totalSeconds % 60
+            if (seconds == 0L) "${minutes}m" else "${minutes}m ${seconds}s"
+        }
+
+        totalSeconds < 86_400 -> {
+            val hours = totalSeconds / 3_600
+            val minutes = (totalSeconds % 3_600) / 60
+            if (minutes == 0L) "${hours}h" else "${hours}h ${minutes}m"
+        }
+
+        else -> {
+            val days = totalSeconds / 86_400
+            val hours = (totalSeconds % 86_400) / 3_600
+            if (hours == 0L) "${days}d" else "${days}d ${hours}h"
+        }
+    }
+}

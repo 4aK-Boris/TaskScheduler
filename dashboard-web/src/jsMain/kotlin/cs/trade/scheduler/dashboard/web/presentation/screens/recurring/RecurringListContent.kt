@@ -26,6 +26,7 @@ import cs.trade.scheduler.dashboard.web.presentation.components.SkeletonRows
 import cs.trade.scheduler.dashboard.web.presentation.components.SortableHeaderCell
 import cs.trade.scheduler.dashboard.web.presentation.components.StateChip
 import cs.trade.scheduler.dashboard.web.presentation.components.formatDateTime
+import cs.trade.scheduler.dashboard.web.presentation.components.progressFill
 import cs.trade.scheduler.dashboard.web.presentation.components.timeAgo
 import cs.trade.scheduler.dashboard.web.presentation.components.useTableSort
 import cs.trade.scheduler.shared.dto.RecurringJobDto
@@ -268,6 +269,8 @@ private val RecurringRow: FC<RecurringRowProps> = FC { props ->
     TableRow {
         // Only clickable when the definition has actually run — otherwise there is nothing to open.
         props.onOpenRun?.let { open -> onClick = open }
+        // Same reason as the Jobs table: the Last run cell is taller while a run is live.
+        height = ROW_HEIGHT
 
         TableCell {
             CopyableText {
@@ -393,13 +396,10 @@ private external interface RunProgressProps : Props {
  */
 private val RunProgress: FC<RunProgressProps> = FC { props ->
     val run = props.run
-    val succeeded = run.progressSucceeded
-    val failed = run.progressFailed
-    val total = run.progressTotal
-    val counting = succeeded != null && failed != null && total != null && total > 0L
-    val fraction = run.progress?.toDouble()
+    val fill = progressFill(run.progress, run.progressSucceeded, run.progressFailed, run.progressTotal)
+    val hasBar = fill.isCounting || run.progress != null
 
-    if (counting || fraction != null) {
+    if (hasBar) {
         div {
             css {
                 flexRow()
@@ -409,13 +409,11 @@ private val RunProgress: FC<RunProgressProps> = FC { props ->
                 overflow = Overflow.hidden
                 backgroundColor = SchedulerColors.surfaceContainerHigh
             }
-            if (counting) {
-                val succeededFrac = (succeeded!!.toDouble() / total!!).coerceIn(0.0, 1.0)
-                val failedFrac = (failed!!.toDouble() / total).coerceIn(0.0, 1.0 - succeededFrac)
-                runSegment("succeeded", succeededFrac, SchedulerColors.success)
-                runSegment("failed", failedFrac, SchedulerColors.error)
+            if (fill.isCounting) {
+                runSegment("succeeded", fill.succeeded, SchedulerColors.success)
+                runSegment("failed", fill.failed, SchedulerColors.error)
             } else {
-                runSegment("progress", fraction!!.coerceIn(0.0, 1.0), SchedulerColors.primary)
+                runSegment("progress", fill.filled, SchedulerColors.primary)
             }
         }
     }
@@ -432,6 +430,8 @@ private fun react.ChildrenBuilder.runSegment(key: String, fraction: Double, fill
         }
     }
 }
+
+private val ROW_HEIGHT = 56.px
 
 private const val COLUMN_COUNT = 9
 
