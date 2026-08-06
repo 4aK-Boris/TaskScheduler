@@ -83,28 +83,22 @@ public val SchedulerGlobalStyles: FC<Props> = FC {
 
             // A row arriving in a live table. Under the default newest-first sort a new job lands
             // at the TOP, and without this it just appears mid-scan with no hint that anything
-            // happened. Sliding it down into place, with a brief cobalt wash, makes the insertion
-            // legible: the operator sees WHERE the list changed.
+            // happened. The movement alone carries that — a colour wash does not belong here: on
+            // a busy queue rows arrive in bursts, and a tinted flash per row turns the top of the
+            // table into a strobe (worse in dark mode, where the accent container is a saturated
+            // blue). Motion reads as "something arrived"; colour reads as "something is wrong".
             "@keyframes sch-row-in" {
                 asDynamic()["from"] = jsObject(
                     "opacity" to "0",
-                    "transform" to "translateY(-10px)",
-                    "background-color" to "var(--sch-primary-container)",
-                )
-                asDynamic()["60%"] = jsObject(
-                    "opacity" to "1",
-                    "transform" to "translateY(0)",
-                    "background-color" to "var(--sch-primary-container)",
+                    "transform" to "translateY(-8px)",
                 )
                 asDynamic()["to"] = jsObject(
                     "opacity" to "1",
                     "transform" to "translateY(0)",
-                    "background-color" to "transparent",
                 )
             }
 
-            // Respect the OS "reduce motion" setting — the wash still marks the new row, but
-            // nothing moves.
+            // Respect the OS "reduce motion" setting: rows appear without the slide.
             "@media (prefers-reduced-motion: reduce)" {
                 asDynamic()["*"] = jsObject(
                     "animation-duration" to "0.01ms",

@@ -91,7 +91,7 @@ public val TableRow: FC<TableRowProps> = FC { props ->
             borderBottom = web.cssom.Border(1.px, web.cssom.LineStyle.solid, SchedulerColors.outlineVariant)
             props.height?.let { height = it }
             if (props.selected == true) backgroundColor = SchedulerColors.primaryContainer
-            if (props.arriving == true) asDynamic().animation = "sch-row-in 0.5s ease-out"
+            if (props.arriving == true) asDynamic().animation = "sch-row-in 0.28s ease-out"
             if (clickable) {
                 cursor = Cursor.pointer
                 hover {
