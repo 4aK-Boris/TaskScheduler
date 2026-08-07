@@ -67,6 +67,16 @@ external interface TableRowProps : PropsWithChildren {
     var selected: Boolean?
 
     /**
+     * Pin every row to the same height.
+     *
+     * Some cells carry an extra element only in one state — a progress bar under the state chip
+     * while a job runs — which otherwise makes those rows taller than their neighbours. A table
+     * whose row rhythm changes with the data is hard to scan: the eye tracks a moving baseline.
+     * On a `<tr>` this behaves as a minimum, so a row can still grow if content genuinely needs it.
+     */
+    var height: Length?
+
+    /**
      * Play the arrival animation (slide down from above + a brief cobalt wash). Set only for rows
      * that genuinely just appeared in a live list — see `useArrivingRows`.
      */
@@ -79,8 +89,9 @@ public val TableRow: FC<TableRowProps> = FC { props ->
         props.onClick?.let { handler -> onClick = { handler() } }
         css {
             borderBottom = web.cssom.Border(1.px, web.cssom.LineStyle.solid, SchedulerColors.outlineVariant)
+            props.height?.let { height = it }
             if (props.selected == true) backgroundColor = SchedulerColors.primaryContainer
-            if (props.arriving == true) asDynamic().animation = "sch-row-in 0.5s ease-out"
+            if (props.arriving == true) asDynamic().animation = "sch-row-in 0.28s ease-out"
             if (clickable) {
                 cursor = Cursor.pointer
                 hover {
@@ -100,12 +111,19 @@ external interface TableCellProps : PropsWithChildren {
     var align: TextAlign?
     var width: Length?
     var nowrap: Boolean?
+
+    /**
+     * Drop the cell's own padding so the content can span the full cell. For a control cell (a
+     * checkbox column), that turns the whole cell into the control's hit target instead of leaving
+     * a dead 12px border around it.
+     */
+    var flush: Boolean?
 }
 
 public val TableCell: FC<TableCellProps> = FC { props ->
     td {
         css {
-            padding = Padding(9.px, 12.px)
+            padding = if (props.flush == true) 0.px else Padding(9.px, 12.px)
             props.align?.let { textAlign = it }
             props.width?.let { width = it }
             if (props.nowrap == true) whiteSpace = web.cssom.WhiteSpace.nowrap
@@ -120,6 +138,9 @@ external interface TableHeaderCellProps : PropsWithChildren {
     var align: TextAlign?
     var width: Length?
 
+    /** See [TableCellProps.flush]. */
+    var flush: Boolean?
+
     /** Present when the column is sortable — clicking cycles the sort through the caller. */
     var onClick: (() -> Unit)?
 }
@@ -128,7 +149,7 @@ public val TableHeaderCell: FC<TableHeaderCellProps> = FC { props ->
     th {
         props.onClick?.let { handler -> onClick = { handler() } }
         css {
-            padding = Padding(10.px, 12.px)
+            padding = if (props.flush == true) 0.px else Padding(10.px, 12.px)
             textAlign = props.align ?: TextAlign.left
             props.width?.let { width = it }
             borderBottom = web.cssom.Border(1.px, web.cssom.LineStyle.solid, SchedulerColors.outline)

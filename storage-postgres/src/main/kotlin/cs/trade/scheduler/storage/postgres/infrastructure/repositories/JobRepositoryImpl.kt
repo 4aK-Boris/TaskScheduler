@@ -731,6 +731,22 @@ public class JobRepositoryImpl(
             val nowOdt = now.toOffsetDateTimeUtc()
             val durationMs: Long? = startedAtMillis?.let { now.toEpochMilliseconds() - it }
 
+            // A job that SUCCEEDED is, by definition, done — so its progress fraction is 1.
+            //
+            // Without this the bar can stop just short forever: progress writes are throttled to
+            // one per second, and the counting bar only forces a write when the handler reports
+            // the sample that reaches `total`. A handler that finishes having accounted for 312
+            // of 314 items (skipped the rest, batched the tail, or simply returned early on
+            // success) leaves the last sample at 312/314, and the finished job reads as 99% —
+            // which looks like unfinished work under a green SUCCEEDED chip.
+            //
+            // Only the fraction is squared up. The per-item counters stay exactly as reported:
+            // they are the handler's own tally and rewriting them would invent work that never
+            // happened. And only on success — a FAILED or CANCELLED job SHOULD show how far it
+            // got, that's the diagnostic.
+            val reportedProgress = snap?.get(JobTable.progress)
+            val completeTheBar = terminal == JobState.SUCCEEDED && reportedProgress != null
+
             val rows = JobTable.update({
                 (JobTable.id eq jobId) and (JobTable.version eq expectedVersion)
             }) {
@@ -740,6 +756,7 @@ public class JobRepositoryImpl(
                 it[lockedUntil] = null
                 it[this.durationMs] = durationMs
                 it[updatedAt] = nowOdt
+                if (completeTheBar) it[progress] = 1f
             }
             val updated = rows == 1
             if (updated && priorState != null && queue != null) {

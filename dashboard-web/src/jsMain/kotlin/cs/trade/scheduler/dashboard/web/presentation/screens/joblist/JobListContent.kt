@@ -36,6 +36,7 @@ import cs.trade.scheduler.dashboard.web.presentation.components.SortDirection
 import cs.trade.scheduler.dashboard.web.presentation.components.SortableHeaderCell
 import cs.trade.scheduler.dashboard.web.presentation.components.StateChip
 import cs.trade.scheduler.dashboard.web.presentation.components.formatDateTime
+import cs.trade.scheduler.dashboard.web.presentation.components.progressFill
 import cs.trade.scheduler.dashboard.web.presentation.components.timeAgo
 import cs.trade.scheduler.shared.JobSortField
 import cs.trade.scheduler.shared.JobState
@@ -144,11 +145,13 @@ public val JobListContent: FC<JobListContentProps> = FC { props ->
             TableHead {
                 tr {
                     TableHeaderCell {
-                        width = 44.px
+                        width = 52.px
+                        flush = true
                         Checkbox {
                             checked = allVisibleSelected
                             // Header box reads "some, not all" while a partial selection stands.
                             indeterminate = !allVisibleSelected && model.selectedIds.isNotEmpty()
+                            fillArea = true
                             onCheckedChange = { component.onSelectAllVisibleClicked(!allVisibleSelected) }
                         }
                     }
@@ -570,14 +573,24 @@ private val JobRow: FC<JobRowProps> = FC { props ->
         onClick = props.onOpen
         selected = props.checked
         arriving = props.arriving
+        // Every row the same height, whether or not it carries a progress bar under the chip.
+        height = ROW_HEIGHT
 
         TableCell {
-            width = 44.px
-            // The row navigates on click; the checkbox must not also open the job.
+            width = 52.px
+            flush = true
+            // The row navigates on click; the checkbox must not also open the job. The wrapper
+            // stretches so the whole cell — not just the box — both toggles and swallows the click.
             div {
                 onClick = { event -> event.stopPropagation() }
+                css {
+                    display = web.cssom.Display.flex
+                    width = 100.pct
+                    height = 100.pct
+                }
                 Checkbox {
                     checked = props.checked
+                    fillArea = true
                     onCheckedChange = props.onCheckedChange
                 }
             }
@@ -591,21 +604,22 @@ private val JobRow: FC<JobRowProps> = FC { props ->
                 // (succeeded/failed/total reported) get the green/red split like the detail
                 // screen; plain updateProgress jobs get a single cobalt bar.
                 if (job.state == JobState.PROCESSING) {
-                    val succeeded = job.progressSucceeded
-                    val failed = job.progressFailed
-                    val total = job.progressTotal
-                    if (succeeded != null && failed != null && total != null && total > 0L) {
+                    val fill = progressFill(
+                        job.progress,
+                        job.progressSucceeded,
+                        job.progressFailed,
+                        job.progressTotal,
+                    )
+                    if (fill.isCounting) {
                         MiniBar {
                             segments = listOf(
-                                succeeded.toDouble() / total to SchedulerColors.success,
-                                failed.toDouble() / total to SchedulerColors.error,
+                                fill.succeeded to SchedulerColors.success,
+                                fill.failed to SchedulerColors.error,
                             )
                         }
-                    } else {
-                        job.progress?.let { fraction ->
-                            MiniBar {
-                                segments = listOf(fraction.toDouble() to SchedulerColors.primary)
-                            }
+                    } else if (job.progress != null) {
+                        MiniBar {
+                            segments = listOf(fill.filled to SchedulerColors.primary)
                         }
                     }
                 }
@@ -705,6 +719,13 @@ private val MiniBar: FC<MiniBarProps> = FC { props ->
         }
     }
 }
+
+/**
+ * Sized for the tallest cell a row can hold — the state chip with a progress bar beneath it. Rows
+ * without one pad out to the same height rather than sitting shorter, so the table keeps one
+ * rhythm while jobs move in and out of PROCESSING.
+ */
+private val ROW_HEIGHT = 56.px
 
 // Checkbox column + the seven data columns.
 private const val COLUMN_COUNT = 9

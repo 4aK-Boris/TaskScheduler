@@ -21,6 +21,8 @@ import cs.trade.scheduler.dashboard.web.presentation.components.SettingsMenu
 import cs.trade.scheduler.dashboard.web.presentation.components.SkeletonRows
 import cs.trade.scheduler.dashboard.web.presentation.components.StateChip
 import cs.trade.scheduler.dashboard.web.presentation.components.formatDateTime
+import cs.trade.scheduler.dashboard.web.presentation.components.formatDurationMs
+import cs.trade.scheduler.dashboard.web.presentation.components.progressFill
 import cs.trade.scheduler.dashboard.web.presentation.components.timeAgo
 import cs.trade.scheduler.shared.JobState
 import cs.trade.scheduler.shared.dto.JobDetail
@@ -308,7 +310,7 @@ private val OverviewPanel: FC<OverviewPanelProps> = FC { props ->
             }
             FactCell {
                 label = "Duration"
-                value = job.durationMs?.let { "$it ms" } ?: "—"
+                value = job.durationMs?.let { formatDurationMs(it) } ?: "—"
             }
         }
         factRow {
@@ -400,14 +402,15 @@ private external interface ProgressBlockProps : Props {
 }
 
 private val ProgressBlock: FC<ProgressBlockProps> = FC { props ->
-    val fraction = props.progress.coerceIn(0f, 1f)
-    val pct = (fraction * 100).toInt()
     val succeeded = props.succeeded
     val failed = props.failed
     val total = props.total
+    // Length comes from the reported fraction, the split from the counters - see progressFill.
     // A counting bar (JobContext.progressBar) splits into green/red; a plain updateProgress
     // handler only reports a fraction, which renders as one cobalt fill.
-    val counting = succeeded != null && failed != null && total != null && total > 0L
+    val fill = progressFill(props.progress, succeeded, failed, total)
+    val counting = fill.isCounting
+    val pct = (fill.filled * 100).toInt()
 
     div {
         css { flexColumn(gap = 6.px) }
@@ -430,13 +433,11 @@ private val ProgressBlock: FC<ProgressBlockProps> = FC { props ->
                 overflow = web.cssom.Overflow.hidden
                 backgroundColor = SchedulerColors.surfaceContainerHigh
             }
-            if (counting) {
-                val succeededFrac = (succeeded!!.toDouble() / total!!).coerceIn(0.0, 1.0)
-                val failedFrac = (failed!!.toDouble() / total).coerceIn(0.0, 1.0 - succeededFrac)
-                progressSegment(succeededFrac, SchedulerColors.success, key = "succeeded")
-                progressSegment(failedFrac, SchedulerColors.error, key = "failed")
+            if (fill.isCounting) {
+                progressSegment(fill.succeeded, SchedulerColors.success, key = "succeeded")
+                progressSegment(fill.failed, SchedulerColors.error, key = "failed")
             } else {
-                progressSegment(fraction.toDouble(), SchedulerColors.primary, key = "progress")
+                progressSegment(fill.filled, SchedulerColors.primary, key = "progress")
             }
         }
 
