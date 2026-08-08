@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "taskscheduler-client"
-version = "0.8.3"
+version = "0.8.4"
 description = "Async Python SDK for TaskScheduler — durable distributed background jobs on PostgreSQL + RabbitMQ"
 readme = "README.md"
 requires-python = ">=3.10"
