@@ -204,6 +204,17 @@ public class DefaultRootComponent(
     }
 
     private fun buildInitialStack(deepLinkPath: String?): List<RootComponent.Config> {
+        // A reload must not reset the stack's DEPTH. `window.history.state` survives F5, and that is
+        // where the controller keeps its page list, so it skips re-seeding the history and the
+        // browser stays N entries deep — while a path-derived stack would restart at 1 or 2. The
+        // desync is not cosmetic: every section switch is a `replaceAll`, which the controller
+        // mirrors as a RELATIVE `history.go(newDepth - oldDepth)`. Computed against a stack
+        // shallower than the address bar, clicking Jobs after walking a chain and reloading walks
+        // back one entry instead of going to the list — and `onPopState` then drags the stack onto
+        // that entry, so the screen really does go back a job. Decompose exposes `historyPaths` for
+        // exactly this case; restoring from it keeps the two depths equal.
+        restoreStackFromHistory(deepLinkPath)?.let { return it }
+
         val target = deepLinkPath?.let(::getConfigForPath) ?: RootComponent.Config.JobList
         // A job detail sits on top of the list so Back has somewhere to go after a deep link.
         return if (target is RootComponent.Config.JobDetail) {
@@ -211,6 +222,22 @@ public class DefaultRootComponent(
         } else {
             listOf(target)
         }
+    }
+
+    /**
+     * The stack the address bar already describes, or null on a first load (no saved history) or if
+     * the saved list looks unusable. Ordered oldest → current, forward entries excluded.
+     */
+    private fun restoreStackFromHistory(deepLinkPath: String?): List<RootComponent.Config>? {
+        val configs = webHistoryController?.historyPaths.orEmpty().map(::getConfigForPath)
+        if (configs.isEmpty()) return null
+        // Configurations in a stack must be unique — Decompose throws on a duplicate rather than
+        // ignoring it — and the top one has to be the page actually on screen. Either check failing
+        // means the saved list and the address bar disagree; fall back to the path-derived stack
+        // instead of booting into a state that throws on the first navigation.
+        if (configs.size != configs.distinct().size) return null
+        if (deepLinkPath != null && configs.last() != getConfigForPath(deepLinkPath)) return null
+        return configs
     }
 
     private companion object {
