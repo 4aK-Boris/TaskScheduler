@@ -1,13 +1,12 @@
 package cs.trade.scheduler.dashboard.web.presentation.root
 
 import com.arkivanov.decompose.ComponentContext
-import com.arkivanov.decompose.DelicateDecomposeApi
 import com.arkivanov.decompose.ExperimentalDecomposeApi
 import com.arkivanov.decompose.router.stack.ChildStack
 import com.arkivanov.decompose.router.stack.StackNavigation
 import com.arkivanov.decompose.router.stack.childStack
 import com.arkivanov.decompose.router.stack.pop
-import com.arkivanov.decompose.router.stack.push
+import com.arkivanov.decompose.router.stack.pushToFront
 import com.arkivanov.decompose.router.stack.replaceAll
 import com.arkivanov.decompose.router.stack.webhistory.WebHistoryController
 import com.arkivanov.decompose.value.MutableValue
@@ -53,10 +52,8 @@ import cs.trade.scheduler.dashboard.web.presentation.screens.workers.DefaultWork
 
 // Root nav host. Each child is constructed with its own scoped UseCases — no DI
 // container at runtime; the Root passes everything down explicitly.
-// push/replaceCurrent are @DelicateDecomposeApi (pushing a duplicate config is the caller's
-// responsibility) — we accept that here intentionally; pushNew would throw on a repeat JobDetail.
 // WebHistoryController is @ExperimentalDecomposeApi (browser address-bar sync — wasm only).
-@OptIn(DelicateDecomposeApi::class, ExperimentalDecomposeApi::class)
+@OptIn(ExperimentalDecomposeApi::class)
 public class DefaultRootComponent(
     componentContext: ComponentContext,
     private val getJobsList: GetJobsListUseCase,
@@ -133,7 +130,18 @@ public class DefaultRootComponent(
         // Freeform UUID input from the nav search box. Validation happens inside the
         // detail screen — invalid id surfaces as "Job not found".
         val trimmed = jobId.trim()
-        if (trimmed.isNotEmpty()) navigation.push(RootComponent.Config.JobDetail(trimmed))
+        if (trimmed.isNotEmpty()) openJob(trimmed)
+    }
+
+    // The ONLY way to open a job detail. pushToFront, never push: a plain push of a jobId that is
+    // already somewhere in the stack is a duplicate configuration, and Decompose does not merely
+    // reject that navigation — the exception poisons the navigation Relay permanently ("Can't
+    // process the event due to a previous failure"), so every later click (other jobs, the section
+    // nav, Back) silently does nothing until a full page reload. Walking a dependency chain hits
+    // this constantly: A → B, then B's graph offers A again. pushToFront moves an already-open job
+    // to the top instead of duplicating it, so the stack stays unique by construction.
+    private fun openJob(jobId: String) {
+        navigation.pushToFront(RootComponent.Config.JobDetail(jobId))
     }
 
     private fun initialDarkPreference(): Boolean {
@@ -224,7 +232,7 @@ public class DefaultRootComponent(
                 listKnownTypes = listKnownTypes,
                 listQueuesHealth = listQueuesHealth,
                 events = eventStream,
-                onJobSelected = { jobId -> navigation.push(RootComponent.Config.JobDetail(jobId)) },
+                onJobSelected = ::openJob,
             )
         )
         is RootComponent.Config.JobDetail -> RootComponent.Child.JobDetail(
@@ -240,7 +248,7 @@ public class DefaultRootComponent(
                 listPausedTypes = listPausedTypes,
                 events = eventStream,
                 onBack = { navigation.pop() },
-                onNavigateToJob = { id -> navigation.push(RootComponent.Config.JobDetail(id)) },
+                onNavigateToJob = ::openJob,
             )
         )
         RootComponent.Config.RecurringList -> RootComponent.Child.RecurringList(
@@ -252,7 +260,7 @@ public class DefaultRootComponent(
                 triggerUseCase = triggerRecurring,
                 events = eventStream,
                 onBack = ::onNavigateToJobs,
-                onNavigateToJob = { id -> navigation.push(RootComponent.Config.JobDetail(id)) },
+                onNavigateToJob = ::openJob,
             )
         )
         RootComponent.Config.Upcoming -> RootComponent.Child.Upcoming(
@@ -261,7 +269,7 @@ public class DefaultRootComponent(
                 getUpcoming = getUpcoming,
                 events = eventStream,
                 onBack = ::onNavigateToJobs,
-                onJobSelected = { id -> navigation.push(RootComponent.Config.JobDetail(id)) },
+                onJobSelected = ::openJob,
                 onRecurring = ::onNavigateToRecurring,
             )
         )

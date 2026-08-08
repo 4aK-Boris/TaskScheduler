@@ -18,7 +18,9 @@ import react.dom.html.ReactHTML.div
 import react.dom.html.ReactHTML.span
 import react.dom.svg.ReactSVG.line
 import react.dom.svg.ReactSVG.svg
+import react.useEffect
 import react.useMemo
+import react.useRef
 import web.cssom.Auto
 import web.cssom.Border
 import web.cssom.Color
@@ -30,6 +32,7 @@ import web.cssom.Position
 import web.cssom.integer
 import web.cssom.pct
 import web.cssom.px
+import web.html.HTMLDivElement
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.sin
@@ -41,6 +44,10 @@ private const val NODE_W = 340.0 // wide enough for the state chip + short id on
 private const val NODE_H = 96.0 // two lines for a long payload name + the chip/id row
 private const val LEVEL_GAP = 72.0 // horizontal gap between dependency levels — room for edges
 private const val SIBLING_GAP = 24.0 // vertical gap between siblings within a level
+
+// Slack left of the focal card when auto-scrolling to it. One level gap = the incoming arrow stays
+// visible, so the focal job reads as "the step after something" rather than as the start of the DAG.
+private const val FOCAL_LEAD_IN = LEVEL_GAP
 
 /**
  * Node-link rendering of a job's transitive dependency DAG (DESIGN.md 9.6). Lays the component
@@ -64,11 +71,30 @@ public val DependencyGraph: FC<DependencyGraphProps> = FC { props ->
     val graph = props.graph
     val layout = useMemo(graph) { computeGraphLayout(graph) }
     val presentPolicies = graph.edges.map { it.onFailure }.distinct()
+    val viewportRef = useRef<HTMLDivElement>(null)
+    val focalX = layout.positions[props.focalId]?.first
+
+    // Park the focal job at the left edge of the viewport. A long chain is far wider than the
+    // panel, and level = column means step 12 sits ~4500px to the right — rendered from scroll 0
+    // the job you just opened is off-screen, and every hop along the chain costs a manual drag.
+    // Runs on mount (the graph only renders once the detail has loaded) and whenever the focal job
+    // moves. Instant, not smooth: there is no prior position to animate away from.
+    //
+    // Keyed on the focal x, NOT on `layout`: auto-refresh re-fetches the detail every N seconds and
+    // hands down a fresh JobGraph, so a memoised-object dependency would be a new reference each
+    // time and yank the graph back to the focal card while the operator is panning it by hand.
+    useEffect(props.focalId, focalX) {
+        val viewport = viewportRef.current ?: return@useEffect
+        val x = focalX ?: return@useEffect
+        val maxScroll = (layout.width - viewport.clientWidth.toDouble()).coerceAtLeast(0.0)
+        viewport.scrollLeft = (x - FOCAL_LEAD_IN).coerceIn(0.0, maxScroll)
+    }
 
     div {
         css { flexColumn(gap = 8.px) }
 
         div {
+            ref = viewportRef
             css {
                 width = 100.pct
                 overflowX = Auto.auto
