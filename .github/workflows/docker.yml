@@ -32,10 +32,10 @@ jobs:
   build-and-push:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Set up JDK 21
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '21'
@@ -43,7 +43,7 @@ jobs:
       # Caches the Gradle build cache + the Kotlin/JS + Node toolchain downloads across runs,
       # so only the first build pays the full webpack-distribution cost.
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v5
 
       # Produces standalone-runner/build/libs/standalone-runner-all.jar (bundles the dashboard
       # via processResources -> :dashboard-web:jsBrowserDistribution).
