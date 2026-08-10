@@ -51,7 +51,7 @@ jobs:
       run:
         working-directory: clients/python
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: actions/setup-python@v5
         with:
@@ -109,7 +109,7 @@ jobs:
           --health-retries 10
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # Not a `services:` entry: those can only pull a published image, and the broker needs
       # the delayed-message plugin baked in (retry backoff and scheduled jobs ride on it).
