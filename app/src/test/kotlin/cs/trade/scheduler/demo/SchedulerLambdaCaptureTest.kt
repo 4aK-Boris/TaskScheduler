@@ -8,6 +8,7 @@ import cs.trade.scheduler.core.backend.Scheduler
 import cs.trade.scheduler.core.backend.functionref.FunctionRefEnqueuer
 import cs.trade.scheduler.core.backend.handler.Job
 import cs.trade.scheduler.shared.CancelResult
+import cs.trade.scheduler.shared.ConcurrencyPolicy
 import cs.trade.scheduler.shared.DeleteResult
 import cs.trade.scheduler.shared.RerouteResult
 import cs.trade.scheduler.shared.RetryMode
@@ -110,7 +111,12 @@ private class RecordingScheduler : Scheduler {
     override suspend fun stop(timeout: Duration) = Unit
     override suspend fun enqueue(job: Job, options: EnqueueOptions): Uuid = unused()
     override suspend fun scheduleAt(job: Job, at: Instant, options: EnqueueOptions): Uuid = unused()
-    override suspend fun enqueueOnce(key: String, job: Job, options: EnqueueOptions): Uuid = unused()
+    override suspend fun enqueueOnce(
+        key: String,
+        job: Job,
+        options: EnqueueOptions,
+        policy: ConcurrencyPolicy,
+    ): Uuid = unused()
     override suspend fun chain(vararg jobs: Job, priority: Int?): List<Uuid> = unused()
     override suspend fun enqueueAfter(job: Job, waitFor: List<Uuid>, options: EnqueueOptions): Uuid = unused()
     override suspend fun recurring(definition: RecurringDefinition) = unused()

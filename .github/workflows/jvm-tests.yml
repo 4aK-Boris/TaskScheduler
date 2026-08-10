@@ -1,0 +1,102 @@
+# Compile and run the JVM test suites.
+#
+# Why this exists: until now no CI job compiled Kotlin test sources at all — `docker.yml`
+# builds only `:standalone-runner:shadowJar`, and `python-client.yml` touches Python. A broken
+# test file could therefore sit in master indefinitely, and one did: `:app:compileTestKotlin`
+# stopped compiling when `ConcurrencyPolicy` was added to `Scheduler.enqueueOnce` and nobody
+# noticed until a local run months later.
+#
+# Two stages, cheapest first — a compile break fails in ~1 min instead of after the full suite.
+#
+# Infrastructure. Most suites boot their own Testcontainers (Postgres, the delayed-message
+# Rabbit, MinIO) and fall back to `EXTERNAL_*` env when it is set. Two deliberate choices here:
+#
+#   * RabbitMQ runs as a service container. `SchedulerAutoConfigurationTest` is the one suite
+#     with no Rabbit fallback of its own — `RabbitJobTransport` opens its connection eagerly
+#     while Koin builds the graph, so without a live broker the Spring context fails to start.
+#     It gets its own step with EXTERNAL_RABBIT_* pointed at the service.
+#   * Postgres and MinIO stay on Testcontainers. Per-class containers keep suites isolated from
+#     each other's rows and buckets, which a single shared instance would not. MinIO could not
+#     be a service anyway: the image needs a `server /data` argument, and service containers
+#     cannot override the command.
+name: jvm-tests
+
+on:
+  pull_request:
+    branches: [master]
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: jvm-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    services:
+      # Same image the Testcontainers-based suites use — plain rabbitmq would not do, the
+      # scheduler declares a delayed exchange for scheduleAt / retry backoff (DESIGN.md 11.2).
+      rabbitmq:
+        image: heidiks/rabbitmq-delayed-message-exchange:3.13.0-management
+        env:
+          RABBITMQ_DEFAULT_USER: scheduler
+          RABBITMQ_DEFAULT_PASS: scheduler
+        ports:
+          - 5672:5672
+        options: >-
+          --health-cmd "rabbitmq-diagnostics -q ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      # Stage 1 — the cheap gate. Compiles every module's main AND test sources without
+      # running anything, so a broken test file is caught before we pay for containers.
+      - name: Compile main and test sources
+        run: ./gradlew --no-daemon classes testClasses
+
+      # Stage 2a — everything except the Spring starter. These suites manage their own
+      # containers, so no EXTERNAL_* is exported: each class gets an isolated Postgres /
+      # Rabbit / MinIO and cannot collide with a neighbour.
+      - name: Test (Testcontainers-managed infrastructure)
+        run: ./gradlew --no-daemon test -x :scheduler-spring-boot-starter:test
+
+      # Stage 2b — the Spring starter against the service Rabbit. Postgres still comes from
+      # Testcontainers inside the suite; only the broker is external.
+      - name: Test (:scheduler-spring-boot-starter against service Rabbit)
+        env:
+          EXTERNAL_RABBIT_HOST: localhost
+          EXTERNAL_RABBIT_PORT: '5672'
+          EXTERNAL_RABBIT_USER: scheduler
+          EXTERNAL_RABBIT_PASSWORD: scheduler
+        run: ./gradlew --no-daemon :scheduler-spring-boot-starter:test
+
+      # Reports are what make a red run diagnosable — without them the log shows a bare
+      # "There were failing tests" and the actual assertion is lost.
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports
+          path: |
+            **/build/reports/tests/test/
+            **/build/test-results/test/*.xml
+          retention-days: 14
+          if-no-files-found: ignore

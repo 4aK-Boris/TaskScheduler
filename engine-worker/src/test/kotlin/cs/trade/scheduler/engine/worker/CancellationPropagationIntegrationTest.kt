@@ -39,7 +39,18 @@ import org.testcontainers.containers.PostgreSQLContainer
  * DESIGN.md 8.4 — cancelling a parent must propagate to descendants still in
  * AWAITING_DEPS, following the same `on_failure` rule used by the FAILED cascade:
  *   - `PROPAGATE_FAILURE` / `CANCEL_CHILD` → child also CANCELLED, recursive
- *   - `IGNORE` → child untouched (operator opt-out)
+ *   - `IGNORE` → child proceeds as if the parent had SUCCEEDED: `pending_deps` is
+ *     decremented and, when it reaches zero, the child is promoted to ENQUEUED and
+ *     an outbox row is written so it actually runs.
+ *
+ * The IGNORE rule is spelled out twice in DESIGN.md — 7.4 ("`on_failure = IGNORE` → как
+ * при SUCCEEDED (decrement pending_deps)") and 22.8 ("cancelled job обрабатывает
+ * dependents так же как failed … IGNORE → continue с decrement") — and matches the
+ * `OnFailure.IGNORE` kdoc. It is deliberately NOT "leave the child alone": opting out of
+ * failure propagation means the branch keeps going, not that it stalls forever.
+ *
+ * Two code paths share the work: `cancelDescendantsAwaitingDeps` skips IGNORE edges (it
+ * only cancels), and `DefaultScheduler.promoteIgnoreSuccessors` then decrements them.
  *
  * Without this, children sit forever in AWAITING_DEPS once their parent gets cancelled
  * (the parent's terminal state is reachable, but the dep-counter never decrements because
@@ -67,6 +78,7 @@ class CancellationPropagationIntegrationTest {
     private lateinit var database: Database
     private lateinit var jobs: JobRepositoryImpl
     private lateinit var jobEvents: JobEventRepositoryImpl
+    private lateinit var outbox: OutboxRepositoryImpl
     private lateinit var scheduler: DefaultScheduler
     private var postgres: PostgreSQLContainer<*>? = null
 
@@ -102,7 +114,7 @@ class CancellationPropagationIntegrationTest {
         jobEvents = JobEventRepositoryImpl(database)
         // Wire jobEvents so we can assert CASCADE_CANCELLED rows landed in the audit log.
         jobs = JobRepositoryImpl(database, events = jobEvents)
-        val outbox = OutboxRepositoryImpl(database)
+        outbox = OutboxRepositoryImpl(database)
         scheduler = DefaultScheduler(
             storage = PostgresStorageProvider(
                 jobs = jobs,
@@ -128,7 +140,7 @@ class CancellationPropagationIntegrationTest {
     }
 
     @Test
-    fun `cancelling root cascades to AWAITING_DEPS descendants, skips IGNORE edges`() = runBlocking {
+    fun `cancelling root cascades to AWAITING_DEPS descendants and promotes IGNORE edges`() = runBlocking {
         // DAG shape:
         //   root ──PROPAGATE_FAILURE──► A ──PROPAGATE_FAILURE──► A1
         //   root ──PROPAGATE_FAILURE──► B
@@ -136,7 +148,7 @@ class CancellationPropagationIntegrationTest {
         //
         // After cancel(root):
         //   root, A, A1, B → CANCELLED (and cancel_requested_by = test-actor on cascaded rows)
-        //   C            → still AWAITING_DEPS (IGNORE edge opts out)
+        //   C            → ENQUEUED (IGNORE edge = proceed as if the parent had succeeded)
         val rootId = scheduler.enqueue(Root(1))
         val aId = scheduler.enqueueAfter(
             job = A(1),
@@ -196,15 +208,22 @@ class CancellationPropagationIntegrationTest {
             assertEquals(ACTOR, cascadeEvents.single().actor)
         }
 
-        // IGNORE edge — C must stay put. The cancel didn't follow this edge, so C still
-        // sits AWAITING_DEPS forever (until either someone manually cancels it or the
-        // operator decides what to do — that's the whole point of IGNORE).
+        // IGNORE edge — C is NOT cancelled, but it doesn't stall either: the branch opted
+        // out of failure propagation, so the parent going away resolves C's dependency just
+        // like a SUCCEEDED parent would (DESIGN.md 7.4 / 22.8).
         val c = jobs.findById(cId)!!
         assertEquals(
-            JobState.AWAITING_DEPS, c.state,
-            "IGNORE edge means cancel must NOT propagate to C — operator opt-out",
+            JobState.ENQUEUED, c.state,
+            "IGNORE edge means C proceeds as if the parent succeeded — promoted, not cancelled",
         )
-        assertNull(c.cancelRequestedBy, "C must NOT have cancel_requested_by stamped")
+        assertEquals(0, c.pendingDeps, "C's dependency on root must be decremented, not left pending")
+        assertNull(c.cancelRequestedBy, "C must NOT have cancel_requested_by stamped — it wasn't cancelled")
+
+        // Promotion is only real if the job can actually be picked up: `promoteIgnoreSuccessors`
+        // writes an outbox row alongside the state change. Without it C would sit ENQUEUED with
+        // nothing ever publishing it — a subtler version of the same hang.
+        val queuedForC = outbox.findUnpublished(limit = 100).filter { it.jobId == cId }
+        assertEquals(1, queuedForC.size, "promoting C must enqueue exactly one outbox row for delivery")
     }
 
     @Test
