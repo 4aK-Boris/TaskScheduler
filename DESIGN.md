@@ -2298,6 +2298,13 @@ Per-queue `CircuitBreakerConfig` + `CircuitBreakerRegistry` (engine-worker). Thr
 
 Per-node in-memory state (no cross-node sync). Other nodes keep serving when one trips — the breaker is consumer-side protection for one worker pool's downstream. Operator pause across the cluster is `job_type_pause` (DESIGN.md 22.1), not the breaker. CANCELLED outcomes don't feed the breaker (operator action ≠ downstream health signal); SUCCESS / FAILED / RETRIED do.
 
+**The probe slot is the failure mode to design against.** While it's held every pickup on the queue is refused, so a slot that never comes back leaves nothing to close the breaker and nothing to re-open it — the queue is dead until the process restarts, while looking healthy from the outside (worker heartbeats fine, Rabbit shows `consumers=1, messages=0` because deliveries are released straight back with `delayMs = openDuration`). Two guards:
+
+- `WorkerPool.processLockedInner` returns the slot in a `finally` around dispatch. Outcome paths return it by recording a sample; the paths with no health signal — CANCELLED, no registered handler, undecodable payload, cancel-on-pickup — go through `CircuitBreakerRegistry.releaseProbe(queue)`, which banks no sample and leaves the breaker in HALF_OPEN for the next candidate.
+- `probeTimeout` (default 15 min) expires a probe that never reported at all. That happens when the `finally` itself can't run: a non-cooperative handler outlives `cancelGracePeriod`, the cancel listener force-FAILs the row, and the handler coroutine keeps running (`onCancelSignal`'s documented leak). Keep `probeTimeout` above the per-job timeout of the queue's jobs — below it, the only cost is an occasional second probe running next to a legitimately slow one.
+
+Observed in production before the guards existed: a force-cancelled probe on the `marketplace` queue wedged HALF_OPEN for three hours; ~400 recurring jobs per hour were cancelled by REPLACE overlap while their deliveries bounced on the 5-minute re-queue.
+
 ```kotlin
 schedulerWorkerModule {
     queue("flaky-api",
@@ -2307,6 +2314,7 @@ schedulerWorkerModule {
             minSamples = 10,
             sampleWindow = 1.minutes,
             openDuration = 30.seconds,
+            probeTimeout = 15.minutes,   // > this queue's per-job timeout
         ),
     )
 }

@@ -121,6 +121,69 @@ class CircuitBreakerRegistryTest {
     }
 
     @Test
+    fun `releaseProbe hands the slot back without banking a sample`() {
+        val clock = FakeClock()
+        val reg = CircuitBreakerRegistry(clock.provider())
+        reg.register("q", cfg)
+
+        repeat(4) { reg.record("q", success = false) }
+        clock.advance(cfg.openDuration.inWholeMilliseconds + 1)
+        assertTrue(reg.tryAcquire("q"))
+        assertFalse(reg.tryAcquire("q"))
+
+        // A cancelled job says nothing about downstream health: no sample, but the slot
+        // must come back or the queue is stuck refusing everything.
+        reg.releaseProbe("q")
+        assertEquals(CircuitBreakerRegistry.State.HALF_OPEN, reg.stateOf("q"))
+        assertTrue(reg.tryAcquire("q"), "slot must be free for the next candidate")
+    }
+
+    @Test
+    fun `releaseProbe is a no-op for CLOSED, OPEN and unregistered queues`() {
+        val clock = FakeClock()
+        val reg = CircuitBreakerRegistry(clock.provider())
+        reg.register("q", cfg)
+
+        // CLOSED — nothing to release, state untouched.
+        reg.releaseProbe("q")
+        assertEquals(CircuitBreakerRegistry.State.CLOSED, reg.stateOf("q"))
+
+        // OPEN — a late release from the probe that just failed must not re-admit traffic.
+        repeat(4) { reg.record("q", success = false) }
+        assertEquals(CircuitBreakerRegistry.State.OPEN, reg.stateOf("q"))
+        reg.releaseProbe("q")
+        assertEquals(CircuitBreakerRegistry.State.OPEN, reg.stateOf("q"))
+        assertFalse(reg.tryAcquire("q"))
+
+        reg.releaseProbe("never-registered")
+    }
+
+    @Test
+    fun `HALF_OPEN probe that never reports an outcome expires after probeTimeout`() {
+        val shortProbe = cfg.copy(probeTimeout = 30.seconds)
+        val clock = FakeClock()
+        val reg = CircuitBreakerRegistry(clock.provider())
+        reg.register("q", shortProbe)
+
+        repeat(4) { reg.record("q", success = false) }
+        clock.advance(shortProbe.openDuration.inWholeMilliseconds + 1)
+        assertTrue(reg.tryAcquire("q"))
+
+        // The probe's worker was force-killed mid-handler: no record(), no releaseProbe().
+        // Until the deadline passes we keep refusing — that's the point of one probe.
+        clock.advance(shortProbe.probeTimeout.inWholeMilliseconds - 1)
+        assertFalse(reg.tryAcquire("q"))
+
+        // Past it, a fresh probe goes through instead of the queue wedging forever.
+        clock.advance(1)
+        assertTrue(reg.tryAcquire("q"), "an abandoned probe must not hold the slot for good")
+        assertEquals(CircuitBreakerRegistry.State.HALF_OPEN, reg.stateOf("q"))
+
+        // And the replacement gets its own full deadline.
+        assertFalse(reg.tryAcquire("q"))
+    }
+
+    @Test
     fun `HALF_OPEN probe success closes breaker and clears window`() {
         val clock = FakeClock()
         val reg = CircuitBreakerRegistry(clock.provider())

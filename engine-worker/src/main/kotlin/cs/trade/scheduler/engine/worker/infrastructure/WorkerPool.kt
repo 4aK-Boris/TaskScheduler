@@ -375,6 +375,22 @@ public class WorkerPool(
             return
         }
 
+        // Past the gate we may be holding the breaker's HALF_OPEN probe slot, and every
+        // exit from here on has to hand it back. The outcome paths do that by recording a
+        // sample; the ones that produce no health signal (CANCELLED, no handler,
+        // undecodable payload, cancel-on-pickup) leave it to this finally. A leaked slot
+        // is not a small bug: HALF_OPEN then refuses every pickup, so no probe is left to
+        // close the breaker and no failure to re-open it, and the queue stays dead until
+        // the process restarts.
+        try {
+            dispatchLocked(jobId, locked)
+        } finally {
+            if (cbConfig != null) circuitBreakers.releaseProbe(locked.queue)
+        }
+    }
+
+    /** Handler dispatch proper — reached only once the pause and circuit-breaker gates let the job through. */
+    private suspend fun dispatchLocked(jobId: Uuid, locked: JobRow) {
         // Two dispatch shapes (DESIGN.md 21.1): sealed-class JobHandler vs function-ref
         // (payload_type == "function_ref"). For function-ref jobs there's no handler in
         // the registry and no @Serializable Job to decode — payload_json IS the
@@ -582,7 +598,9 @@ public class WorkerPool(
             when (outcome) {
                 JobOutcome.SUCCESS -> circuitBreakers.record(locked.queue, success = true)
                 JobOutcome.FAILED, JobOutcome.RETRIED -> circuitBreakers.record(locked.queue, success = false)
-                JobOutcome.CANCELLED -> { /* operator-driven, not a health signal */ }
+                // Operator-driven, not a health signal — no sample. The probe slot (if we
+                // were the HALF_OPEN probe) comes back via processLockedInner's finally.
+                JobOutcome.CANCELLED -> { /* no-op */ }
             }
             // Retry-rate metric (DESIGN.md 22.5). Fired only when the policy actually
             // scheduled a retry — not on terminal failures (those land in the

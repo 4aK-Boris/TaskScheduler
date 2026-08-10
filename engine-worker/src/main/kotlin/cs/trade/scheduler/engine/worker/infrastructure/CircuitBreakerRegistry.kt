@@ -16,7 +16,14 @@ import kotlin.time.Instant
  *  - **HALF_OPEN** — allows exactly ONE concurrent pickup as a probe. Subsequent calls
  *    to [tryAcquire] return false until the probe reports back. A successful probe
  *    closes the breaker (and clears the window); a failing probe re-opens for another
- *    cycle.
+ *    cycle. A probe that reports no outcome at all (cancelled job — see [releaseProbe])
+ *    just hands the slot back, leaving the breaker in HALF_OPEN for the next candidate.
+ *
+ * The probe slot is the one piece of state that can strand the whole queue: while it's
+ * taken every pickup is refused, so nothing is left to close the breaker or to re-open
+ * it. Two things guard it — the worker returns it in a `finally` on every exit path, and
+ * [CircuitBreakerConfig.probeTimeout] expires it for the case where that `finally` never
+ * runs (a force-cancelled handler whose coroutine outlives the delivery).
  *
  * Concurrency model: all state is per-queue and lives in a `BreakerState` guarded by
  * its own intrinsic monitor lock. Contention is bounded by per-queue throughput; the
@@ -42,8 +49,9 @@ public class CircuitBreakerRegistry(
         @Volatile var state: State = State.CLOSED,
         // When the breaker tripped to OPEN. Drives the HALF_OPEN transition.
         @Volatile var openedAt: Instant? = null,
-        // True while a HALF_OPEN probe is in-flight. Reset on the probe's outcome.
-        @Volatile var probeInFlight: Boolean = false,
+        // When the in-flight HALF_OPEN probe was handed out; null = slot free. Doubles as
+        // the "probe in flight" flag and as the deadline base for probeTimeout.
+        @Volatile var probeStartedAt: Instant? = null,
     )
 
     private data class Sample(val at: Instant, val success: Boolean)
@@ -60,8 +68,9 @@ public class CircuitBreakerRegistry(
 
     /**
      * Should the caller dispatch a freshly-picked job? Side-effect: a HALF_OPEN return
-     * value of `true` flips `probeInFlight` so subsequent calls return `false` until
-     * the probe reports its outcome via [record].
+     * value of `true` takes the probe slot, so subsequent calls return `false` until the
+     * probe reports its outcome via [record], hands the slot back via [releaseProbe], or
+     * runs past [CircuitBreakerConfig.probeTimeout].
      *
      * Queues that aren't registered always return `true` — function-ref like the prefetch
      * tuner.
@@ -74,13 +83,46 @@ public class CircuitBreakerRegistry(
                 State.CLOSED -> true
                 State.OPEN -> false
                 State.HALF_OPEN -> {
-                    if (state.probeInFlight) {
-                        false
-                    } else {
-                        state.probeInFlight = true
-                        true
+                    val now = clock()
+                    val startedAt = state.probeStartedAt
+                    val expired = startedAt != null && now - startedAt >= state.config.probeTimeout
+                    when {
+                        startedAt != null && !expired -> false
+                        else -> {
+                            if (expired) {
+                                // The previous probe never reported back — its worker was
+                                // force-killed mid-handler, so nothing will ever call
+                                // record()/releaseProbe() for it. Hand the slot to this
+                                // pickup instead of refusing every job until restart.
+                                log.warn(
+                                    "CircuitBreaker[{}] HALF_OPEN probe exceeded {} without an outcome — issuing a new probe",
+                                    queue, state.config.probeTimeout,
+                                )
+                            }
+                            state.probeStartedAt = now
+                            true
+                        }
                     }
                 }
+            }
+        }
+    }
+
+    /**
+     * Hand the probe slot back without banking a sample. For outcomes that say nothing
+     * about downstream health (a cancelled job — operator action, not a sick dependency)
+     * and for the pre-handler exits that never reach an outcome at all: no registered
+     * handler, an undecodable payload, a cancel that landed while the message sat in
+     * Rabbit.
+     *
+     * No-op unless this queue is HALF_OPEN with a probe out, so a late call can't clobber
+     * a slot that already moved on. Tolerates unregistered queues.
+     */
+    public fun releaseProbe(queue: String) {
+        val state = breakers[queue] ?: return
+        synchronized(state) {
+            if (state.state == State.HALF_OPEN && state.probeStartedAt != null) {
+                state.probeStartedAt = null
             }
         }
     }
@@ -100,7 +142,7 @@ public class CircuitBreakerRegistry(
                 State.HALF_OPEN -> {
                     // Probe outcome: success → CLOSED (and clear window so we don't
                     // re-trip on old failures), failure → OPEN for another openDuration.
-                    state.probeInFlight = false
+                    state.probeStartedAt = null
                     if (success) {
                         log.info("CircuitBreaker[{}] HALF_OPEN → CLOSED (probe succeeded)", queue)
                         state.state = State.CLOSED
@@ -133,7 +175,7 @@ public class CircuitBreakerRegistry(
         val now = clock()
         if (now - openedAt >= state.config.openDuration) {
             state.state = State.HALF_OPEN
-            state.probeInFlight = false
+            state.probeStartedAt = null
             // Don't clear samples — if the probe fails we'd want the SAME pre-trip
             // context. Samples will age out naturally if HALF_OPEN drags on.
         }

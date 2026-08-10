@@ -16,6 +16,7 @@ import org.koin.core.module.Module
 import org.koin.core.module.dsl.singleOf
 import org.koin.dsl.module
 import kotlin.time.Duration
+import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
 
 // Stable-across-restart default node id: the container/host name (HOSTNAME on Linux & most
@@ -147,12 +148,23 @@ public data class QueueConfig(
  * @param openDuration How long the breaker stays OPEN before a HALF_OPEN probe is
  *   allowed. Used both for the state-transition timer AND for the delay on released
  *   re-publishes (so the message comes back exactly when we're ready to probe again).
+ * @param probeTimeout Safety valve for a HALF_OPEN probe that never reports back. The
+ *   worker returns the probe slot in a `finally`, so this only fires when that `finally`
+ *   can't run at all — a non-cooperative handler that outlived
+ *   [SchedulerWorkerConfig.cancelGracePeriod] is force-FAILED by the cancel listener while
+ *   its coroutine keeps running (see WorkerPool.onCancelSignal). Without a deadline the
+ *   slot would stay taken forever and the queue would sit in HALF_OPEN refusing every
+ *   pickup — no probe left to close the breaker, no failure left to re-open it. Once the
+ *   deadline passes the next pickup gets a fresh probe slot. Keep it above the per-job
+ *   timeout of the jobs on this queue; a value below that just means the odd second probe
+ *   runs concurrently while a legitimately slow one is still going.
  */
 public data class CircuitBreakerConfig(
     val errorRateThreshold: Double,
     val minSamples: Int,
     val sampleWindow: Duration,
     val openDuration: Duration,
+    val probeTimeout: Duration = 15.minutes,
 ) {
     init {
         require(errorRateThreshold in 0.0..1.0) {
@@ -161,6 +173,7 @@ public data class CircuitBreakerConfig(
         require(minSamples >= 1) { "minSamples must be >= 1, got $minSamples" }
         require(sampleWindow.isPositive()) { "sampleWindow must be positive, got $sampleWindow" }
         require(openDuration.isPositive()) { "openDuration must be positive, got $openDuration" }
+        require(probeTimeout.isPositive()) { "probeTimeout must be positive, got $probeTimeout" }
     }
 }
 
