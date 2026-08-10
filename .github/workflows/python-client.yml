@@ -60,7 +60,7 @@ jobs:
           cache-dependency-path: clients/python/pyproject.toml
 
       # The project ships one version across both languages: a user pip-installing
-      # taskscheduler-client 0.8.4 must get the client that matches scheduler-infra 0.8.4.
+      # taskscheduler-client 0.8.5 must get the client that matches scheduler-infra 0.8.5.
       # Nothing derives one from the other, so a release bump that misses a file would
       # otherwise ship silently.
       - name: Versions agree with gradle.properties

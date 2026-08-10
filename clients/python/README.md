@@ -52,7 +52,7 @@ Requires Python 3.10+, and a RabbitMQ with the `rabbitmq_delayed_message_exchang
 enabled (the same requirement the Kotlin side has — it is how delays and retry backoff work).
 
 **Versioning.** The client shares one version with the rest of the project:
-`taskscheduler-client 0.8.4` is the client for `scheduler-infra 0.8.4`, and the two are
+`taskscheduler-client 0.8.5` is the client for `scheduler-infra 0.8.5`, and the two are
 released together. Run a client older than your infra and it may not know about a newer
 column; newer, and it fails fast on the schema check. CI enforces that
 `pyproject.toml`, `taskscheduler.__version__` and Gradle's `schedulerVersion` agree.
