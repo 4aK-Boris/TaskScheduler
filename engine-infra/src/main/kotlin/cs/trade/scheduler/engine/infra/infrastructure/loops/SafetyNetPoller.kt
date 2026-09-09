@@ -1,6 +1,7 @@
 package cs.trade.scheduler.engine.infra.infrastructure.loops
 
 import cs.trade.scheduler.engine.infra.domain.usecases.RecoverOrphanedJobsUseCase
+import cs.trade.scheduler.engine.infra.domain.usecases.RecoverStuckEnqueuedJobsUseCase
 import cs.trade.scheduler.engine.infra.infrastructure.SchedulerInfraConfig
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -22,6 +23,7 @@ import org.slf4j.LoggerFactory
  */
 public class SafetyNetPoller(
     private val recoverOrphans: RecoverOrphanedJobsUseCase,
+    private val recoverStuckEnqueued: RecoverStuckEnqueuedJobsUseCase,
     private val config: SchedulerInfraConfig,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
@@ -31,10 +33,22 @@ public class SafetyNetPoller(
         isLeader: () -> Boolean = { true },
     ): Job = scope.launch {
         val intervalMs = config.safetyNetPollInterval.inWholeMilliseconds
-        log.info("SafetyNetPoller started (interval={}ms)", intervalMs)
+        val staleFor = config.stuckEnqueuedThreshold
+        log.info(
+            "SafetyNetPoller started (interval={}ms, stuckEnqueuedThreshold={})",
+            intervalMs,
+            staleFor ?: "disabled",
+        )
         while (isActive) {
             if (isLeader()) {
                 recoverOrphans().onFailure { log.error("SafetyNet batch failed", it) }
+                // Two losses, two salvage paths: the call above reclaims a job whose worker
+                // died mid-run, the one below a job whose broker message never arrived.
+                // Neither covers the other — an ENQUEUED row holds no lock to expire.
+                if (staleFor != null) {
+                    recoverStuckEnqueued(staleFor = staleFor)
+                        .onFailure { log.error("SafetyNet stuck-enqueued batch failed", it) }
+                }
             }
             delay(intervalMs)
         }

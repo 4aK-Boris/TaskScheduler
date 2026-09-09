@@ -5,6 +5,7 @@ import cs.trade.scheduler.engine.infra.domain.usecases.FastForwardScheduledJobsU
 import cs.trade.scheduler.engine.infra.domain.usecases.FireDueRecurringJobsUseCase
 import cs.trade.scheduler.engine.infra.domain.usecases.PublishOutboxBatchUseCase
 import cs.trade.scheduler.engine.infra.domain.usecases.RecoverOrphanedJobsUseCase
+import cs.trade.scheduler.engine.infra.domain.usecases.RecoverStuckEnqueuedJobsUseCase
 import cs.trade.scheduler.engine.infra.domain.usecases.RetentionCleanupBatchUseCase
 import cs.trade.scheduler.engine.infra.infrastructure.loops.FastForwardTask
 import cs.trade.scheduler.engine.infra.infrastructure.loops.OutboxPublisher
@@ -41,6 +42,19 @@ public class SchedulerInfraConfig {
      */
     public var fastForwardPollInterval: Duration = 30_000.milliseconds
     public var safetyNetPollInterval: Duration = 30_000.milliseconds
+
+    /**
+     * How long an ENQUEUED row may sit untouched before the safety net treats its broker
+     * message as lost and re-publishes it ([RecoverStuckEnqueuedJobsUseCase]). Staleness alone
+     * never triggers recovery — the job must also have been overtaken by newer jobs of its own
+     * queue, so one merely waiting its turn is never touched.
+     *
+     * Five minutes covers a worker restart with room to spare, and bounds a stalled recurring
+     * channel to minutes instead of the indefinite stall a lost message otherwise causes
+     * (`SKIP` overlap never enqueues the next tick while the previous job is non-terminal).
+     * `null` disables the recovery entirely.
+     */
+    public var stuckEnqueuedThreshold: Duration? = 5.minutes
 
     public val retention: RetentionConfig = RetentionConfig()
     public var cleanupInterval: Duration = 1.hours
@@ -88,6 +102,7 @@ public fun schedulerInfraModule(configure: SchedulerInfraConfig.() -> Unit = {})
         singleOf(::PublishOutboxBatchUseCase)
         singleOf(::OutboxPublisher)
         singleOf(::RecoverOrphanedJobsUseCase)
+        singleOf(::RecoverStuckEnqueuedJobsUseCase)
         singleOf(::SafetyNetPoller)
         singleOf(::FastForwardScheduledJobsUseCase)
         singleOf(::FastForwardTask)
