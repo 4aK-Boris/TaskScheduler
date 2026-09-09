@@ -33,6 +33,7 @@ import org.jetbrains.exposed.v1.core.Expression
 import org.jetbrains.exposed.v1.core.greaterEq
 import org.jetbrains.exposed.v1.core.less
 import org.jetbrains.exposed.v1.core.lessEq
+import org.jetbrains.exposed.v1.core.max
 import org.jetbrains.exposed.v1.jdbc.Database
 import org.jetbrains.exposed.v1.jdbc.deleteWhere
 import org.jetbrains.exposed.v1.jdbc.insert
@@ -888,6 +889,59 @@ public class JobRepositoryImpl(
                 .map { it.toJob() }
         }
     }
+
+    override suspend fun findEnqueuedOlderThan(staleFor: Duration, limit: Int): List<Job> =
+        withContext(Dispatchers.IO) {
+            suspendTransaction(db = database) {
+                val thresholdOdt = (Clock.System.now() - staleFor).toOffsetDateTimeUtc()
+                JobTable.selectAll()
+                    .where {
+                        (JobTable.state eq JobState.ENQUEUED.name) and
+                            (JobTable.updatedAt less thresholdOdt)
+                    }
+                    .orderBy(JobTable.createdAt to SortOrder.ASC)
+                    .limit(limit)
+                    .map { it.toJob() }
+            }
+        }
+
+    override suspend fun findStartedWatermarks(since: Instant): List<JobRepository.QueueWatermark> =
+        withContext(Dispatchers.IO) {
+            suspendTransaction(db = database) {
+                val sinceOdt = since.toOffsetDateTimeUtc()
+                val latestCreatedAt = JobTable.createdAt.max()
+                JobTable
+                    .select(JobTable.queue, JobTable.priority, latestCreatedAt)
+                    .where { JobTable.startedAt greaterEq sinceOdt }
+                    .groupBy(JobTable.queue, JobTable.priority)
+                    .mapNotNull { row ->
+                        val newest = row[latestCreatedAt] ?: return@mapNotNull null
+                        JobRepository.QueueWatermark(
+                            queue = row[JobTable.queue],
+                            priority = row[JobTable.priority],
+                            latestCreatedAt = newest.toKotlinTime(),
+                        )
+                    }
+            }
+        }
+
+    override suspend fun touchUpdatedAt(jobId: Uuid, expectedVersion: Int): Boolean =
+        withContext(Dispatchers.IO) {
+            suspendTransaction(db = database) {
+                val nowOdt = Clock.System.now().toOffsetDateTimeUtc()
+                val updated = JobTable.update(
+                    where = {
+                        (JobTable.id eq jobId) and
+                            (JobTable.version eq expectedVersion) and
+                            (JobTable.state eq JobState.ENQUEUED.name)
+                    },
+                ) { statement ->
+                    statement[JobTable.updatedAt] = nowOdt
+                    statement[JobTable.version] = expectedVersion + 1
+                }
+                updated > 0
+            }
+        }
 
     override suspend fun deleteTerminalOlderThan(
         state: JobState,

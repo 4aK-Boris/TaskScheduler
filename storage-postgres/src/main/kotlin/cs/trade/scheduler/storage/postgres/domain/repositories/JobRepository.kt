@@ -202,6 +202,38 @@ public interface JobRepository {
     public suspend fun findOrphaned(limit: Int): List<Job>
 
     /**
+     * Safety-net query — ENQUEUED rows untouched for longer than [staleFor]. These are
+     * *candidates* for a lost broker message, not proof of one: a job legitimately waiting
+     * behind a long-running predecessor looks identical here. The caller decides, using
+     * [findStartedWatermarks].
+     *
+     * Ordered oldest-first so a backlog is drained in the order it accumulated.
+     */
+    public suspend fun findEnqueuedOlderThan(staleFor: Duration, limit: Int): List<Job>
+
+    /**
+     * Latest `created_at` among jobs that already *started*, grouped by (queue, priority),
+     * looking back no further than [since]. Feeds the overtaking check that separates
+     * "message was lost" from "still queued behind others": a broker delivers a queue in
+     * (priority, publish order), so an ENQUEUED job whose queue has since started **newer**
+     * jobs of equal-or-lower priority can no longer have a message waiting for it.
+     *
+     * [since] bounds the scan — the answer only matters for jobs stuck minutes, not days.
+     */
+    public suspend fun findStartedWatermarks(since: Instant): List<QueueWatermark>
+
+    /**
+     * Bump `updated_at` and `version` of an **ENQUEUED** row without touching its state —
+     * the marker that safety-net recovery has just re-published this job, so the next scan
+     * leaves it alone for another staleness window.
+     *
+     * CAS-guarded by [expectedVersion] and by the state itself: returns false when a worker
+     * picked the row up in the meantime, which is precisely the case where re-publishing
+     * would be pointless.
+     */
+    public suspend fun touchUpdatedAt(jobId: Uuid, expectedVersion: Int): Boolean
+
+    /**
      * SELECT `state = SCHEDULED` rows whose `scheduled_at <= upperBound`, ordered by
      * `scheduled_at` ASC. Used by `FastForwardTask` to pull jobs about to enter the
      * fast-forward window. Empty list when nothing's due.
@@ -410,6 +442,18 @@ public interface JobRepository {
         val minDurationMs: Long?,
         val maxDurationMs: Long?,
         val p95DurationMs: Long?,
+    )
+
+    /**
+     * One row of [findStartedWatermarks]: the newest job of this (queue, priority) that has
+     * already started. [latestCreatedAt] is a `created_at`, not a `started_at` — the question
+     * being answered is "was this job published before that one", and publish order is what
+     * the broker preserved.
+     */
+    public data class QueueWatermark(
+        val queue: String,
+        val priority: Int,
+        val latestCreatedAt: Instant,
     )
 
     /** Outcome of [decrementPendingDeps]. See its KDoc for semantics. */
