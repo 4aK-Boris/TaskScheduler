@@ -157,6 +157,12 @@ available. Apply schema migration V10 in scheduler-infra and upgrade the JVM/Pyt
 before enabling this option. No existing job or recurring definition gains a deadline
 automatically.
 
+`overlap = RecurringOverlap.SKIP` suppresses a new trigger while the previous job is
+active; it does not cancel that previous job. It works with `maxStartDelay`: once the
+worker cancels an expired queued run, the next valid trigger can create a fresh run.
+`misfirePolicy = MisfirePolicy.SKIP` currently behaves like `CATCH_UP_ONE` (see
+DESIGN.md 8.5); setting it alone does not discard or cancel overdue work.
+
 ## Non-JVM services
 
 Python services join the same job system through [`clients/python`](clients/python/README.md),

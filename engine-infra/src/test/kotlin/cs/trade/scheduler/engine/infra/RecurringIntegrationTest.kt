@@ -507,6 +507,105 @@ class RecurringIntegrationTest {
         assertEquals(nextTrigger, recurring.findById(id)!!.nextTriggerAt)
     }
 
+    @Test
+    fun `SKIP overlap leaves a running job active without requesting cancellation`() = runBlocking {
+
+        val id = "skip-running-${System.nanoTime()}"
+        scheduler.recurring(RecurringDefinition(
+            id = id, cron = "* * * * *", job = DailyReport(System.nanoTime()),
+            overlap = RecurringOverlap.SKIP,
+        ))
+        forceDue(id)
+        fireDue().getOrThrow()
+        val first = runsFor(id).single()
+        val locked = jobs.pickup(first.id, nodeId = "skip-test", lockDurationMillis = 60_000)!!
+
+        forceDue(id)
+        fireDue().getOrThrow()
+
+        val current = jobs.findById(first.id)!!
+        assertEquals(JobState.PROCESSING, current.state)
+        assertEquals(locked.version, current.version)
+        assertNull(current.cancelRequestedAt)
+        assertEquals(1, runsFor(id).size)
+        assertEquals(1, outbox.findUnpublished(limit = 10_000).count { it.jobId == first.id })
+        assertTrue(recurring.findById(id)!!.nextTriggerAt > Clock.System.now())
+    }
+
+    @Test
+    fun `SKIP overlap permits a fresh run after the previous one is cancelled`() = runBlocking {
+
+        val id = "skip-after-cancel-${System.nanoTime()}"
+        scheduler.recurring(RecurringDefinition(
+            id = id, cron = "* * * * *", job = DailyReport(System.nanoTime()),
+            overlap = RecurringOverlap.SKIP,
+        ))
+        forceDue(id)
+        fireDue().getOrThrow()
+        val first = runsFor(id).single()
+        scheduler.cancel(first.id)
+
+        forceDue(id)
+        fireDue().getOrThrow()
+
+        val runs = runsFor(id)
+        assertEquals(2, runs.size)
+        assertEquals(JobState.CANCELLED, jobs.findById(first.id)!!.state)
+        val active = jobs.findLeaderByIdempotencyKey("recurring:$id")!!
+        assertNotEquals(first.id, active.id)
+        assertEquals(JobState.ENQUEUED, active.state)
+        assertNull(active.cancelRequestedAt)
+    }
+
+    @Test
+    fun `SKIP overlap with a start delay cancels an overdue slot and accepts the next valid slot`() = runBlocking {
+
+        val id = "skip-expired-slot-${System.nanoTime()}"
+        scheduler.recurring(RecurringDefinition(
+            id = id, cron = "* * * * *", job = DailyReport(System.nanoTime()),
+            overlap = RecurringOverlap.SKIP, maxStartDelay = 30.seconds,
+        ))
+        forceDue(id)
+
+        fireDue().getOrThrow()
+
+        val expired = runsFor(id).single()
+        assertEquals(JobState.CANCELLED, expired.state)
+        assertNull(expired.startedAt)
+        assertEquals(0, expired.attempts)
+        assertNull(jobs.findLeaderByIdempotencyKey("recurring:$id"))
+        assertTrue(outbox.findUnpublished(limit = 10_000).none { it.jobId == expired.id })
+        recurring.upsert(recurring.findById(id)!!.copy(nextTriggerAt = Clock.System.now() - 1.seconds))
+
+        fireDue().getOrThrow()
+
+        val active = jobs.findLeaderByIdempotencyKey("recurring:$id")!!
+        assertNotEquals(expired.id, active.id)
+        assertEquals(JobState.ENQUEUED, active.state)
+        assertEquals(2, runsFor(id).size)
+    }
+
+    @Test
+    fun `SKIP misfire without a start delay currently enqueues a missed cron slot`() = runBlocking {
+
+        // Characterize the documented limitation: MisfirePolicy.SKIP currently shares
+        // CATCH_UP_ONE's implementation. It does not cancel or discard missed work.
+        val id = "skip-misfire-limitation-${System.nanoTime()}"
+        scheduler.recurring(RecurringDefinition(
+            id = id, cron = "* * * * *", job = DailyReport(System.nanoTime()),
+            misfirePolicy = MisfirePolicy.SKIP,
+        ))
+        forceDue(id)
+
+        fireDue().getOrThrow()
+
+        val job = runsFor(id).single()
+        assertEquals(JobState.ENQUEUED, job.state)
+        assertNull(job.startDeadline)
+        assertTrue(outbox.findUnpublished(limit = 10_000).any { it.jobId == job.id })
+        assertTrue(recurring.findById(id)!!.nextTriggerAt > Clock.System.now())
+    }
+
     private suspend fun runsFor(id: String): List<cs.trade.scheduler.storage.postgres.domain.models.Job> {
         val ids = dataSource.connection.use { connection ->
             connection.prepareStatement("SELECT id FROM job WHERE recurring_id = ? ORDER BY scheduled_at").use { stmt ->

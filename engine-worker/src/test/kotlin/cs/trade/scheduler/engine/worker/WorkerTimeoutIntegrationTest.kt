@@ -6,6 +6,7 @@ import com.zaxxer.hikari.HikariConfig
 import com.zaxxer.hikari.HikariDataSource
 import cs.trade.scheduler.core.backend.Scheduler
 import cs.trade.scheduler.core.backend.EnqueueOptions
+import cs.trade.scheduler.core.backend.RecurringDefinition
 import cs.trade.scheduler.core.backend.handler.Job
 import cs.trade.scheduler.core.backend.handler.JobContext
 import cs.trade.scheduler.core.backend.handler.JobHandler
@@ -13,10 +14,13 @@ import cs.trade.scheduler.core.backend.handler.JobType
 import cs.trade.scheduler.core.backend.handler.retry.FixedDelay
 import cs.trade.scheduler.core.backend.schedulerCoreModule
 import cs.trade.scheduler.engine.worker.infrastructure.WorkerPool
+import cs.trade.scheduler.engine.infra.domain.usecases.FireDueRecurringJobsUseCase
 import cs.trade.scheduler.engine.worker.infrastructure.schedulerWorkerModule
 import cs.trade.scheduler.shared.JobState
 import cs.trade.scheduler.shared.OnFailure
+import cs.trade.scheduler.shared.RecurringOverlap
 import cs.trade.scheduler.storage.postgres.domain.repositories.JobRepository
+import cs.trade.scheduler.storage.postgres.domain.repositories.RecurringJobRepository
 import cs.trade.scheduler.storage.postgres.infrastructure.schedulerPostgresModule
 import cs.trade.scheduler.transport.rabbit.domain.ConsumerHandle
 import cs.trade.scheduler.transport.rabbit.domain.JobTransport
@@ -360,6 +364,51 @@ class WorkerTimeoutIntegrationTest {
         assertNotNull(pollForState(jobs, id, JobState.SUCCEEDED, timeoutMs = 5_000))
         assertEquals(1, deadlineRuns[id]!!.get())
         assertTrue(Clock.System.now() > jobs.findById(id)!!.startDeadline!!)
+    }
+
+    @Test
+    fun `recurring SKIP resumes after its queued run expires without invoking the stale handler`() = runBlocking {
+
+        val koin = GlobalContext.get()
+        val scheduler = koin.get<Scheduler>()
+        val jobs = koin.get<JobRepository>()
+        val recurring = koin.get<RecurringJobRepository>()
+        val fireDue = FireDueRecurringJobsUseCase(
+            database = koin.get(), recurringJobs = recurring, jobs = jobs,
+            outbox = koin.get(), coreConfig = koin.get(),
+        )
+        val id = "worker-skip-expiry-${System.nanoTime()}"
+        val key = "recurring:$id"
+        scheduler.recurring(RecurringDefinition(
+            id = id, cron = "* * * * *", job = DeadlineJob(),
+            overlap = RecurringOverlap.SKIP, maxStartDelay = 1.seconds,
+        ))
+        recurring.upsert(recurring.findById(id)!!.copy(nextTriggerAt = Clock.System.now()))
+        fireDue().getOrThrow()
+        val first = jobs.findLeaderByIdempotencyKey(key)!!
+
+        // Another tick while the first job is still queued must not create a duplicate.
+        recurring.upsert(recurring.findById(id)!!.copy(nextTriggerAt = Clock.System.now()))
+        fireDue().getOrThrow()
+        assertEquals(first.id, jobs.findLeaderByIdempotencyKey(key)!!.id)
+        assertEquals(JobState.ENQUEUED, jobs.findById(first.id)!!.state)
+
+        delay((first.startDeadline!! - Clock.System.now()).coerceAtLeast(Duration.ZERO) + 25.milliseconds)
+        transport.deliver(first.id)
+
+        assertNotNull(pollForState(jobs, first.id, JobState.CANCELLED, timeoutMs = 5_000))
+        assertNull(deadlineRuns[first.id])
+        assertNull(jobs.findLeaderByIdempotencyKey(key))
+
+        // Cancellation freed the SKIP leader slot: the next valid cron run can execute.
+        recurring.upsert(recurring.findById(id)!!.copy(nextTriggerAt = Clock.System.now()))
+        fireDue().getOrThrow()
+        val fresh = jobs.findLeaderByIdempotencyKey(key)!!
+        transport.deliver(fresh.id)
+
+        assertNotNull(pollForState(jobs, fresh.id, JobState.SUCCEEDED, timeoutMs = 5_000))
+        assertEquals(1, deadlineRuns[fresh.id]!!.get())
+        assertNull(deadlineRuns[first.id])
     }
 
     private suspend fun pollForState(
