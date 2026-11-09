@@ -222,6 +222,14 @@ class WorkerPool:
 
         await self._emit_state(row, JobState.ENQUEUED, JobState.PROCESSING)
 
+        # Expire before pause/handler lookup, so stale work is terminal even if paused
+        # or its handler has been removed. Finalization also resolves dependent jobs.
+        if row.start_deadline is not None and datetime.now(timezone.utc) > row.start_deadline:
+            await self._finalize(
+                row, JobState.CANCELLED, error_msg=f"Start deadline exceeded: {row.start_deadline}"
+            )
+            return
+
         # Paused types go back to the queue unrun, without burning an attempt.
         async with self._storage.connection() as conn:
             paused = await self._storage.is_type_paused(conn, row.payload_type)
@@ -259,8 +267,15 @@ class WorkerPool:
     ) -> None:
         ctx = JobContext(row, self)
         timeout = float(row.timeout_seconds or self._scheduler_config.default_timeout_seconds)
+
+        async def execute_before_deadline() -> None:
+            # Recheck after any scheduling/DB/decode delays, immediately before the call.
+            if row.start_deadline is not None and datetime.now(timezone.utc) > row.start_deadline:
+                raise JobCancellationError(f"Start deadline exceeded: {row.start_deadline}")
+            await entry.execute(ctx, payload)
+
         task = asyncio.create_task(
-            asyncio.wait_for(entry.execute(ctx, payload), timeout),
+            asyncio.wait_for(execute_before_deadline(), timeout),
             name=f"ts-job-{row.id}",
         )
         self._active[row.id] = _Active(task=task, context=ctx, row=row)

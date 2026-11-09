@@ -32,6 +32,11 @@ import org.junit.jupiter.api.BeforeAll
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestInstance
 import org.testcontainers.containers.PostgreSQLContainer
+import kotlin.time.Clock
+import kotlin.time.Instant
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.seconds
+import kotlin.uuid.Uuid
 
 /**
  * Covers `scheduler.recurring()` registration + [FireDueRecurringJobsUseCase] firing
@@ -397,6 +402,220 @@ class RecurringIntegrationTest {
         assertNotEquals(job1, job2, "REPLACE fired a fresh instance")
         assertEquals(JobState.CANCELLED, jobs.findById(job1)!!.state, "previous instance cancelled")
         assertEquals(JobState.ENQUEUED, jobs.findById(job2)!!.state)
+    }
+
+    @Test
+    fun `start delay is persisted and can be changed or disabled on re-registration`() = runBlocking {
+
+        val definition = RecurringDefinition(
+            id = "start-delay-${System.nanoTime()}", cron = "* * * * *", job = DailyReport(System.nanoTime()),
+            maxStartDelay = 90.seconds,
+        )
+
+        scheduler.recurring(definition)
+        assertEquals(90_000L, recurring.findById(definition.id)!!.maxStartDelayMs)
+        scheduler.recurring(definition.copy(maxStartDelay = Duration.ZERO))
+        assertEquals(0L, recurring.findById(definition.id)!!.maxStartDelayMs)
+        scheduler.recurring(definition.copy(maxStartDelay = null))
+        assertNull(recurring.findById(definition.id)!!.maxStartDelayMs)
+    }
+
+    @Test
+    fun `overdue cron slot is cancelled without publishing or starting it`() = runBlocking {
+
+        val id = "expired-slot-${System.nanoTime()}"
+        scheduler.recurring(RecurringDefinition(
+            id = id, cron = "* * * * *", job = DailyReport(System.nanoTime()), maxStartDelay = 1.seconds,
+        ))
+        forceDue(id)
+        val originalSlot = recurring.findById(id)!!.nextTriggerAt
+
+        fireDue().getOrThrow()
+
+        val job = runsFor(id).single()
+        assertEquals(JobState.CANCELLED, job.state)
+        assertEquals(originalSlot, job.scheduledAt)
+        assertEquals(originalSlot + 1.seconds, job.startDeadline)
+        assertEquals(0, job.attempts)
+        assertNull(job.startedAt)
+        assertTrue(outbox.findUnpublished(limit = 10_000).none { it.jobId == job.id })
+        assertTrue(recurring.findById(id)!!.nextTriggerAt > Clock.System.now())
+    }
+
+    @Test
+    fun `catch up all gives each cron slot its own deadline`() = runBlocking {
+
+        val id = "catchup-deadlines-${System.nanoTime()}"
+        scheduler.recurring(RecurringDefinition(
+            id = id, cron = "* * * * *", job = DailyReport(System.nanoTime()),
+            misfirePolicy = MisfirePolicy.CATCH_UP_ALL, maxStartDelay = 90.seconds,
+        ))
+        val firstSlot = Instant.fromEpochSeconds(Clock.System.now().epochSeconds / 60 * 60) - 180.seconds
+        recurring.upsert(recurring.findById(id)!!.copy(nextTriggerAt = firstSlot))
+
+        fireDue().getOrThrow()
+
+        val runs = runsFor(id)
+        assertTrue(runs.any { it.state == JobState.CANCELLED })
+        assertTrue(runs.any { it.state == JobState.ENQUEUED })
+        runs.forEachIndexed { index, job ->
+            assertEquals(firstSlot + (index * 60).seconds, job.scheduledAt)
+            assertEquals(job.scheduledAt!! + 90.seconds, job.startDeadline)
+        }
+        val publishedIds = outbox.findUnpublished(limit = 10_000).map { it.jobId }.toSet()
+        assertTrue(runs.all { (it.state == JobState.ENQUEUED) == (it.id in publishedIds) })
+    }
+
+    @Test
+    fun `stale overlap tick leaves the existing active run alone`() = runBlocking {
+
+        for (overlap in listOf(RecurringOverlap.REPLACE, RecurringOverlap.SKIP)) {
+            val id = "stale-overlap-${System.nanoTime()}"
+            scheduler.recurring(RecurringDefinition(
+                id = id, cron = "* * * * *", job = DailyReport(System.nanoTime()),
+                overlap = overlap, maxStartDelay = 120.seconds,
+            ))
+            forceDue(id)
+            fireDue().getOrThrow()
+            val leaderId = jobs.findLeaderByIdempotencyKey("recurring:$id")!!.id
+            val row = recurring.findById(id)!!
+            recurring.upsert(row.copy(maxStartDelayMs = 0, nextTriggerAt = Clock.System.now() - 60.seconds))
+
+            fireDue().getOrThrow()
+
+            assertEquals(leaderId, jobs.findLeaderByIdempotencyKey("recurring:$id")!!.id)
+            assertEquals(JobState.ENQUEUED, jobs.findById(leaderId)!!.state)
+            assertEquals(1, runsFor(id).count { it.state == JobState.CANCELLED })
+        }
+    }
+
+    @Test
+    fun `manual recurring trigger gets a fresh deadline without changing the cron schedule`() = runBlocking {
+
+        val id = "manual-start-delay-${System.nanoTime()}"
+        scheduler.recurring(RecurringDefinition(
+            id = id, cron = "* * * * *", job = DailyReport(System.nanoTime()), maxStartDelay = 30.seconds,
+        ))
+        val nextTrigger = recurring.findById(id)!!.nextTriggerAt
+        val before = Instant.fromEpochMilliseconds(Clock.System.now().toEpochMilliseconds())
+
+        val jobId = scheduler.triggerRecurringNow(id)!!
+
+        val deadline = jobs.findById(jobId)!!.startDeadline!!
+        assertTrue(deadline >= before + 30.seconds)
+        assertTrue(deadline <= Clock.System.now() + 30.seconds)
+        assertEquals(nextTrigger, recurring.findById(id)!!.nextTriggerAt)
+    }
+
+    @Test
+    fun `SKIP overlap leaves a running job active without requesting cancellation`() = runBlocking {
+
+        val id = "skip-running-${System.nanoTime()}"
+        scheduler.recurring(RecurringDefinition(
+            id = id, cron = "* * * * *", job = DailyReport(System.nanoTime()),
+            overlap = RecurringOverlap.SKIP,
+        ))
+        forceDue(id)
+        fireDue().getOrThrow()
+        val first = runsFor(id).single()
+        val locked = jobs.pickup(first.id, nodeId = "skip-test", lockDurationMillis = 60_000)!!
+
+        forceDue(id)
+        fireDue().getOrThrow()
+
+        val current = jobs.findById(first.id)!!
+        assertEquals(JobState.PROCESSING, current.state)
+        assertEquals(locked.version, current.version)
+        assertNull(current.cancelRequestedAt)
+        assertEquals(1, runsFor(id).size)
+        assertEquals(1, outbox.findUnpublished(limit = 10_000).count { it.jobId == first.id })
+        assertTrue(recurring.findById(id)!!.nextTriggerAt > Clock.System.now())
+    }
+
+    @Test
+    fun `SKIP overlap permits a fresh run after the previous one is cancelled`() = runBlocking {
+
+        val id = "skip-after-cancel-${System.nanoTime()}"
+        scheduler.recurring(RecurringDefinition(
+            id = id, cron = "* * * * *", job = DailyReport(System.nanoTime()),
+            overlap = RecurringOverlap.SKIP,
+        ))
+        forceDue(id)
+        fireDue().getOrThrow()
+        val first = runsFor(id).single()
+        scheduler.cancel(first.id)
+
+        forceDue(id)
+        fireDue().getOrThrow()
+
+        val runs = runsFor(id)
+        assertEquals(2, runs.size)
+        assertEquals(JobState.CANCELLED, jobs.findById(first.id)!!.state)
+        val active = jobs.findLeaderByIdempotencyKey("recurring:$id")!!
+        assertNotEquals(first.id, active.id)
+        assertEquals(JobState.ENQUEUED, active.state)
+        assertNull(active.cancelRequestedAt)
+    }
+
+    @Test
+    fun `SKIP overlap with a start delay cancels an overdue slot and accepts the next valid slot`() = runBlocking {
+
+        val id = "skip-expired-slot-${System.nanoTime()}"
+        scheduler.recurring(RecurringDefinition(
+            id = id, cron = "* * * * *", job = DailyReport(System.nanoTime()),
+            overlap = RecurringOverlap.SKIP, maxStartDelay = 30.seconds,
+        ))
+        forceDue(id)
+
+        fireDue().getOrThrow()
+
+        val expired = runsFor(id).single()
+        assertEquals(JobState.CANCELLED, expired.state)
+        assertNull(expired.startedAt)
+        assertEquals(0, expired.attempts)
+        assertNull(jobs.findLeaderByIdempotencyKey("recurring:$id"))
+        assertTrue(outbox.findUnpublished(limit = 10_000).none { it.jobId == expired.id })
+        recurring.upsert(recurring.findById(id)!!.copy(nextTriggerAt = Clock.System.now() - 1.seconds))
+
+        fireDue().getOrThrow()
+
+        val active = jobs.findLeaderByIdempotencyKey("recurring:$id")!!
+        assertNotEquals(expired.id, active.id)
+        assertEquals(JobState.ENQUEUED, active.state)
+        assertEquals(2, runsFor(id).size)
+    }
+
+    @Test
+    fun `SKIP misfire without a start delay currently enqueues a missed cron slot`() = runBlocking {
+
+        // Characterize the documented limitation: MisfirePolicy.SKIP currently shares
+        // CATCH_UP_ONE's implementation. It does not cancel or discard missed work.
+        val id = "skip-misfire-limitation-${System.nanoTime()}"
+        scheduler.recurring(RecurringDefinition(
+            id = id, cron = "* * * * *", job = DailyReport(System.nanoTime()),
+            misfirePolicy = MisfirePolicy.SKIP,
+        ))
+        forceDue(id)
+
+        fireDue().getOrThrow()
+
+        val job = runsFor(id).single()
+        assertEquals(JobState.ENQUEUED, job.state)
+        assertNull(job.startDeadline)
+        assertTrue(outbox.findUnpublished(limit = 10_000).any { it.jobId == job.id })
+        assertTrue(recurring.findById(id)!!.nextTriggerAt > Clock.System.now())
+    }
+
+    private suspend fun runsFor(id: String): List<cs.trade.scheduler.storage.postgres.domain.models.Job> {
+        val ids = dataSource.connection.use { connection ->
+            connection.prepareStatement("SELECT id FROM job WHERE recurring_id = ? ORDER BY scheduled_at").use { stmt ->
+                stmt.setString(1, id)
+                stmt.executeQuery().use { result ->
+                    buildList { while (result.next()) add(Uuid.parse(result.getString(1))) }
+                }
+            }
+        }
+        return ids.mapNotNull { jobs.findById(it) }
     }
 
     /** Force a recurring row "due" by backdating nextTriggerAt one minute (preserves lastTriggeredAt). */

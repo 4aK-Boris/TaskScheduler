@@ -114,6 +114,55 @@ class SendInvoiceHandler : JobHandler<SendInvoice> {
 
 For the full demo see [`app/src/main/kotlin/cs/trade/scheduler/demo/DemoApp.kt`](app/src/main/kotlin/cs/trade/scheduler/demo/DemoApp.kt).
 
+## Cancelling jobs that start too late
+
+Set `maxStartDelay` per enqueue or recurring definition to discard stale work:
+
+```kotlin
+import cs.trade.scheduler.core.backend.EnqueueOptions
+import cs.trade.scheduler.core.backend.RecurringDefinition
+import kotlin.time.Duration.Companion.seconds
+
+scheduler.scheduleAt(
+    job = RefreshPrices(),
+    at = plannedTime,
+    options = EnqueueOptions(maxStartDelay = 30.seconds),
+)
+scheduler.recurring(
+    RecurringDefinition(
+        id = "refresh-prices",
+        cron = "0 * * * * *",
+        job = RefreshPrices(),
+        maxStartDelay = 30.seconds,
+    ),
+)
+```
+
+The latest permitted start is the scheduled time plus the delay. Immediate enqueues
+count from enqueue time; recurring jobs count from their original cron slot, including
+downtime. Each `CATCH_UP_ALL` slot has its own deadline. The worker marks overdue pickups
+`CANCELLED` with a `Start deadline exceeded` reason and resolves dependencies using their
+normal failure policies. Already overdue cron slots are cancelled by infra without an
+outbox delivery. A stale `REPLACE` slot does not cancel the active run.
+
+Automatic retries and dependency waits keep the same deadline. A handler that started
+on time may finish later; `timeout` controls its execution budget. A manual recurring
+trigger starts its delay budget from the trigger time. A manual `rerun` creates a fresh
+job without copying the old deadline.
+
+`null` (the default) leaves waiting unlimited. Delays must be finite, non-negative whole
+milliseconds; zero rejects any lateness. Cancellation is checked at pickup and immediately
+before the handler call, so queued jobs are not swept at the deadline while no worker is
+available. Apply schema migration V10 in scheduler-infra and upgrade the JVM/Python workers
+before enabling this option. No existing job or recurring definition gains a deadline
+automatically.
+
+`overlap = RecurringOverlap.SKIP` suppresses a new trigger while the previous job is
+active; it does not cancel that previous job. It works with `maxStartDelay`: once the
+worker cancels an expired queued run, the next valid trigger can create a fresh run.
+`misfirePolicy = MisfirePolicy.SKIP` currently behaves like `CATCH_UP_ONE` (see
+DESIGN.md 8.5); setting it alone does not discard or cancel overdue work.
+
 ## Non-JVM services
 
 Python services join the same job system through [`clients/python`](clients/python/README.md),

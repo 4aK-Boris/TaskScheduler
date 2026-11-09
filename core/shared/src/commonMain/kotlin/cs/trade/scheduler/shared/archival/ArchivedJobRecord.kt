@@ -52,4 +52,5 @@ public data class ArchivedJobRecord(
     val progressSucceeded: Long? = null,
     val progressFailed: Long? = null,
     val progressTotal: Long? = null,
+    val startDeadline: Instant? = null,
 )

@@ -29,7 +29,7 @@ __all__ = [
 
 #: The Flyway version this client's SQL was written against. Startup fails if the database
 #: is older, because the missing columns would surface as confusing runtime errors instead.
-REQUIRED_SCHEMA_VERSION = 8
+REQUIRED_SCHEMA_VERSION = 10
 
 
 def default_node_id() -> str:

@@ -22,6 +22,7 @@ import org.jetbrains.exposed.v1.jdbc.Database
 import org.jetbrains.exposed.v1.jdbc.transactions.suspendTransaction
 import org.slf4j.LoggerFactory
 import kotlin.time.Clock
+import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Instant
 import kotlin.uuid.Uuid
 
@@ -137,8 +138,21 @@ public class FireDueRecurringJobsUseCase(
                 // recurring id via a derived idempotency key + the leader slot (V8) — so a guard
                 // collapses CATCH_UP_ALL's multiplicity to a single fire.
                 if (row.overlap == RecurringOverlap.ALLOW) {
-                    repeat(plan.occurrences) { insertJobAndOutbox(row, now, idempotencyKey = null) }
+                    val cron = CronExpr.parse(row.cron)
+                    val timezone = CronExpr.timezoneOrUtc(row.timezone)
+                    var slot = row.nextTriggerAt
+                    repeat(plan.occurrences) {
+                        insertJobAndOutbox(row, now, scheduledAt = slot, idempotencyKey = null)
+                        slot = CronExpr.nextExecution(cron, slot, timezone)
+                    }
                     return@suspendTransaction plan.occurrences
+                }
+
+                // A stale cron slot must not cancel or suppress a still-valid active run.
+                // Persist its cancellation for the dashboard, without an overlap key/outbox.
+                if (row.maxStartDelayMs?.let { row.nextTriggerAt + it.milliseconds < now } == true) {
+                    insertJobAndOutbox(row, now, scheduledAt = row.nextTriggerAt, idempotencyKey = null)
+                    return@suspendTransaction 1
                 }
 
                 val key = "$RECURRING_KEY_PREFIX${row.id}"
@@ -146,7 +160,7 @@ public class FireDueRecurringJobsUseCase(
                 val leader = jobs.findLeaderByIdempotencyKey(key, forUpdate = true)
                 when {
                     leader == null -> {
-                        insertJobAndOutbox(row, now, idempotencyKey = key)
+                        insertJobAndOutbox(row, now, scheduledAt = row.nextTriggerAt, idempotencyKey = key)
                         1
                     }
                     row.overlap == RecurringOverlap.SKIP -> {
@@ -167,14 +181,19 @@ public class FireDueRecurringJobsUseCase(
                     // REPLACE on a queued-but-not-started instance: cancel it now and fire the replacement.
                     else -> {
                         jobs.markCancelled(leader.id, leader.version, errorMsg = REPLACED_MSG, actor = REPLACED_BY)
-                        insertJobAndOutbox(row, now, idempotencyKey = key)
+                        insertJobAndOutbox(row, now, scheduledAt = row.nextTriggerAt, idempotencyKey = key)
                         1
                     }
                 }
             }
         }
 
-    private suspend fun insertJobAndOutbox(row: RecurringJobRow, now: Instant, idempotencyKey: String?) {
+    private suspend fun insertJobAndOutbox(
+        row: RecurringJobRow,
+        now: Instant,
+        scheduledAt: Instant,
+        idempotencyKey: String?,
+    ) {
         val jobId = Uuid.random()
         val jobRow = JobRow(
             id = jobId,
@@ -183,7 +202,8 @@ public class FireDueRecurringJobsUseCase(
             priority = JobPriority(row.priority),
             payloadType = row.payloadType,
             payloadJson = row.payloadJson,
-            scheduledAt = null,
+            scheduledAt = scheduledAt,
+            startDeadline = row.maxStartDelayMs?.let { scheduledAt + it.milliseconds },
             attempts = 0,
             maxAttempts = coreConfig.defaultMaxAttempts,
             timeoutSeconds = row.timeoutSeconds,
@@ -209,6 +229,14 @@ public class FireDueRecurringJobsUseCase(
             recurringId = row.id,
         )
         jobs.insert(jobRow)
+        if (jobRow.startDeadline?.let { now > it } == true) {
+            check(jobs.markCancelled(
+                jobId, expectedVersion = jobRow.version,
+                errorMsg = "Start deadline exceeded: ${jobRow.startDeadline}",
+                actor = "start-deadline",
+            ))
+            return
+        }
         outbox.insert(
             NewOutboxEntry(
                 jobId = jobId,

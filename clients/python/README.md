@@ -52,7 +52,7 @@ Requires Python 3.10+, and a RabbitMQ with the `rabbitmq_delayed_message_exchang
 enabled (the same requirement the Kotlin side has — it is how delays and retry backoff work).
 
 **Versioning.** The client shares one version with the rest of the project:
-`taskscheduler-client 0.8.8` is the client for `scheduler-infra 0.8.8`, and the two are
+`taskscheduler-client 0.9.0` is the client for `scheduler-infra 0.9.0`, and the two are
 released together. Run a client older than your infra and it may not know about a newer
 column; newer, and it fails fast on the schema check. CI enforces that
 `pyproject.toml`, `taskscheduler.__version__` and Gradle's `schedulerVersion` agree.
@@ -111,6 +111,29 @@ await scheduler.recurring("nightly-rollup", "0 3 * * *", NightlyRollup(), timezo
 
 Every enqueue writes the job row and its outbox row in **one transaction**, so a job
 becomes visible only if your surrounding business transaction commits.
+
+## Discarding overdue jobs
+
+```python
+await scheduler.schedule_at(
+    RefreshPrices(), at=planned_time, max_start_delay_seconds=30,
+)
+await scheduler.recurring(
+    "refresh-prices", "0 * * * * *", RefreshPrices(), max_start_delay_seconds=30,
+)
+```
+
+The latest permitted start is the scheduled time plus `max_start_delay_seconds`. An
+immediate enqueue counts from enqueue time; recurring jobs count from the original cron
+slot, including downtime. Workers cancel overdue pickups before invoking the handler and
+resolve their dependencies normally. Retries and dependency waits retain the original
+deadline. A handler that started on time can finish after it; execution timeouts are separate.
+
+`None` (the default) leaves waiting unlimited. Values must be finite, non-negative, and
+represent a whole number of milliseconds; zero rejects any lateness. Cancellation is
+checked when a worker picks up the job, not by a timer while it is waiting without a
+worker. This client requires schema V10; upgrade scheduler-infra and all workers before
+enabling deadlines. Older jobs have no deadline.
 
 ## Consuming jobs
 

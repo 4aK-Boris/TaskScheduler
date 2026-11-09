@@ -40,6 +40,7 @@ import org.jetbrains.exposed.v1.jdbc.transactions.suspendTransaction
 import kotlin.reflect.full.starProjectedType
 import kotlin.time.Clock
 import kotlin.time.Duration
+import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Instant
 import kotlin.uuid.ExperimentalUuidApi
 import kotlin.uuid.Uuid
@@ -501,6 +502,7 @@ public class DefaultScheduler(
                 enabled = true,                 // upsert preserves existing if row already there
                 timeoutSeconds = definition.timeout?.inWholeSeconds?.toInt(),
                 overlap = definition.overlap,
+                maxStartDelayMs = definition.maxStartDelay?.inWholeMilliseconds,
             ),
         )
     }
@@ -671,6 +673,7 @@ public class DefaultScheduler(
             // A manual fire is still a run OF this definition — it belongs in its run history and
             // in the "is it running now?" indicator, exactly like a scheduled one.
             recurringId = row.id,
+            maxStartDelay = row.maxStartDelayMs?.milliseconds,
         )
     }
 
@@ -703,6 +706,7 @@ public class DefaultScheduler(
         targetTag: String?,
         timeoutSeconds: Int?,
         recurringId: String? = null,
+        maxStartDelay: Duration? = null,
     ): Uuid {
         val jobId = Uuid.random()
         val routingKey = when {
@@ -740,6 +744,7 @@ public class DefaultScheduler(
             createdAt = now,
             updatedAt = now,
             recurringId = recurringId,
+            startDeadline = maxStartDelay?.let { now + it },
         )
         withContext(Dispatchers.IO) {
             suspendTransaction(db = database) {
@@ -843,6 +848,7 @@ public class DefaultScheduler(
             priority = priority,
             maxAttempts = options.maxAttempts ?: config.defaultMaxAttempts,
             timeoutSeconds = options.timeout?.inWholeSeconds?.toInt(),
+            maxStartDelay = options.maxStartDelay,
             payloadType = FunctionRefPayload.FUNCTION_REF_PAYLOAD_TYPE,
             payloadJson = payloadJson,
             routingKey = routingKey,
@@ -899,6 +905,7 @@ public class DefaultScheduler(
         val targetNode: String?,
         val targetTag: String?,
         val contextJson: String?,
+        val maxStartDelay: Duration?,
     )
 
     private fun buildParams(job: Job, options: EnqueueOptions): EnqueueParams {
@@ -924,6 +931,7 @@ public class DefaultScheduler(
             priority = priority,
             maxAttempts = options.maxAttempts ?: config.defaultMaxAttempts,
             timeoutSeconds = options.timeout?.inWholeSeconds?.toInt(),
+            maxStartDelay = options.maxStartDelay,
             payloadType = payloadType,
             payloadJson = payloadJson,
             routingKey = routingKey,
@@ -947,6 +955,7 @@ public class DefaultScheduler(
             payloadType = p.payloadType,
             payloadJson = p.payloadJson,
             scheduledAt = scheduledAt,
+            startDeadline = p.maxStartDelay?.let { (scheduledAt ?: now) + it },
             attempts = 0,
             maxAttempts = p.maxAttempts,
             timeoutSeconds = p.timeoutSeconds,

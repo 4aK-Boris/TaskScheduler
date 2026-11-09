@@ -10,6 +10,7 @@ never publishes directly, so there is exactly one writer to the broker.
 from __future__ import annotations
 
 import logging
+import math
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -56,6 +57,7 @@ class _EnqueueParams:
     routing_key: str
     target_node: str | None
     target_tag: str | None
+    max_start_delay_ms: int | None
 
 
 class Scheduler:
@@ -110,6 +112,7 @@ class Scheduler:
         priority: int | None = None,
         max_attempts: int | None = None,
         timeout_seconds: int | None = None,
+        max_start_delay_seconds: float | None = None,
         target_node: str | None = None,
         target_tag: str | None = None,
     ) -> uuid.UUID:
@@ -120,6 +123,7 @@ class Scheduler:
             priority=priority,
             max_attempts=max_attempts,
             timeout_seconds=timeout_seconds,
+            max_start_delay_seconds=max_start_delay_seconds,
             target_node=target_node,
             target_tag=target_tag,
         )
@@ -144,6 +148,7 @@ class Scheduler:
         priority: int | None = None,
         max_attempts: int | None = None,
         timeout_seconds: int | None = None,
+        max_start_delay_seconds: float | None = None,
         target_node: str | None = None,
         target_tag: str | None = None,
     ) -> uuid.UUID:
@@ -166,6 +171,7 @@ class Scheduler:
             priority=priority,
             max_attempts=max_attempts,
             timeout_seconds=timeout_seconds,
+            max_start_delay_seconds=max_start_delay_seconds,
             target_node=target_node,
             target_tag=target_tag,
         )
@@ -384,6 +390,7 @@ class Scheduler:
         misfire_policy: MisfirePolicy = MisfirePolicy.CATCH_UP_ONE,
         overlap: RecurringOverlap = RecurringOverlap.ALLOW,
         timeout_seconds: int | None = None,
+        max_start_delay_seconds: float | None = None,
         target_node: str | None = None,
         target_tag: str | None = None,
         enabled: bool = True,
@@ -395,6 +402,7 @@ class Scheduler:
 
         Cron is 5 fields (``m h dom mon dow``) or 6 with leading seconds.
         """
+        max_start_delay_ms = self._start_delay_ms(max_start_delay_seconds)
         first = next_trigger_at(cron, timezone_name=timezone_name)
         async with self._storage.transaction() as conn:
             await self._storage.upsert_recurring(
@@ -412,6 +420,7 @@ class Scheduler:
                 target_node=target_node,
                 target_tag=target_tag,
                 timeout_seconds=timeout_seconds,
+                max_start_delay_ms=max_start_delay_ms,
                 enabled=enabled,
             )
         log.info("registered recurring job %s (%s), next run %s", recurring_id, cron, first)
@@ -469,6 +478,7 @@ class Scheduler:
         priority: int | None = None,
         max_attempts: int | None = None,
         timeout_seconds: int | None = None,
+        max_start_delay_seconds: float | None = None,
         target_node: str | None = None,
         target_tag: str | None = None,
     ) -> _EnqueueParams:
@@ -510,6 +520,7 @@ class Scheduler:
             routing_key=routing_key,
             target_node=target_node,
             target_tag=target_tag,
+            max_start_delay_ms=self._start_delay_ms(max_start_delay_seconds),
         )
 
     async def _insert(
@@ -537,6 +548,7 @@ class Scheduler:
             idempotency_key=idempotency_key,
             target_node=params.target_node,
             target_tag=params.target_tag,
+            max_start_delay_ms=params.max_start_delay_ms,
         )
         await self._storage.insert_event(
             conn, job_id=params.job_id, event_type="CREATED", new_state=state
@@ -552,6 +564,23 @@ class Scheduler:
             return
         async with self._storage.connection() as conn:
             await self._storage.notify_event(conn, payload)
+
+    @staticmethod
+    def _start_delay_ms(seconds: float | None) -> int | None:
+        if seconds is None:
+            return None
+        milliseconds = seconds * 1000.0
+        if (
+            not math.isfinite(milliseconds)
+            or milliseconds < 0
+            or not milliseconds.is_integer()
+            or milliseconds >= 2**63
+        ):
+            raise ConfigurationError(
+                "max_start_delay_seconds must be finite, non-negative, fit BIGINT milliseconds "
+                "and be a whole number of milliseconds"
+            )
+        return int(milliseconds)
 
     @staticmethod
     def _clamp_priority(priority: int) -> int:

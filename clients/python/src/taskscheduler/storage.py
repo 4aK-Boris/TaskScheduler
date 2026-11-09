@@ -54,7 +54,7 @@ _JOB_COLUMNS = """
     id, state, queue, priority, payload_type, payload_json::text AS payload_json,
     attempts, max_attempts, version, pending_deps, scheduled_at, timeout_seconds,
     locked_by, locked_until, target_node, target_tag, started_at,
-    cancel_requested_at, created_at
+    cancel_requested_at, created_at, start_deadline
 """
 
 
@@ -79,6 +79,7 @@ def _to_row(record: dict[str, Any]) -> JobRow:
         started_at=record["started_at"],
         cancel_requested_at=record["cancel_requested_at"],
         created_at=record["created_at"],
+        start_deadline=record["start_deadline"],
     )
 
 
@@ -196,6 +197,7 @@ class Storage:
         idempotency_key: str | None = None,
         target_node: str | None = None,
         target_tag: str | None = None,
+        max_start_delay_ms: int | None = None,
     ) -> None:
         await conn.execute(
             """
@@ -204,13 +206,13 @@ class Storage:
                 scheduled_at, attempts, max_attempts, timeout_seconds,
                 pending_deps, initial_pending_deps, version,
                 idempotency_key, target_node, target_tag,
-                created_at, updated_at
+                created_at, updated_at, start_deadline
             ) VALUES (
                 %s, %s, %s, %s, %s, %s::jsonb,
                 %s, 0, %s, %s,
                 %s, %s, 0,
                 %s, %s, %s,
-                now(), now()
+                now(), now(), COALESCE(%s::timestamptz, now()) + %s * interval '1 millisecond'
             )
             """,
             (
@@ -228,6 +230,8 @@ class Storage:
                 idempotency_key,
                 target_node,
                 target_tag,
+                scheduled_at,
+                max_start_delay_ms,
             ),
         )
 
@@ -334,6 +338,7 @@ class Storage:
         target_node: str | None = None,
         target_tag: str | None = None,
         timeout_seconds: int | None = None,
+        max_start_delay_ms: int | None = None,
         enabled: bool = True,
     ) -> None:
         """Register (or update) a cron definition. The infra leader fires it — not this client."""
@@ -342,8 +347,8 @@ class Storage:
             INSERT INTO recurring_job (
                 id, cron, timezone, misfire_policy, queue, priority, target_node, target_tag,
                 payload_type, payload_json, next_trigger_at, enabled,
-                timeout_seconds, overlap_policy
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s)
+                timeout_seconds, overlap_policy, max_start_delay_ms
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s)
             ON CONFLICT (id) DO UPDATE SET
                 cron = EXCLUDED.cron,
                 timezone = EXCLUDED.timezone,
@@ -357,6 +362,7 @@ class Storage:
                 next_trigger_at = EXCLUDED.next_trigger_at,
                 enabled = EXCLUDED.enabled,
                 timeout_seconds = EXCLUDED.timeout_seconds,
+                max_start_delay_ms = EXCLUDED.max_start_delay_ms,
                 overlap_policy = EXCLUDED.overlap_policy
             """,
             (
@@ -374,6 +380,7 @@ class Storage:
                 enabled,
                 timeout_seconds,
                 overlap_policy,
+                max_start_delay_ms,
             ),
         )
 

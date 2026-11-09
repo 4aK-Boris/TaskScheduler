@@ -33,4 +33,6 @@ public data class RecurringJobRow(
     val timeoutSeconds: Int? = null,
     /** Overlap guard when the previous fired instance is still active. Stored as `overlap_policy`. */
     val overlap: RecurringOverlap = RecurringOverlap.ALLOW,
+    /** Allowed lateness from the original cron slot; null disables expiry. */
+    val maxStartDelayMs: Long? = null,
 )

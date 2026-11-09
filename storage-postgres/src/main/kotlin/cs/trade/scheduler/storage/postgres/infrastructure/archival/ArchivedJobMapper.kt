@@ -38,4 +38,5 @@ public fun Job.toArchivedRecord(): ArchivedJobRecord = ArchivedJobRecord(
     progressSucceeded = progressSucceeded,
     progressFailed = progressFailed,
     progressTotal = progressTotal,
+    startDeadline = startDeadline,
 )

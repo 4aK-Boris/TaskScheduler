@@ -122,7 +122,7 @@ class RabbitTransport:
         """
         if self._connection is None:
             raise RuntimeError("RabbitTransport.start() has not been awaited")
-        channel = await self._connection.channel()
+        channel: AbstractChannel = await self._connection.channel()
         await channel.set_qos(prefetch_count=prefetch)
         queue = await channel.get_queue(f"q.{queue_name}", ensure=False)
 
