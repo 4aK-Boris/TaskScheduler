@@ -30,6 +30,7 @@ public object JobTable : UuidTable("job") {
     public val payloadJson: Column<String> = text("payload_json")
 
     public val scheduledAt: Column<OffsetDateTime?> = timestampWithTimeZone("scheduled_at").nullable()
+    public val startDeadline: Column<OffsetDateTime?> = timestampWithTimeZone("start_deadline").nullable()
 
     public val attempts: Column<Int> = integer("attempts").default(0)
     public val maxAttempts: Column<Int> = integer("max_attempts").default(3)

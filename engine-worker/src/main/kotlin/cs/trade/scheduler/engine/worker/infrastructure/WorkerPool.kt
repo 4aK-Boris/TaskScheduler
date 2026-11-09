@@ -53,6 +53,7 @@ import kotlinx.serialization.serializer
 import org.slf4j.LoggerFactory
 import org.slf4j.MDC
 import kotlin.reflect.full.starProjectedType
+import kotlin.time.Clock
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.TimeSource
@@ -333,6 +334,15 @@ public class WorkerPool(
     }
 
     private suspend fun processLockedInner(jobId: Uuid, locked: JobRow) {
+        // Check before pause/breaker gates so expired work does not keep circulating.
+        if (locked.startDeadline?.let { Clock.System.now() > it } == true) {
+            finalize(
+                jobId, locked.version, JobState.CANCELLED,
+                errorMsg = "Start deadline exceeded: ${locked.startDeadline}",
+                actor = "start-deadline",
+            ).getOrThrow()
+            return
+        }
         // Pause second-line check (DESIGN.md 22.1). The pause set may have been updated
         // after this row was already in Rabbit, so check now before doing any work.
         // Release-and-redeliver is preferred over rejecting the message because (a) the
@@ -509,6 +519,10 @@ public class WorkerPool(
         try {
             try {
                 withContext(handlerCtx) {
+                    // A dispatcher switch or payload/context work can itself cross the deadline.
+                    if (locked.startDeadline?.let { Clock.System.now() > it } == true) {
+                        throw JobCancellationException("Start deadline exceeded: ${locked.startDeadline}")
+                    }
                     // Register this handler coroutine so the job_cancel listener can cancel
                     // it mid-flight (DESIGN.md 22.7). The listener cancels THIS job; the
                     // outer delivery coroutine stays active and routes the CANCELLED outcome

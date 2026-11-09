@@ -104,6 +104,7 @@ class JobRow:
     started_at: datetime | None = None
     cancel_requested_at: datetime | None = None
     created_at: datetime | None = None
+    start_deadline: datetime | None = None
 
     @property
     def routing_key(self) -> str:

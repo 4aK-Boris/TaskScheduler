@@ -5,6 +5,7 @@ package cs.trade.scheduler.engine.worker
 import com.zaxxer.hikari.HikariConfig
 import com.zaxxer.hikari.HikariDataSource
 import cs.trade.scheduler.core.backend.Scheduler
+import cs.trade.scheduler.core.backend.EnqueueOptions
 import cs.trade.scheduler.core.backend.handler.Job
 import cs.trade.scheduler.core.backend.handler.JobContext
 import cs.trade.scheduler.core.backend.handler.JobHandler
@@ -14,6 +15,7 @@ import cs.trade.scheduler.core.backend.schedulerCoreModule
 import cs.trade.scheduler.engine.worker.infrastructure.WorkerPool
 import cs.trade.scheduler.engine.worker.infrastructure.schedulerWorkerModule
 import cs.trade.scheduler.shared.JobState
+import cs.trade.scheduler.shared.OnFailure
 import cs.trade.scheduler.storage.postgres.domain.repositories.JobRepository
 import cs.trade.scheduler.storage.postgres.infrastructure.schedulerPostgresModule
 import cs.trade.scheduler.transport.rabbit.domain.ConsumerHandle
@@ -33,6 +35,7 @@ import org.junit.jupiter.api.AfterAll
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.BeforeAll
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestInstance
@@ -43,6 +46,9 @@ import org.koin.dsl.bind
 import org.koin.dsl.module
 import org.testcontainers.containers.PostgreSQLContainer
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.ConcurrentHashMap
+import kotlin.time.Clock
+import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 import kotlin.uuid.Uuid
@@ -82,6 +88,18 @@ class HangingHandler(
     }
 }
 
+@Serializable
+data class DeadlineJob(val runForMillis: Long = 0, val failFirst: Boolean = false) : Job
+
+@JobType(DeadlineJob::class)
+class DeadlineHandler(val runs: ConcurrentHashMap<Uuid, AtomicInteger>) : JobHandler<DeadlineJob> {
+    override suspend fun execute(ctx: JobContext, job: DeadlineJob) {
+        val invocation = runs.computeIfAbsent(ctx.jobId) { AtomicInteger() }.incrementAndGet()
+        if (job.failFirst && invocation == 1) error("Retry this job")
+        delay(job.runForMillis.milliseconds)
+    }
+}
+
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class WorkerTimeoutIntegrationTest {
 
@@ -94,6 +112,7 @@ class WorkerTimeoutIntegrationTest {
     private lateinit var invocations: AtomicInteger
     private lateinit var finalFailureSignal: CompletableDeferred<Pair<JobContext, Throwable>>
     private var postgres: PostgreSQLContainer<*>? = null
+    private val deadlineRuns = ConcurrentHashMap<Uuid, AtomicInteger>()
 
     @BeforeAll
     fun setUp() {
@@ -127,6 +146,7 @@ class WorkerTimeoutIntegrationTest {
         finalFailureSignal = CompletableDeferred()
         val handlerModule = module {
             single { HangingHandler(invocations, finalFailureSignal) } bind JobHandler::class
+            single { DeadlineHandler(deadlineRuns) } bind JobHandler::class
         }
         // Override JobTransport with our in-memory fake (Koin last-wins). We never load
         // schedulerRabbitModule — schedulerWorkerModule just needs SOME JobTransport
@@ -159,6 +179,7 @@ class WorkerTimeoutIntegrationTest {
                 handlerModule,
             )
         }
+        runBlocking { GlobalContext.get().get<WorkerPool>().start() }
     }
 
     @AfterAll
@@ -176,10 +197,7 @@ class WorkerTimeoutIntegrationTest {
     fun `handler hanging past defaultJobTimeout is aborted, retried, then FAILED`() = runBlocking {
         val koin = GlobalContext.get()
         val scheduler = koin.get<Scheduler>()
-        val workerPool = koin.get<WorkerPool>()
         val jobs = koin.get<JobRepository>()
-
-        workerPool.start()
 
         val jobId = scheduler.enqueue(HangingJob(tag = "spin"))
         // Bridge: in production the OutboxPublisher loop publishes after enqueue commits.
@@ -230,6 +248,118 @@ class WorkerTimeoutIntegrationTest {
         } finally {
             pump.cancel()
         }
+    }
+
+    @Test
+    fun `expired job skips the handler and resolves all dependency policies`() = runBlocking {
+
+        val koin = GlobalContext.get()
+        val scheduler = koin.get<Scheduler>()
+        val jobs = koin.get<JobRepository>()
+
+        val parent = scheduler.scheduleAt(
+            DeadlineJob(), at = Clock.System.now() - 60.seconds,
+            options = EnqueueOptions(maxStartDelay = 10.seconds),
+        )
+        val cancelledChild = scheduler.enqueueAfter(
+            DeadlineJob(), waitFor = listOf(parent),
+            options = EnqueueOptions(onParentFailure = OnFailure.CANCEL_CHILD),
+        )
+        val failedChild = scheduler.enqueueAfter(DeadlineJob(), waitFor = listOf(parent))
+        val ignoredChild = scheduler.enqueueAfter(
+            DeadlineJob(), waitFor = listOf(parent),
+            options = EnqueueOptions(onParentFailure = OnFailure.IGNORE),
+        )
+
+        transport.deliver(parent)
+
+        assertNotNull(pollForState(jobs, parent, JobState.CANCELLED, timeoutMs = 5_000))
+        assertNotNull(pollForState(jobs, cancelledChild, JobState.CANCELLED, timeoutMs = 5_000))
+        assertNotNull(pollForState(jobs, failedChild, JobState.FAILED, timeoutMs = 5_000))
+        assertNotNull(pollForState(jobs, ignoredChild, JobState.ENQUEUED, timeoutMs = 5_000))
+        assertNull(deadlineRuns[parent])
+    }
+
+    @Test
+    fun `late job without a deadline and job within allowed delay still run`() = runBlocking {
+
+        val koin = GlobalContext.get()
+        val scheduler = koin.get<Scheduler>()
+        val jobs = koin.get<JobRepository>()
+        val at = kotlin.time.Instant.fromEpochMilliseconds(Clock.System.now().toEpochMilliseconds()) - 60.seconds
+        val unlimited = scheduler.scheduleAt(DeadlineJob(), at)
+        val withinDelay = scheduler.scheduleAt(
+            DeadlineJob(), at, options = EnqueueOptions(maxStartDelay = 120.seconds),
+        )
+
+        transport.deliver(unlimited)
+        transport.deliver(withinDelay)
+
+        assertNotNull(pollForState(jobs, unlimited, JobState.SUCCEEDED, timeoutMs = 5_000))
+        assertNotNull(pollForState(jobs, withinDelay, JobState.SUCCEEDED, timeoutMs = 5_000))
+        assertNull(jobs.findById(unlimited)!!.startDeadline)
+        assertEquals(at + 120.seconds, jobs.findById(withinDelay)!!.startDeadline)
+        assertEquals(1, deadlineRuns[unlimited]!!.get())
+        assertEquals(1, deadlineRuns[withinDelay]!!.get())
+    }
+
+    @Test
+    fun `retry does not extend the deadline and expires before another handler call`() = runBlocking {
+
+        val koin = GlobalContext.get()
+        val scheduler = koin.get<Scheduler>()
+        val jobs = koin.get<JobRepository>()
+        val id = scheduler.enqueue(DeadlineJob(failFirst = true), EnqueueOptions(maxStartDelay = 2.seconds))
+        val deadline = jobs.findById(id)!!.startDeadline!!
+
+        transport.deliver(id)
+        assertNotNull(pollForState(jobs, id, JobState.AWAITING_RETRY, timeoutMs = 5_000))
+        assertEquals(deadline, jobs.findById(id)!!.startDeadline)
+        delay((deadline - Clock.System.now()).coerceAtLeast(Duration.ZERO) + 25.milliseconds)
+        transport.deliver(id)
+
+        assertNotNull(pollForState(jobs, id, JobState.CANCELLED, timeoutMs = 5_000))
+        assertEquals(1, deadlineRuns[id]!!.get())
+        assertEquals(deadline, jobs.findById(id)!!.startDeadline)
+    }
+
+    @Test
+    fun `waiting for dependencies does not reset the deadline`() = runBlocking {
+
+        val koin = GlobalContext.get()
+        val scheduler = koin.get<Scheduler>()
+        val jobs = koin.get<JobRepository>()
+        val parent = scheduler.enqueue(DeadlineJob())
+        val child = scheduler.enqueueAfter(
+            DeadlineJob(), waitFor = listOf(parent), options = EnqueueOptions(maxStartDelay = Duration.ZERO),
+        )
+        val deadline = jobs.findById(child)!!.startDeadline
+
+        transport.deliver(parent)
+        assertNotNull(pollForState(jobs, child, JobState.ENQUEUED, timeoutMs = 5_000))
+        transport.deliver(child)
+
+        assertNotNull(pollForState(jobs, child, JobState.CANCELLED, timeoutMs = 5_000))
+        assertEquals(deadline, jobs.findById(child)!!.startDeadline)
+        assertNull(deadlineRuns[child])
+    }
+
+    @Test
+    fun `a handler that started on time can finish after the deadline`() = runBlocking {
+
+        val koin = GlobalContext.get()
+        val scheduler = koin.get<Scheduler>()
+        val jobs = koin.get<JobRepository>()
+        val id = scheduler.enqueue(
+            DeadlineJob(runForMillis = 1_500),
+            EnqueueOptions(maxStartDelay = 1.seconds, timeout = 3.seconds),
+        )
+
+        transport.deliver(id)
+
+        assertNotNull(pollForState(jobs, id, JobState.SUCCEEDED, timeoutMs = 5_000))
+        assertEquals(1, deadlineRuns[id]!!.get())
+        assertTrue(Clock.System.now() > jobs.findById(id)!!.startDeadline!!)
     }
 
     private suspend fun pollForState(

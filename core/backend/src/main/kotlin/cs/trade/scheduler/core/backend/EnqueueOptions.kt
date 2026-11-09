@@ -6,6 +6,7 @@ import cs.trade.scheduler.shared.MisfirePolicy
 import cs.trade.scheduler.shared.OnFailure
 import cs.trade.scheduler.shared.RecurringOverlap
 import kotlin.time.Duration
+import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * Per-call overrides for [Scheduler.enqueue] and friends. All fields are optional —
@@ -37,7 +38,18 @@ public data class EnqueueOptions(
      * separation; misuse silently no-ops.
      */
     val inheritPriorityFromParents: Boolean = false,
-)
+    /**
+     * Latest allowed start is the scheduled time (or enqueue time) plus this delay.
+     * The worker cancels an overdue job before invoking its handler. The deadline is
+     * fixed across retries and dependency waits; it does not limit a running handler.
+     * `null` preserves unlimited waiting. Must be finite, non-negative and whole milliseconds.
+     */
+    val maxStartDelay: Duration? = null,
+) {
+    init {
+        validateMaxStartDelay(maxStartDelay)
+    }
+}
 
 /**
  * Declarative recurring-job definition. Pass to [Scheduler.recurring]. See DESIGN.md 8.5.
@@ -68,4 +80,20 @@ public data class RecurringDefinition(
      * slots missed during downtime. Stored as `recurring_job.overlap_policy`.
      */
     val overlap: RecurringOverlap = RecurringOverlap.ALLOW,
-)
+    /**
+     * Maximum lateness from each original cron slot, including scheduler downtime and
+     * time in the queue. `null` preserves unlimited waiting. See [EnqueueOptions.maxStartDelay].
+     */
+    val maxStartDelay: Duration? = null,
+) {
+    init {
+        validateMaxStartDelay(maxStartDelay)
+    }
+}
+
+private fun validateMaxStartDelay(delay: Duration?) {
+    require(delay == null || (delay.isFinite() && delay >= Duration.ZERO &&
+        delay == delay.inWholeMilliseconds.milliseconds)) {
+        "maxStartDelay must be finite, non-negative and a whole number of milliseconds"
+    }
+}

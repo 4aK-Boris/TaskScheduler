@@ -68,4 +68,6 @@ public data class Job(
      * before that migration carry `null` and cannot be attributed after the fact.
      */
     val recurringId: String? = null,
+    /** Fixed latest start, retained across retries. Null means unlimited waiting. */
+    val startDeadline: Instant? = null,
 )

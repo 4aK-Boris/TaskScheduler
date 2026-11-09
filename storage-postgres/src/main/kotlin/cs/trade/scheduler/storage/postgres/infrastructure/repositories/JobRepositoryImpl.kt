@@ -210,6 +210,7 @@ public class JobRepositoryImpl(
                 row[payloadType] = job.payloadType
                 row[payloadJson] = job.payloadJson
                 row[scheduledAt] = job.scheduledAt?.toOffsetDateTimeUtc()
+                row[startDeadline] = job.startDeadline?.toOffsetDateTimeUtc()
                 row[attempts] = job.attempts
                 row[maxAttempts] = job.maxAttempts
                 row[timeoutSeconds] = job.timeoutSeconds
@@ -1277,6 +1278,7 @@ private fun ResultRow.toJob(): Job = Job(
     attempts = this[JobTable.attempts],
     maxAttempts = this[JobTable.maxAttempts],
     timeoutSeconds = this[JobTable.timeoutSeconds],
+    startDeadline = this[JobTable.startDeadline]?.toKotlinTime(),
     lockedBy = this[JobTable.lockedBy],
     lockedUntil = this[JobTable.lockedUntil]?.toKotlinTime(),
     pendingDeps = this[JobTable.pendingDeps],
