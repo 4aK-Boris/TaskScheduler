@@ -11,7 +11,7 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestInstance
 import org.testcontainers.containers.GenericContainer
 import org.testcontainers.containers.wait.strategy.Wait
-import org.testcontainers.utility.DockerImageName
+import org.testcontainers.images.builder.ImageFromDockerfile
 import software.amazon.awssdk.auth.credentials.AwsBasicCredentials
 import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider
 import software.amazon.awssdk.http.urlconnection.UrlConnectionHttpClient
@@ -29,7 +29,9 @@ import kotlin.time.Instant
  *
  * **Provisioning** mirrors the `EXTERNAL_PG_URL` / `EXTERNAL_RABBIT_HOST` pattern: honours
  * `EXTERNAL_S3_ENDPOINT` (+ `_ACCESS_KEY` / `_SECRET_KEY`) for a shared `scheduler-test-minio`
- * container, and falls back to a MinIO Testcontainer when absent. Manual lifecycle so the
+ * container, and falls back to a MinIO Testcontainer built from pinned upstream source when absent.
+ * Community MinIO images are no longer published; see test resources/minio/Dockerfile.
+ * Manual lifecycle so the
  * env override can short-circuit Docker.
  *
  * Asserts the load-bearing properties of the sink:
@@ -43,7 +45,8 @@ import kotlin.time.Instant
 class S3ArchivalSinkIntegrationTest {
 
     private companion object {
-        private val minioImage: DockerImageName = DockerImageName.parse("minio/minio:latest")
+        private val minioImage = ImageFromDockerfile("taskscheduler-test-minio:release-2025-10-15", false)
+            .withFileFromClasspath("Dockerfile", "minio/Dockerfile")
         private val externalEndpoint: String? = System.getenv("EXTERNAL_S3_ENDPOINT")?.takeIf { it.isNotBlank() }
         private const val BUCKET = "scheduler-archive-test"
         private const val REGION = "us-east-1"
