@@ -408,7 +408,9 @@ class Scheduler:
         """
         max_start_delay_ms = self._start_delay_ms(max_start_delay_seconds)
         if repeat_after_completion and (cron.strip() or timezone_name is not None):
-            raise ConfigurationError("repeat_after_completion cannot be combined with cron/timezone")
+            raise ConfigurationError(
+                "repeat_after_completion cannot be combined with cron/timezone"
+            )
         first = (
             datetime.now(timezone.utc) if repeat_after_completion
             else next_trigger_at(cron, timezone_name=timezone_name)
@@ -424,7 +426,9 @@ class Scheduler:
                 next_trigger_at=first,
                 timezone_name=timezone_name,
                 misfire_policy=misfire_policy.value,
-                overlap_policy=RecurringOverlap.SKIP.value if repeat_after_completion else overlap.value,
+                overlap_policy=(
+                    RecurringOverlap.SKIP.value if repeat_after_completion else overlap.value
+                ),
                 priority=self._clamp_priority(priority),
                 target_node=target_node,
                 target_tag=target_tag,
