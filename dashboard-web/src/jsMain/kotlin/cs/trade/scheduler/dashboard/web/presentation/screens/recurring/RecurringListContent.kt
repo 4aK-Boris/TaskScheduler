@@ -117,7 +117,7 @@ public val RecurringListContent: FC<RecurringListContentProps> = FC { props ->
                         onClick = sort.onSort(RcSort.ID)
                     }
                     SortableHeaderCell {
-                        label = "Cron"
+                        label = "Schedule"
                         width = 175.px
                         active = sort.isActive(RcSort.CRON)
                         direction = sort.directionOf(RcSort.CRON)
@@ -284,7 +284,7 @@ private val RecurringRow: FC<RecurringRowProps> = FC { props ->
                     +SchedulerText.mono
                     color = fg
                 }
-                +job.cron
+                +(if (job.repeatAfterCompletion) "After completion" else job.cron)
             }
         }
         TableCell {
@@ -305,7 +305,9 @@ private val RecurringRow: FC<RecurringRowProps> = FC { props ->
             nowrap = true
             span {
                 css { color = fg }
-                +if (props.ageAbsolute) formatDateTime(job.nextTriggerAt) else timeAgoOrSoon(job.nextTriggerAt)
+                +(if (job.repeatAfterCompletion) {
+                    if (job.lastRun?.isLive == true) "After current run" else "Ready"
+                } else if (props.ageAbsolute) formatDateTime(job.nextTriggerAt) else timeAgoOrSoon(job.nextTriggerAt))
             }
         }
         TableCell {

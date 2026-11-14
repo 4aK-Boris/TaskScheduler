@@ -10,6 +10,8 @@ import cs.trade.scheduler.engine.infra.domain.usecases.RetentionCleanupBatchUseC
 import cs.trade.scheduler.engine.infra.infrastructure.loops.FastForwardTask
 import cs.trade.scheduler.engine.infra.infrastructure.loops.OutboxPublisher
 import cs.trade.scheduler.engine.infra.infrastructure.loops.RecurringScheduler
+import cs.trade.scheduler.engine.infra.infrastructure.loops.RecurringWakeupListener
+import com.zaxxer.hikari.HikariDataSource
 import cs.trade.scheduler.engine.infra.infrastructure.loops.RetentionCleanup
 import cs.trade.scheduler.engine.infra.infrastructure.loops.SafetyNetPoller
 import org.koin.core.module.Module
@@ -107,7 +109,13 @@ public fun schedulerInfraModule(configure: SchedulerInfraConfig.() -> Unit = {})
         singleOf(::FastForwardScheduledJobsUseCase)
         singleOf(::FastForwardTask)
         singleOf(::FireDueRecurringJobsUseCase)
-        singleOf(::RecurringScheduler)
+        single<RecurringScheduler> {
+            // Preserve polling for non-Hikari integrations. They can override this binding
+            // with a listener using their own raw JDBC credentials for immediate wakeups.
+            val hikari = get<javax.sql.DataSource>() as? HikariDataSource
+            val listener = hikari?.let { RecurringWakeupListener(it.jdbcUrl, it.username, it.password) }
+            RecurringScheduler(fireDue = get(), config = get(), wakeupListener = listener)
+        }
         singleOf(::RetentionCleanupBatchUseCase)
         singleOf(::RetentionCleanup)
     }

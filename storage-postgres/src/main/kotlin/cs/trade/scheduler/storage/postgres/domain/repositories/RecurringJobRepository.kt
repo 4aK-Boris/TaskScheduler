@@ -15,10 +15,12 @@ public interface RecurringJobRepository {
     /** INSERT ... ON CONFLICT (id) DO UPDATE — only definition fields, not state. */
     public suspend fun upsert(row: RecurringJobRow)
 
-    public suspend fun findById(id: String): RecurringJobRow?
+    /** [forUpdate] serialises continuous fires and manual triggers within the caller's transaction. */
+    public suspend fun findById(id: String, forUpdate: Boolean = false): RecurringJobRow?
 
     /**
      * `enabled = TRUE AND next_trigger_at <= now`, ordered by `next_trigger_at` ASC.
+     * Continuous definitions with any non-terminal run are excluded before applying [limit].
      * Used by `RecurringScheduler` to pull due rows.
      */
     public suspend fun findDue(now: Instant, limit: Int): List<RecurringJobRow>

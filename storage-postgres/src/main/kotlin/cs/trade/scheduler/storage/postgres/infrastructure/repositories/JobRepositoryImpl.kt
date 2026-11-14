@@ -1131,6 +1131,16 @@ public class JobRepositoryImpl(
             }
         }
 
+    override suspend fun findActiveByRecurringId(recurringId: String): Job? = withContext(Dispatchers.IO) {
+        suspendTransaction(db = database) {
+            JobTable.selectAll()
+                .where { (JobTable.recurringId eq recurringId) and (JobTable.state inList ACTIVE_STATE_NAMES) }
+                .limit(1)
+                .firstOrNull()
+                ?.toJob()
+        }
+    }
+
     override suspend fun findLatestRunsByRecurringIds(
         recurringIds: Collection<String>,
     ): Map<String, RecurringRun> {

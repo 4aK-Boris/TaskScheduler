@@ -114,6 +114,35 @@ class SendInvoiceHandler : JobHandler<SendInvoice> {
 
 For the full demo see [`app/src/main/kotlin/cs/trade/scheduler/demo/DemoApp.kt`](app/src/main/kotlin/cs/trade/scheduler/demo/DemoApp.kt).
 
+## Run again after completion
+
+Use `repeatAfterCompletion` for a task that should run continuously, without a cron:
+
+```kotlin
+scheduler.recurring(
+    RecurringDefinition(
+        id = "refresh-prices",
+        job = RefreshPrices(),
+        repeatAfterCompletion = true,
+    ),
+)
+```
+
+The first run is due immediately. Each subsequent run waits until the previous run is
+`SUCCEEDED`, `FAILED` or `CANCELLED`; queued work and automatic retries block the next run.
+Cron and timezone cannot be combined with this option. Overlap and misfire policies are
+ignored: runs are sequential and downtime never creates a catch-up backlog. A manual
+trigger returns the existing live run, if there is one. Disable the definition to stop
+repeating; pausing its job type stops execution through the normal worker pause mechanism.
+
+Apply scheduler migration V11 and upgrade scheduler-infra before registering this mode.
+PostgreSQL completion notifications wake infra after commit, followed by normal outbox
+dispatch. Periodic polling recovers missed notifications and infra restarts; actual starts
+still depend on worker availability. The Recurring screen labels this mode “After completion”.
+The default Hikari integration configures the notification listener automatically. Other
+DataSources retain polling; supply a `RecurringWakeupListener` to `RecurringScheduler`
+with dedicated JDBC credentials to enable immediate wakeups there too.
+
 ## Cancelling jobs that start too late
 
 Set `maxStartDelay` per enqueue or recurring definition to discard stale work:

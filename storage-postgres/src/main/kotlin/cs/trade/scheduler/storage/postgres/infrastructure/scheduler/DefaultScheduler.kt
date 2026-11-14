@@ -18,6 +18,7 @@ import cs.trade.scheduler.shared.ConcurrencyPolicy
 import cs.trade.scheduler.shared.DeleteResult
 import cs.trade.scheduler.shared.JobPriority
 import cs.trade.scheduler.shared.JobState
+import cs.trade.scheduler.shared.RecurringOverlap
 import cs.trade.scheduler.shared.OnFailure
 import cs.trade.scheduler.shared.RerouteResult
 import cs.trade.scheduler.shared.RetryMode
@@ -472,7 +473,7 @@ public class DefaultScheduler(
     override suspend fun recurring(definition: RecurringDefinition) {
         val now = Clock.System.now()
         // Validate cron expression up-front + compute initial next trigger.
-        val nextTrigger = CronExpr.nextAfter(
+        val nextTrigger = if (definition.repeatAfterCompletion) now else CronExpr.nextAfter(
             expression = definition.cron,
             reference = now,
             timezone = definition.timezone,
@@ -501,8 +502,9 @@ public class DefaultScheduler(
                 nextTriggerAt = nextTrigger,
                 enabled = true,                 // upsert preserves existing if row already there
                 timeoutSeconds = definition.timeout?.inWholeSeconds?.toInt(),
-                overlap = definition.overlap,
+                overlap = if (definition.repeatAfterCompletion) RecurringOverlap.SKIP else definition.overlap,
                 maxStartDelayMs = definition.maxStartDelay?.inWholeMilliseconds,
+                repeatAfterCompletion = definition.repeatAfterCompletion,
             ),
         )
     }
@@ -658,10 +660,24 @@ public class DefaultScheduler(
     }
 
     override suspend fun triggerRecurringNow(id: String): Uuid? {
-        // Read the definition with its own txn (matching cancel()'s findById style). The stored
-        // payload was serialised by the app at registration, so it's reused verbatim — no Job
+        // Continuous definitions share the same lock as the infra firing path. Reuse an
+        // existing live run instead of allowing a manual click to start an overlapping run.
+        return withContext(Dispatchers.IO) {
+            suspendTransaction(db = database) {
+                val definition = storage.recurringJobs.findById(id, forUpdate = true)
+                    ?: return@suspendTransaction null
+                if (definition.repeatAfterCompletion) {
+                    val live = storage.jobs.findActiveByRecurringId(id)
+                    if (live != null) return@suspendTransaction live.id
+                }
+                enqueueRecurringNow(definition)
+            }
+        }
+    }
+
+    private suspend fun enqueueRecurringNow(row: RecurringJobRow): Uuid {
+        // The stored payload was serialised by the app at registration, so reuse it — no Job
         // object, no re-serialisation. Schedule fields are deliberately NOT touched.
-        val row = storage.recurringJobs.findById(id) ?: return null
         return enqueueStored(
             payloadType = row.payloadType,
             payloadJson = row.payloadJson,

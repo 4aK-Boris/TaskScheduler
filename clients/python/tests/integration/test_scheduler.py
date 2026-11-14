@@ -322,3 +322,27 @@ async def test_recurring_registration_is_idempotent(
     assert rows[0]["payload_json"] == {"n": 2, "label": "x"}
     assert rows[0]["enabled"] is True
     assert rows[0]["next_trigger_at"] > datetime.now(timezone.utc)
+
+
+async def test_continuous_registration_and_switch_back_to_cron(
+    scheduler: Scheduler, storage: Storage, queue_name: str
+):
+    recurring_id = f"pytest-continuous-{uuid.uuid4().hex[:8]}"
+    await scheduler.recurring(
+        recurring_id, "", Sample(n=1), queue=queue_name, repeat_after_completion=True
+    )
+
+    async with storage.connection() as conn:
+        cur = await conn.execute("SELECT * FROM recurring_job WHERE id = %s", (recurring_id,))
+        row = await cur.fetchone()
+    assert row["repeat_after_completion"] is True
+    assert row["overlap_policy"] == "SKIP"
+    assert row["next_trigger_at"] <= datetime.now(timezone.utc)
+
+    await scheduler.recurring(recurring_id, "0 4 * * *", Sample(n=2), queue=queue_name)
+
+    async with storage.connection() as conn:
+        cur = await conn.execute("SELECT * FROM recurring_job WHERE id = %s", (recurring_id,))
+        row = await cur.fetchone()
+    assert row["repeat_after_completion"] is False
+    assert row["next_trigger_at"] > datetime.now(timezone.utc)

@@ -75,6 +75,10 @@ public class FireDueRecurringJobsUseCase(
             log.info("RecurringScheduler firing {} due row(s)", due.size)
             var fired = 0
             for (row in due) {
+                if (row.repeatAfterCompletion) {
+                    fired += fireAfterCompletion(row, now)
+                    continue
+                }
                 val plan = runCatching { planFiring(row, now) }.getOrElse { t ->
                     log.error(
                         "Invalid/expired cron '{}' on recurring '{}' — disabling row to stop the bleed",
@@ -93,6 +97,30 @@ public class FireDueRecurringJobsUseCase(
                 fired += fire(row, now, plan)
             }
             fired
+        }
+
+    /** A durable, serialised check: notifications only wake us, they never create jobs. */
+    private suspend fun fireAfterCompletion(row: RecurringJobRow, now: Instant): Int =
+        withContext(Dispatchers.IO) {
+            suspendTransaction(db = database) {
+                val current = recurringJobs.findById(row.id, forUpdate = true)
+                    ?: return@suspendTransaction 0
+                if (!current.enabled || !current.repeatAfterCompletion || current.nextTriggerAt > now ||
+                    current.lastTriggeredAt != row.lastTriggeredAt) return@suspendTransaction 0
+                // Includes manual runs and retries, even when they have no overlap key.
+                if (jobs.findActiveByRecurringId(row.id) != null) {
+                    return@suspendTransaction 0
+                }
+                val claimed = recurringJobs.markFiredAndScheduleNext(
+                    id = row.id,
+                    expectedLastTriggeredAt = current.lastTriggeredAt,
+                    firedAt = now,
+                    next = now,
+                )
+                if (!claimed) return@suspendTransaction 0
+                insertJobAndOutbox(current, now, scheduledAt = now, idempotencyKey = "$RECURRING_KEY_PREFIX${row.id}")
+                1
+            }
         }
 
     /** How many jobs to create for [row] this tick and where its next trigger lands. */

@@ -11,6 +11,7 @@ import kotlin.time.Instant
  *
  * `nextTriggerAt` is what the RecurringScheduler loop reads to decide when to fire.
  * Updated in the same UPDATE that bumps `lastTriggeredAt`, so the two stay consistent.
+ * For continuous definitions it stays due; active runs suppress firing instead of a cron.
  *
  * `timezone` is an IANA ID (e.g. `"Europe/Berlin"`). `null` means UTC. cron-utils
  * computes next executions in the supplied zone.
@@ -35,4 +36,6 @@ public data class RecurringJobRow(
     val overlap: RecurringOverlap = RecurringOverlap.ALLOW,
     /** Allowed lateness from the original cron slot; null disables expiry. */
     val maxStartDelayMs: Long? = null,
+    /** No cron: enqueue the next run when no non-terminal run of this definition remains. */
+    val repeatAfterCompletion: Boolean = false,
 )

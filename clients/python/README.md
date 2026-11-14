@@ -112,6 +112,21 @@ await scheduler.recurring("nightly-rollup", "0 3 * * *", NightlyRollup(), timezo
 Every enqueue writes the job row and its outbox row in **one transaction**, so a job
 becomes visible only if your surrounding business transaction commits.
 
+## Run again after completion
+
+Pass an empty cron and `repeat_after_completion=True` to run sequentially without a timer:
+
+```python
+await scheduler.recurring("refresh-prices", "", RefreshPrices(), repeat_after_completion=True)
+```
+
+The first run is due immediately; the next waits for `SUCCEEDED`, `FAILED` or `CANCELLED`.
+Retries are part of the current run. Cron/timezone cannot be combined with this option;
+overlap/misfire policies do not apply. Disable the definition to stop repeating, or pause
+its job type to suspend execution. This requires scheduler-infra with schema migration V11.
+Completions from both Python and JVM workers wake infra through PostgreSQL notifications;
+periodic polling recovers missed notifications.
+
 ## Discarding overdue jobs
 
 ```python
