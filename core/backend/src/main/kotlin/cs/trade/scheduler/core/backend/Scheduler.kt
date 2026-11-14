@@ -145,7 +145,10 @@ public interface Scheduler {
      * `last_triggered_at` keep advancing on their own. Works on a disabled (paused) definition
      * too — a manual trigger is independent of the schedule being on.
      *
-     * @return the new job's id, or null if no recurring definition with [id] exists.
+     * For [RecurringDefinition.repeatAfterCompletion], returns the existing live run when
+     * present, so a manual trigger cannot overlap the continuous schedule.
+     *
+     * @return the new (or existing live) job's id, or null if no definition with [id] exists.
      */
     public suspend fun triggerRecurringNow(id: String): Uuid?
 

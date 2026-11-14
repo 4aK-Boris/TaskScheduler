@@ -26,6 +26,7 @@ public class RecurringApiMapper {
         nextTriggerAt = row.nextTriggerAt,
         enabled = row.enabled,
         lastRun = run?.toDto(),
+        repeatAfterCompletion = row.repeatAfterCompletion,
     )
 
     private fun RecurringRun.toDto(): RecurringRunDto = RecurringRunDto(

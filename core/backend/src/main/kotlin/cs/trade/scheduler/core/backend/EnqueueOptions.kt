@@ -56,7 +56,7 @@ public data class EnqueueOptions(
  */
 public data class RecurringDefinition(
     val id: String,
-    val cron: String,
+    val cron: String = "",
     val job: Job,
     val timezone: String? = null,
     val misfirePolicy: MisfirePolicy = MisfirePolicy.CATCH_UP_ONE,
@@ -85,9 +85,22 @@ public data class RecurringDefinition(
      * time in the queue. `null` preserves unlimited waiting. See [EnqueueOptions.maxStartDelay].
      */
     val maxStartDelay: Duration? = null,
+    /**
+     * Run continuously: first fire immediately, then fire once the previous run is terminal
+     * (SUCCEEDED, FAILED or CANCELLED). Retries belong to that run and block the next one.
+     * Omit [cron]; cron/timezone/misfire and overlap policies do not apply to this mode.
+     * Disable the definition or pause its job type to stop it. No missed runs accumulate.
+     */
+    val repeatAfterCompletion: Boolean = false,
 ) {
     init {
         validateMaxStartDelay(maxStartDelay)
+        require(!repeatAfterCompletion || cron.isBlank()) {
+            "repeatAfterCompletion cannot be combined with cron"
+        }
+        require(!repeatAfterCompletion || timezone == null) {
+            "repeatAfterCompletion cannot be combined with timezone"
+        }
     }
 }
 

@@ -9,6 +9,9 @@ import cs.trade.scheduler.core.backend.Scheduler
 import cs.trade.scheduler.core.backend.SchedulerCoreConfig
 import cs.trade.scheduler.core.backend.handler.Job
 import cs.trade.scheduler.engine.infra.domain.usecases.FireDueRecurringJobsUseCase
+import cs.trade.scheduler.engine.infra.infrastructure.SchedulerInfraConfig
+import cs.trade.scheduler.engine.infra.infrastructure.loops.RecurringScheduler
+import cs.trade.scheduler.engine.infra.infrastructure.loops.RecurringWakeupListener
 import cs.trade.scheduler.shared.JobState
 import cs.trade.scheduler.shared.MisfirePolicy
 import cs.trade.scheduler.shared.RecurringOverlap
@@ -19,6 +22,12 @@ import cs.trade.scheduler.storage.postgres.infrastructure.repositories.OutboxRep
 import cs.trade.scheduler.storage.postgres.infrastructure.repositories.RecurringJobRepositoryImpl
 import cs.trade.scheduler.storage.postgres.infrastructure.scheduler.DefaultScheduler
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.Serializable
 import org.flywaydb.core.Flyway
 import org.jetbrains.exposed.v1.jdbc.Database
@@ -36,6 +45,7 @@ import kotlin.time.Clock
 import kotlin.time.Instant
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
+import kotlin.time.Duration.Companion.hours
 import kotlin.uuid.Uuid
 
 /**
@@ -604,6 +614,152 @@ class RecurringIntegrationTest {
         assertNull(job.startDeadline)
         assertTrue(outbox.findUnpublished(limit = 10_000).any { it.jobId == job.id })
         assertTrue(recurring.findById(id)!!.nextTriggerAt > Clock.System.now())
+    }
+
+    @Test
+    fun `continuous definition starts immediately and repeats after each terminal outcome`() = runBlocking<Unit> {
+
+        for (terminal in listOf(JobState.SUCCEEDED, JobState.FAILED, JobState.CANCELLED)) {
+            val id = "continuous-$terminal-${System.nanoTime()}"
+            scheduler.recurring(RecurringDefinition(
+                id = id, job = DailyReport(System.nanoTime()), repeatAfterCompletion = true,
+                priority = 7, targetTag = "reports", timeout = 30.seconds, maxStartDelay = 30.seconds,
+                overlap = RecurringOverlap.REPLACE,
+            ))
+
+            fireDue().getOrThrow()
+
+            val first = runsFor(id).single()
+            val running = jobs.pickup(first.id, nodeId = "continuous", lockDurationMillis = 60_000)!!
+            assertEquals(RecurringOverlap.SKIP, recurring.findById(id)!!.overlap)
+            when (terminal) {
+                JobState.SUCCEEDED -> assertTrue(jobs.markSucceeded(first.id, running.version))
+                JobState.FAILED -> assertTrue(jobs.markFailed(first.id, running.version))
+                else -> assertTrue(jobs.markCancelled(first.id, running.version))
+            }
+
+            fireDue().getOrThrow()
+
+            val second = runsFor(id).single { it.id != first.id }
+            assertEquals(JobState.ENQUEUED, second.state)
+            assertEquals(0, second.attempts)
+            assertEquals(7, second.priority.value)
+            assertEquals(30, second.timeoutSeconds)
+            assertEquals(first.payloadJson, second.payloadJson)
+            assertTrue(second.scheduledAt!! >= first.scheduledAt!!)
+            assertEquals(second.scheduledAt!! + 30.seconds, second.startDeadline)
+            assertTrue(outbox.findUnpublished(limit = 10_000).any {
+                it.jobId == second.id && it.routingKey == "tag.reports"
+            })
+            recurring.disable(id)
+        }
+    }
+
+    @Test
+    fun `continuous definition waits through queue processing and retry including re-registration`() = runBlocking<Unit> {
+
+        val id = "continuous-retry-${System.nanoTime()}"
+        val definition = RecurringDefinition(id = id, job = DailyReport(System.nanoTime()), repeatAfterCompletion = true)
+        scheduler.recurring(definition)
+        fireDue().getOrThrow()
+        val first = runsFor(id).single()
+
+        fireDue().getOrThrow()
+        assertEquals(first.id, scheduler.triggerRecurringNow(id))
+        val running = jobs.pickup(first.id, nodeId = "retry", lockDurationMillis = 60_000)!!
+        fireDue().getOrThrow()
+        assertTrue(jobs.markForRetry(first.id, running.version, backoff = 60.seconds))
+        scheduler.recurring(definition)
+        fireDue().getOrThrow()
+
+        assertEquals(1, runsFor(id).size)
+        assertEquals(JobState.AWAITING_RETRY, jobs.findById(first.id)!!.state)
+        assertEquals(first.id, scheduler.triggerRecurringNow(id))
+        assertTrue(recurring.findDue(Clock.System.now(), limit = 10_000).none { it.id == id })
+        recurring.disable(id)
+    }
+
+    @Test
+    fun `continuous disabled definition stays disabled across registration and resumes on enable`() = runBlocking<Unit> {
+
+        val id = "continuous-disabled-${System.nanoTime()}"
+        val definition = RecurringDefinition(id = id, job = DailyReport(System.nanoTime()), repeatAfterCompletion = true)
+        scheduler.recurring(definition)
+        recurring.disable(id)
+        scheduler.recurring(definition)
+
+        fireDue().getOrThrow()
+
+        assertTrue(runsFor(id).isEmpty())
+        assertEquals(false, recurring.findById(id)!!.enabled)
+        recurring.enable(id)
+        fireDue().getOrThrow()
+        assertEquals(1, runsFor(id).size)
+        recurring.disable(id)
+    }
+
+    @Test
+    fun `competing continuous ticks and manual triggers create a single live run`() = runBlocking<Unit> {
+
+        val id = "continuous-concurrent-${System.nanoTime()}"
+        scheduler.recurring(RecurringDefinition(id = id, job = DailyReport(System.nanoTime()), repeatAfterCompletion = true))
+
+        coroutineScope {
+            (1..6).map { index -> async {
+                if (index % 2 == 0) fireDue().getOrThrow() else scheduler.triggerRecurringNow(id)
+            } }.awaitAll()
+        }
+
+        assertEquals(1, runsFor(id).size)
+        recurring.disable(id)
+    }
+
+    @Test
+    fun `switching a live ALLOW cron to continuous waits for the unkeyed run`() = runBlocking<Unit> {
+
+        val id = "continuous-switch-${System.nanoTime()}"
+        val definition = RecurringDefinition(id = id, cron = "* * * * *", job = DailyReport(System.nanoTime()))
+        scheduler.recurring(definition)
+        forceDue(id)
+        fireDue().getOrThrow()
+        val first = runsFor(id).single()
+        assertNull(first.idempotencyKey)
+        scheduler.recurring(definition.copy(cron = "", repeatAfterCompletion = true))
+
+        fireDue().getOrThrow()
+
+        assertEquals(1, runsFor(id).size)
+        scheduler.cancel(first.id)
+        fireDue().getOrThrow()
+        assertEquals(2, runsFor(id).size)
+        recurring.disable(id)
+    }
+
+    @Test
+    fun `completion notification starts the next run without waiting for the poll interval`() = runBlocking<Unit> {
+
+        val id = "continuous-notify-${System.nanoTime()}"
+        val listener = RecurringWakeupListener(dataSource.jdbcUrl, dataSource.username, dataSource.password)
+        val config = SchedulerInfraConfig().apply { recurringPollInterval = 1.hours }
+        val loop = RecurringScheduler(fireDue, config, listener).start(this)
+        try {
+            scheduler.recurring(RecurringDefinition(id = id, job = DailyReport(System.nanoTime()), repeatAfterCompletion = true))
+            withTimeout(5.seconds) {
+                while (runsFor(id).isEmpty()) delay(20)
+            }
+            val first = runsFor(id).single()
+            val running = jobs.pickup(first.id, nodeId = "notify", lockDurationMillis = 60_000)!!
+
+            assertTrue(jobs.markSucceeded(first.id, running.version))
+
+            withTimeout(5.seconds) {
+                while (runsFor(id).size < 2) delay(20)
+            }
+            assertEquals(2, runsFor(id).size)
+        } finally {
+            recurring.disable(id)
+            withTimeout(5.seconds) { loop.cancelAndJoin() }
+        }
     }
 
     private suspend fun runsFor(id: String): List<cs.trade.scheduler.storage.postgres.domain.models.Job> {

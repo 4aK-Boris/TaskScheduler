@@ -1,9 +1,11 @@
 package cs.trade.scheduler.storage.postgres.infrastructure.repositories
 
+import cs.trade.scheduler.shared.JobState
 import cs.trade.scheduler.shared.MisfirePolicy
 import cs.trade.scheduler.shared.RecurringOverlap
 import cs.trade.scheduler.storage.postgres.domain.models.RecurringJobRow
 import cs.trade.scheduler.storage.postgres.domain.repositories.RecurringJobRepository
+import cs.trade.scheduler.storage.postgres.infrastructure.tables.JobTable
 import cs.trade.scheduler.storage.postgres.infrastructure.tables.RecurringJobTable
 import cs.trade.scheduler.storage.postgres.infrastructure.toKotlinTime
 import cs.trade.scheduler.storage.postgres.infrastructure.toOffsetDateTimeUtc
@@ -14,9 +16,13 @@ import org.jetbrains.exposed.v1.core.SortOrder
 import org.jetbrains.exposed.v1.core.and
 import org.jetbrains.exposed.v1.core.eq
 import org.jetbrains.exposed.v1.core.isNull
+import org.jetbrains.exposed.v1.core.inList
 import org.jetbrains.exposed.v1.core.lessEq
+import org.jetbrains.exposed.v1.core.notExists
+import org.jetbrains.exposed.v1.core.or
 import org.jetbrains.exposed.v1.jdbc.Database
 import org.jetbrains.exposed.v1.jdbc.insert
+import org.jetbrains.exposed.v1.jdbc.select
 import org.jetbrains.exposed.v1.jdbc.selectAll
 import org.jetbrains.exposed.v1.jdbc.transactions.suspendTransaction
 import org.jetbrains.exposed.v1.jdbc.update
@@ -51,6 +57,7 @@ public class RecurringJobRepositoryImpl(
                     it[timeoutSeconds] = row.timeoutSeconds
                     it[overlapPolicy] = row.overlap.name
                     it[maxStartDelayMs] = row.maxStartDelayMs
+                    it[repeatAfterCompletion] = row.repeatAfterCompletion
                 }
             } else {
                 RecurringJobTable.update({ RecurringJobTable.id eq row.id }) {
@@ -67,6 +74,7 @@ public class RecurringJobRepositoryImpl(
                     it[timeoutSeconds] = row.timeoutSeconds
                     it[overlapPolicy] = row.overlap.name
                     it[maxStartDelayMs] = row.maxStartDelayMs
+                    it[repeatAfterCompletion] = row.repeatAfterCompletion
                     // Intentionally NOT touching: enabled, lastTriggeredAt — preserve state.
                     // timeoutSeconds IS a definition field → refreshed on re-registration.
                 }
@@ -74,10 +82,11 @@ public class RecurringJobRepositoryImpl(
         }
     }
 
-    override suspend fun findById(id: String): RecurringJobRow? = withContext(Dispatchers.IO) {
+    override suspend fun findById(id: String, forUpdate: Boolean): RecurringJobRow? = withContext(Dispatchers.IO) {
         suspendTransaction(db = database) {
             RecurringJobTable.selectAll()
                 .where { RecurringJobTable.id eq id }
+                .apply { if (forUpdate) forUpdate() }
                 .firstOrNull()
                 ?.toRow()
         }
@@ -90,7 +99,13 @@ public class RecurringJobRepositoryImpl(
                 RecurringJobTable.selectAll()
                     .where {
                         (RecurringJobTable.enabled eq true) and
-                            (RecurringJobTable.nextTriggerAt lessEq nowOdt)
+                            (RecurringJobTable.nextTriggerAt lessEq nowOdt) and
+                            ((RecurringJobTable.repeatAfterCompletion eq false) or notExists(
+                                JobTable.select(JobTable.id).where {
+                                    (JobTable.recurringId eq RecurringJobTable.id) and
+                                        (JobTable.state inList ACTIVE_STATE_NAMES)
+                                },
+                            ))
                     }
                     .orderBy(RecurringJobTable.nextTriggerAt to SortOrder.ASC)
                     .limit(limit)
@@ -144,6 +159,10 @@ public class RecurringJobRepositoryImpl(
                 .map { it.toRow() }
         }
     }
+
+    private companion object {
+        val ACTIVE_STATE_NAMES: List<String> = JobState.entries.filterNot { it.isTerminal }.map { it.name }
+    }
 }
 
 private fun ResultRow.toRow(): RecurringJobRow = RecurringJobRow(
@@ -163,4 +182,5 @@ private fun ResultRow.toRow(): RecurringJobRow = RecurringJobRow(
     timeoutSeconds = this[RecurringJobTable.timeoutSeconds],
     overlap = RecurringOverlap.valueOf(this[RecurringJobTable.overlapPolicy]),
     maxStartDelayMs = this[RecurringJobTable.maxStartDelayMs],
+    repeatAfterCompletion = this[RecurringJobTable.repeatAfterCompletion],
 )

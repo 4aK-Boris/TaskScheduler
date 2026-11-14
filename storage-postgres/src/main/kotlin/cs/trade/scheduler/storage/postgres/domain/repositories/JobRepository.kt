@@ -341,6 +341,12 @@ public interface JobRepository {
     public suspend fun findLatestRunsByRecurringIds(recurringIds: Collection<String>): Map<String, RecurringRun>
 
     /**
+     * A non-terminal run of this definition, without scanning its completed history.
+     * Callers creating a sequential run must hold the recurring definition's row lock.
+     */
+    public suspend fun findActiveByRecurringId(recurringId: String): Job?
+
+    /**
      * Persist a handler-reported progress sample on a PROCESSING row. Single UPDATE,
      * no version CAS — progress writes are throttled and best-effort by design (the
      * handler is the source of truth), so contending with retries/heartbeats here

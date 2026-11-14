@@ -28,6 +28,7 @@ public object RecurringJobTable : Table("recurring_job") {
     public val timeoutSeconds: Column<Int?> = integer("timeout_seconds").nullable()
     public val overlapPolicy: Column<String> = text("overlap_policy").default("ALLOW")
     public val maxStartDelayMs: Column<Long?> = long("max_start_delay_ms").nullable()
+    public val repeatAfterCompletion: Column<Boolean> = bool("repeat_after_completion").default(false)
 
     override val primaryKey: PrimaryKey = PrimaryKey(id)
 }

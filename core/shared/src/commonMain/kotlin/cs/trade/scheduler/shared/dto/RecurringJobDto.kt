@@ -6,7 +6,7 @@ import cs.trade.scheduler.shared.MisfirePolicy
 import kotlin.time.Instant
 import kotlinx.serialization.Serializable
 
-/** Recurring (cron) job definition. See DESIGN.md section 6 (recurring_job). */
+/** Recurring job definition: cron or repeat after completion. See DESIGN.md section 6. */
 @Serializable
 public data class RecurringJobDto(
     val id: String,
@@ -30,6 +30,8 @@ public data class RecurringJobDto(
      * Drives the Recurring screen's live indicator and its row click-through.
      */
     val lastRun: RecurringRunDto? = null,
+    /** First run immediately; subsequent runs wait for the previous run's terminal state. */
+    val repeatAfterCompletion: Boolean = false,
 )
 
 /** A single execution of a [RecurringJobDto], trimmed to what the Recurring screen renders. */

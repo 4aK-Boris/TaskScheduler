@@ -340,6 +340,7 @@ class Storage:
         timeout_seconds: int | None = None,
         max_start_delay_ms: int | None = None,
         enabled: bool = True,
+        repeat_after_completion: bool = False,
     ) -> None:
         """Register (or update) a cron definition. The infra leader fires it — not this client."""
         await conn.execute(
@@ -347,8 +348,8 @@ class Storage:
             INSERT INTO recurring_job (
                 id, cron, timezone, misfire_policy, queue, priority, target_node, target_tag,
                 payload_type, payload_json, next_trigger_at, enabled,
-                timeout_seconds, overlap_policy, max_start_delay_ms
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s)
+                timeout_seconds, overlap_policy, max_start_delay_ms, repeat_after_completion
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (id) DO UPDATE SET
                 cron = EXCLUDED.cron,
                 timezone = EXCLUDED.timezone,
@@ -363,7 +364,8 @@ class Storage:
                 enabled = EXCLUDED.enabled,
                 timeout_seconds = EXCLUDED.timeout_seconds,
                 max_start_delay_ms = EXCLUDED.max_start_delay_ms,
-                overlap_policy = EXCLUDED.overlap_policy
+                overlap_policy = EXCLUDED.overlap_policy,
+                repeat_after_completion = EXCLUDED.repeat_after_completion
             """,
             (
                 recurring_id,
@@ -381,6 +383,7 @@ class Storage:
                 timeout_seconds,
                 overlap_policy,
                 max_start_delay_ms,
+                repeat_after_completion,
             ),
         )
 
